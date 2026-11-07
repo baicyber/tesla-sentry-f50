@@ -91,7 +91,7 @@ MAX_UPLOAD = 100 * 1024 * 1024  # 通用文件上传上限 100MB (皮肤/音频�
 # ---------------- 版本与在线升级 (OTA) ----------------
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 多数能通, 同时内置镜像源兜底, 依次尝试。
-APP_VERSION = "2.8.1"
+APP_VERSION = "2.8.2"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://raw.githubusercontent.com/%s/main" % OTA_REPO,
@@ -167,6 +167,22 @@ def _vtuple(v):
     return tuple(out) or (0,)
 
 
+def _api_manifest(timeout=5):
+    """GitHub API 实时读 version.json (返回 base64 内容), 不受 raw/镜像 CDN 缓存影响。
+    国内不可达时静默失败, 由调用方退回原有的多源竞速结果。"""
+    try:
+        url = "https://api.github.com/repos/%s/contents/version.json?ref=main" % OTA_REPO
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "tsf-ota/" + APP_VERSION,
+            "Accept": "application/vnd.github+json",
+            "Cache-Control": "no-cache"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            outer = json.loads(r.read(256 << 10).decode("utf-8", "replace"))
+        return json.loads(base64.b64decode(outer["content"]).decode("utf-8", "replace"))
+    except Exception:
+        return None
+
+
 def ota_latest(force=False):
     """读仓库 version.json (含版本号/日期/更新说明), 并发竞速多个源, 结果缓存 10 分钟"""
     now = time.time()
@@ -180,8 +196,32 @@ def ota_latest(force=False):
         except Exception:
             return False
 
+    # raw / ghfast / jsDelivr 的 CDN 会缓存旧清单数分钟, 导致「更新」页显示过期的
+    # 版本号与更新说明。并行再问一次 GitHub API (实时, 无 CDN 缓存), 拿到就优先用。
+    fresh = []
+
+    def api_worker():
+        j = _api_manifest()
+        if j and str(j.get("version") or "").strip():
+            fresh.append(j)
+
+    apith = threading.Thread(target=api_worker, daemon=True)
+    apith.start()
+
     raw, base = _race_get("/version.json?ts=%d" % int(now), timeout=6, limit=256 << 10, validate=ok)
-    j = json.loads(raw.decode("utf-8", "replace"))
+    raced = json.loads(raw.decode("utf-8", "replace"))
+    # jsDelivr 等镜像的 @main 缓存可能停留在很旧的版本: 比本机还旧就多等一会儿实时源
+    stale = _vtuple(raced.get("version")) < _vtuple(APP_VERSION)
+    if not fresh and apith.is_alive():
+        apith.join(timeout=2.5 if stale else 1.2)
+    if not fresh and stale:
+        j2 = _api_manifest(timeout=3)
+        if j2 and str(j2.get("version") or "").strip():
+            fresh.append(j2)
+    if fresh:
+        j, base = fresh[0], "https://api.github.com"
+    else:
+        j = raced
     j["_base"] = base
     _OTA_CACHE.update({"t": now, "data": j})
     return j
