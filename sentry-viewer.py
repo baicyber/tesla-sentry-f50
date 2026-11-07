@@ -5518,7 +5518,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "image/jpeg")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "public, max-age=604800, immutable" if "?v=" in path else "no-store")
+            self.send_header("Cache-Control", "public, max-age=604800, immutable" if "?v=" in self.path else "no-store")
             self.end_headers()
             self.wfile.write(data)
             return
