@@ -439,41 +439,6 @@ sudo ./uninstall.sh --purge      # 连镜像和归档一起删（不可恢复）
 - [SentryBox](https://github.com/weitanism/sentrybox) —— 车机常驻设备的产品化实践
 - [tesla-sentry-viewer](https://github.com/denysvitali/tesla-sentry-viewer) —— 网页查看器形态参考
 
-## ☕ 赞助
-
-> 本项目完全开源免费，如果它帮到了你，欢迎支持博主一些token，助力项目持续更新~
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/sponsor/web_alipay.jpg" width="240" alt="支付宝收款码"><br><sub><b>支付宝</b></sub></td>
-    <td align="center"><img src="docs/sponsor/web_wechatpay.jpg" width="240" alt="微信收款码"><br><sub><b>微信支付</b></sub></td>
-  </tr>
-</table>
-
-> 收款码已裁成只含二维码的正方形。更换二维码后运行 `python tools/gen_sponsor.py` 重新生成（需要 Pillow）。
-
-## 💬 交流群
-
-> 遇到问题、想交流玩法，欢迎扫码加入群聊~
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/sponsor/qq_group.jpg" width="320" alt="QQ群二维码"><br><sub><b>QQ 群：831426822</b></sub></td>
-    <td align="center"><img src="docs/sponsor/wechat_group.png" width="320" alt="微信群二维码"><br><sub><b>微信群</b>（二维码 11月12日前有效，过期进群请联系作者或QQ群）</sub></td>
-  </tr>
-</table>
-
-**交流加群请联系作者**：群二维码过期、或想直接交流玩法，可关注抖音 `@耶基大学懂事长`（抖音号 `yejiuni`），或扫码添加作者微信好友拉你进群。
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/sponsor/web_douyin.jpg" width="240" alt="抖音二维码"><br><sub><b>抖音 · @耶基大学懂事长</b></sub></td>
-    <td align="center"><img src="docs/sponsor/web_wechatauthor.jpg" width="240" alt="作者微信二维码"><br><sub><b>微信 · 联系作者</b></sub></td>
-  </tr>
-</table>
-
-> 网页端「⚙ 个性化」面板底部也常驻了赞助码与作者联系方式，切到任意设置子菜单都能看到。
-
 ## License
 
 [MIT](LICENSE)
