@@ -78,7 +78,7 @@ sudo ./install.sh --size 200 --port 8080 --archive /archive    # 自定义参数
 **卸载**
 
 ```sh
-sudo ./uninstall.sh              # 停服务、删脚本，保留镜像和归档数据
+sudo ./uninstall.sh              # 停服务、删程序与缓存，保留镜像和归档录像
 sudo ./uninstall.sh --purge      # 连镜像和归档一起删（不可恢复）
 ```
 
@@ -163,8 +163,8 @@ OTA、飞书推送、认证的参数**不写入这个 conf**，走环境变量�
 
 <table>
   <tr>
-    <td align="center"><img src="docs/sponsor/qq_group.jpg" width="320" alt="QQ群二维码"><br><sub><b>QQ 群：831426822</b></sub></td>
-    <td align="center"><img src="docs/sponsor/wechat_group.png" width="320" alt="微信群二维码"><br><sub><b>微信群</b>（二维码 11月12日前有效，过期进群请联系作者或QQ群）</sub></td>
+    <td align="center"><img src="docs/sponsor/web_qqgroup.jpg" width="240" alt="QQ群二维码"><br><sub><b>QQ 群：831426822</b></sub></td>
+    <td align="center"><img src="docs/sponsor/web_wechatgroup.jpg" width="240" alt="微信群二维码"><br><sub><b>微信群</b>（二维码 11月12日前有效，过期进群请联系作者或QQ群）</sub></td>
   </tr>
 </table>
 
