@@ -132,9 +132,10 @@ OTA、飞书推送、认证的参数**不写入这个 conf**，走环境变量�
 
 ## 安全提示
 
-- `install.sh` 默认开启全站登录保护；**直接裸跑 `python3 sentry-viewer.py` 且没有 `auth.conf` 时认证是关闭的**，只可在可信内网使用。
-- 上传限制 100MB，路径被约束在归档区 / 镜像挂载点内，不可逃逸到系统目录。
-- 认证走 HTTP 明文，公网访问务必套 HTTPS 或 VPN。
+- `install.sh` 默认开启全站登录保护；**直接裸跑 `python3 sentry-viewer.py` 且没有 `auth.conf` 时认证是关闭的**，只可在可信内网使用。删除 `auth.conf` 仍是「关闭认证」的开关，但文件存在却读不出密码时服务会**拒绝启动**，不会静默裸奔。
+- 登录页与 HTTP Basic 共用限速：同一 IP 10 分钟内错 8 次锁 5 分钟，Basic 方式也绕不过去。
+- 上传限制 100MB，普通 JSON 接口请求体限制 1MB，单连接读写超时 30 秒、并发线程上限 48；路径被约束在归档区 / 镜像挂载点内，不可逃逸到系统目录。
+- 认证与 Cookie 走 HTTP 明文，公网访问务必套 HTTPS 或 VPN；反向代理请传 `X-Forwarded-Proto: https`（或设置 `TSF_COOKIE_SECURE=1`），登录 Cookie 会自动带 `Secure`。
 
 ## 免责声明
 

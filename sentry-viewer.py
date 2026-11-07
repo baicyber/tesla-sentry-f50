@@ -87,11 +87,13 @@ CAT_NAMES = {"SentryClips": "哨兵告警", "SavedClips": "手动保存", "Recen
 I18N_JS = json.dumps(LANG_TABLE, ensure_ascii=False, separators=(",", ":"))
 LANG_JS = json.dumps([[c, n] for c, n in LANG_NAMES], ensure_ascii=False, separators=(",", ":"))
 MAX_UPLOAD = 100 * 1024 * 1024  # 通用文件上传上限 100MB (皮肤/音频有自己的更小限制)
+MAX_JSON = 1024 * 1024          # 普通 JSON 接口请求体上限 1MB (文件管理/改密码/推送配置等)
+SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长期占线程
 
 # ---------------- 版本与在线升级 (OTA) ----------------
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 多数能通, 同时内置镜像源兜底, 依次尝试。
-APP_VERSION = "2.8.4"
+APP_VERSION = "2.8.5"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://raw.githubusercontent.com/%s/main" % OTA_REPO,
@@ -5251,7 +5253,13 @@ def telemetry_cached(fp):
 AUTH_FILE = os.environ.get("TSF_AUTH_FILE", "/opt/tesla-sentry/auth.conf")
 
 
+AUTH_CONF_ERR = None   # 非空 = auth.conf 异常, 启动时拒绝运行, 避免静默变成无认证
+
+
 def _auth_conf():
+    """读 auth.conf。文件不存在 = 用户主动关闭认证 (保留这个用法);
+    文件存在却读不了 / 读不出凭据 = 配置损坏, 记下来由启动流程拒绝运行。"""
+    global AUTH_CONF_ERR
     d = {}
     try:
         with open(AUTH_FILE, encoding="utf-8") as f:
@@ -5261,8 +5269,10 @@ def _auth_conf():
                     continue
                 k, v = line.split("=", 1)
                 d[k.strip().lower()] = v.strip()
-    except OSError:
+    except FileNotFoundError:
         pass
+    except OSError as ex:
+        AUTH_CONF_ERR = "auth.conf 读取失败: %s" % ex
     return d
 
 
@@ -5273,6 +5283,9 @@ AUTH_SHA = (os.environ.get("TSF_AUTH_SHA256") or _AC.get("sha256") or "").strip(
 AUTH_SECRET = (os.environ.get("TSF_AUTH_SECRET") or _AC.get("secret") or "") or ("tsf-v1|" + (AUTH_SHA or AUTH_PASS))
 AUTH_TTL = int(os.environ.get("TSF_AUTH_TTL") or _AC.get("ttl") or 30 * 86400)
 AUTH_ON = bool(AUTH_SHA or AUTH_PASS)
+if (AUTH_CONF_ERR is None and os.path.exists(AUTH_FILE) and not AUTH_ON
+        and not (os.environ.get("TSF_AUTH_PASS") or os.environ.get("TSF_AUTH_SHA256"))):
+    AUTH_CONF_ERR = "auth.conf 存在但没有 pass= / sha256=, 内容可能已损坏"
 FAILS = {}                       # ip -> [失败次数, 首次失败时间]
 FAIL_LOCK = threading.Lock()
 
@@ -5405,6 +5418,8 @@ button:active{background:#0ea472}
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = SOCK_TIMEOUT   # 慢连接/半包请求超时断开, 避免长期占用线程
+
     def log_message(self, fmt, *args):
         pass
 
@@ -5416,6 +5431,15 @@ class Handler(BaseHTTPRequestHandler):
                 return v
         return ""
 
+    def _cookie_secure(self):
+        """只有走 HTTPS (反代传 X-Forwarded-Proto 或显式开启) 才加 Secure;
+        纯 HTTP 直连加了会导致浏览器不回传 cookie、谁都登录不上。"""
+        if os.environ.get("TSF_COOKIE_SECURE") == "1":
+            return "; Secure"
+        if (self.headers.get("X-Forwarded-Proto") or "").strip().lower() == "https":
+            return "; Secure"
+        return ""
+
     def _authed(self):
         if not AUTH_ON:
             return True
@@ -5423,11 +5447,20 @@ class Handler(BaseHTTPRequestHandler):
             return True
         h = self.headers.get("Authorization", "")
         if h.startswith("Basic "):
+            ip = self.client_address[0] if self.client_address else "?"
+            if fail_check(ip, False):        # 与登录页共用限速: 锁定期不再校验密码
+                return False
             try:
                 u, _, p = base64.b64decode(h[6:]).decode("utf-8", "replace").partition(":")
             except Exception:
+                fail_check(ip, True)
                 return False
-            return u == AUTH_USER and pw_ok(p)
+            if hmac.compare_digest(u.encode(), AUTH_USER.encode()) and pw_ok(p):
+                with FAIL_LOCK:
+                    FAILS.pop(ip, None)
+                return True
+            fail_check(ip, True)
+            return False
         return False
 
     def _login_page(self, msg="", nxt="/", code=200):
@@ -5467,7 +5500,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", nxt)
             self.send_header("Set-Cookie",
-                             "tsf_sess=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax" % (sess_token(exp), AUTH_TTL))
+                             "tsf_sess=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax%s"
+                             % (sess_token(exp), AUTH_TTL, self._cookie_secure()))
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -5502,6 +5536,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj, ensure_ascii=False).encode(), "application/json")
+
+    def _read_json(self, limit=MAX_JSON):
+        """读 JSON 请求体: 超过上限返回 "TOOBIG", 解析失败返回 None, 空体返回 {}。
+        不用裸 rfile.read(Content-Length), 免得一个大包把 1.4G 内存吃满。"""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            return None
+        if n > limit:
+            return "TOOBIG"
+        if n <= 0:
+            return {}
+        try:
+            return json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
+        except Exception:
+            return None
 
     def _read_upload(self):
         """解析 multipart: 返回 (文件名, 文件数据, 普通字段dict)"""
@@ -5549,7 +5599,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/logout":
             self.send_response(302)
             self.send_header("Location", "/login")
-            self.send_header("Set-Cookie", "tsf_sess=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")
+            self.send_header("Set-Cookie", "tsf_sess=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax%s" % self._cookie_secure())
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -5896,10 +5946,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urllib.parse.unquote(self.path)
         if p == "/api/fm":
-            try:
-                n = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
-            except Exception:
+            body = self._read_json()
+            if body == "TOOBIG":
+                self._json({"ok": False, "msg": "请求体过大 (上限 1MB)"}, 413)
+                return
+            if not isinstance(body, dict):
                 self._json({"ok": False, "msg": "参数错误"}, 400)
                 return
             try:
@@ -5914,20 +5965,22 @@ class Handler(BaseHTTPRequestHandler):
             self._json(j)
             return
         if path == "/api/auth/pass":
-            try:
-                n = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
-            except Exception:
+            body = self._read_json()
+            if body == "TOOBIG":
+                self._json({"ok": False, "msg": "请求体过大 (上限 1MB)"}, 413)
+                return
+            if not isinstance(body, dict):
                 self._json({"ok": False, "msg": "参数错误"}, 400)
                 return
             ok, msg = auth_set_pass(str(body.get("old") or ""), str(body.get("new") or ""))
             self._json({"ok": ok, "msg": msg, "user": AUTH_USER})
             return
         if path == "/api/notify/save":
-            try:
-                n = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
-            except Exception:
+            body = self._read_json()
+            if body == "TOOBIG":
+                self._json({"ok": False, "msg": "请求体过大 (上限 1MB)"}, 413)
+                return
+            if not isinstance(body, dict):
                 self._json({"ok": False, "msg": "参数错误"}, 400)
                 return
             patch = {}
@@ -6026,10 +6079,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok, "msg": msg})
             return
         if path == "/api/stitch":
-            try:
-                n = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(n).decode("utf-8", "ignore") or "{}")
-            except Exception:
+            body = self._read_json()
+            if body == "TOOBIG":
+                self._json({"ok": False, "error": "请求体过大 (上限 1MB)"}, 413)
+                return
+            if not isinstance(body, dict):
                 self._json({"ok": False, "error": "参数错误"}, 400)
                 return
             jid, err = start_stitch(body.get("cat") or "", body.get("name") or "", body.get("cams") or [])
@@ -6118,12 +6172,11 @@ class Handler(BaseHTTPRequestHandler):
                 f.write(data)
             self._json({"ok": True, "msg": f"已上传到 {dest_dir}/{fn} ({len(data)//1024} KB)"})
         elif path == "/api/skin/activate":
-            length = int(self.headers.get("Content-Length", 0))
-            try:
-                name = json.loads(self.rfile.read(length)).get("name")
-            except Exception:
-                name = None
-            name = safe_name(name)
+            body = self._read_json()
+            if body == "TOOBIG":
+                self._json({"ok": False, "msg": "请求体过大 (上限 1MB)"}, 413)
+                return
+            name = safe_name(body.get("name") if isinstance(body, dict) else None)
             if name and os.path.isfile(os.path.join(SKIN_DIR, name)):
                 with open(os.path.join(SKIN_DIR, "active.json"), "w") as f:
                     json.dump({"skin": name}, f)
@@ -6131,12 +6184,11 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json({"ok": False, "msg": "皮肤不存在"}, 404)
         elif path == "/api/audio/setlockchime":
-            length = int(self.headers.get("Content-Length", 0))
-            try:
-                name = json.loads(self.rfile.read(length)).get("name")
-            except Exception:
-                name = None
-            name = safe_name(name)
+            body = self._read_json()
+            if body == "TOOBIG":
+                self._json({"ok": False, "msg": "请求体过大 (上限 1MB)"}, 413)
+                return
+            name = safe_name(body.get("name") if isinstance(body, dict) else None)
             src = os.path.join(AUDIO_Q, name) if name else ""
             if name and os.path.isfile(src):
                 with open(src, "rb") as f:
@@ -6197,11 +6249,44 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found")
 
 
+class BoundedServer(ThreadingHTTPServer):
+    """限并发的线程式服务: 设备只有 1.4G 内存, 无限开线程会被慢连接拖垮。"""
+    daemon_threads = True
+    max_workers = 48
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._slots = threading.BoundedSemaphore(self.max_workers)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.close()
+            except OSError:
+                pass
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
 if __name__ == "__main__":
     # OTA 自检: 只验证模块能完整加载 (常量/函数定义无误), 不启动服务、不碰硬件
     if "--ota-check" in sys.argv:
         print("ok %s" % APP_VERSION)
         sys.exit(0)
+    if AUTH_CONF_ERR:
+        print("FATAL: %s" % AUTH_CONF_ERR)
+        print("为避免无认证暴露, 服务不启动。修复 %s 后重启 (或重跑 install.sh 重新生成密码)。" % AUTH_FILE)
+        sys.exit(2)
     ensure_dirs()
     # 降低自身被 OOM 杀掉的概率 (合成任务会自己调高优先级先死)
     try:
@@ -6212,7 +6297,7 @@ if __name__ == "__main__":
     # 先绑定端口: 若已有实例在跑, 重复实例会在这里直接退出,
     # 不会执行下面的"启动自愈"而误拆别人正在管理的挂载点
     try:
-        srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+        srv = BoundedServer(("0.0.0.0", PORT), Handler)
     except OSError:
         print("port %d in use, another instance running? exit." % PORT)
         sys.exit(0)
@@ -6225,9 +6310,13 @@ if __name__ == "__main__":
             break
         time.sleep(0.4)
     if _usb_flock_fd is not None:
-        if os.path.ismount(MNT):
-            subprocess.run(["umount", MNT], capture_output=True)
-        subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
+        # 自愈失败不能让整个服务起不来: losetup/umount 缺失或被删时只告警
+        try:
+            if os.path.ismount(MNT):
+                subprocess.run(["umount", MNT], capture_output=True)
+            subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
+        except OSError as ex:
+            print("startup self-heal skipped: %s" % ex)
         _gadget_rebind(True)
         _release_usb_flock()
     else:
