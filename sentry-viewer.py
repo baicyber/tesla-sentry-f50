@@ -91,7 +91,7 @@ MAX_UPLOAD = 100 * 1024 * 1024  # 通用文件上传上限 100MB (皮肤/音频�
 # ---------------- 版本与在线升级 (OTA) ----------------
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 多数能通, 同时内置镜像源兜底, 依次尝试。
-APP_VERSION = "2.8.3"
+APP_VERSION = "2.8.4"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://raw.githubusercontent.com/%s/main" % OTA_REPO,
@@ -962,7 +962,7 @@ select.ninput { cursor:pointer; }
     <div id="audio-done"></div>
   </div>
   <div id="tab-wraps" style="display:none">
-    <div class="hint">车机涂装/牌照图片: 上传 png/jpg/webp, 直接写入车机U盘根目录 Wraps/ (车机端设置里选)。连接时会临时断开车机读取几秒。</div>
+    <div class="hint">车机涂装/牌照图片: 上传 png/jpg/webp, 直接写入车机U盘根目录 Wraps/ (车机端设置里选)。连接时会临时断开车机读取几秒, 用完点「恢复车机导出」; 5 分钟无操作也会自动恢复。</div>
     <div id="wraps-status" style="margin-bottom:10px"></div>
     <label class="upbtn" id="wraps-upbtn">＋ 上传图片到 Wraps/ (png/jpg/webp, ≤100MB)<input type="file" id="wraps-file" accept=".png,.jpg,.jpeg,.webp" hidden multiple></label>
     <div id="wraps-grid" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:12px"></div>
@@ -2841,6 +2841,7 @@ async function purgeTeslaCam() {
   await fmSend({ area: 'usb', op: 'purge_teslacam', items: [] });
 }
 /* ---------- 涂装 (Wraps) ---------- */
+let wrapAttached = false;   // 与文件管理共用同一个 U 盘管理状态
 function wrapStatusHtml(attached) {
   if (!attached) {
     return '<div style="background:#3a2a12;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#f0b429;line-height:1.6">' +
@@ -2848,13 +2849,20 @@ function wrapStatusHtml(attached) {
       '<button onclick="wrapAttach()" style="background:#e8443f;border:none;color:#fff;border-radius:8px;padding:7px 16px;font-size:12.5px;cursor:pointer;margin-top:6px">🔗 连接车机U盘 (临时断开车机读取)</button></div>';
   }
   return '<div style="background:#1a3325;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#4cc38a;line-height:1.6">' +
-    '🟢 已连接 — 上传的图片会直接写入车机U盘 Wraps/ 目录</div>';
+    '🟢 已连接 — 上传的图片会直接写入车机U盘 Wraps/ 目录<br>' +
+    '<span style="color:#7d8894;font-size:11.5px">断开满 5 分钟无操作会自动恢复车机导出</span><br>' +
+    '<button onclick="wrapDetach()" style="background:#242c35;border:none;color:#e8eaed;border-radius:8px;padding:7px 16px;font-size:12.5px;cursor:pointer;margin-top:6px">✅ 恢复车机导出</button></div>';
 }
 async function wrapAttach() {
   toast('⏳ 正在连接 (车机读取将断开几秒)...');
   const j = await (await fetch('/api/usb/attach', { method: 'POST' })).json();
   toast(j.ok ? '✅ 已连接车机U盘' : '❌ ' + j.msg);
-  refreshWraps();
+  await refreshWraps();
+}
+async function wrapDetach() {
+  const j = await (await fetch('/api/usb/detach', { method: 'POST' })).json().catch(() => ({}));
+  toast(j.ok ? '✅ ' + t('已恢复车机导出') : '❌ ' + t(j.msg || '恢复失败'));
+  await refreshWraps();
 }
 async function refreshWraps() {
   const st = document.getElementById('wraps-status');
@@ -2863,9 +2871,15 @@ async function refreshWraps() {
   try {
     j = await (await fetch('/api/usb/browse?dir=' + encodeURIComponent('Wraps'))).json();
   } catch (e) { return; }
-  st.innerHTML = wrapStatusHtml(j.attached);
+  wrapAttached = !!j.attached;
+  st.innerHTML = wrapStatusHtml(wrapAttached);
   grid.innerHTML = '';
-  if (!j.ok) { grid.innerHTML = '<div class="hint">Wraps 目录不存在, 连接 U 盘后上传图片会自动创建</div>'; return; }
+  if (!j.ok) {
+    grid.innerHTML = wrapAttached
+      ? '<div class="hint">Wraps 目录不存在, 上传图片会自动创建</div>'
+      : '<div class="hint">U盘未连接管理 (车机正常读写中), 点上方「连接车机U盘」后可查看 / 上传图片</div>';
+    return;
+  }
   const files = j.files || [];
   if (!files.length) { grid.innerHTML = '<div class="hint">Wraps 目录为空, 上传图片即可在车机上选用</div>'; return; }
   for (const f of files) {
@@ -2894,6 +2908,7 @@ async function refreshWraps() {
 }
 document.getElementById('wraps-file').onchange = async function () {
   if (!this.files || !this.files.length) return;
+  if (!wrapAttached) { toast('请先点「连接车机U盘」, 连上后再上传'); this.value = ''; return; }
   for (const f of this.files) {
     const fd = new FormData(); fd.append('file', f); fd.append('path', 'Wraps');
     try {
@@ -2903,7 +2918,7 @@ document.getElementById('wraps-file').onchange = async function () {
     } catch (e) { toast('❌ ' + f.name + ' — ' + t('上传失败')); }
   }
   this.value = '';
-  refreshWraps();
+  await refreshWraps();
 };
 function switchArea(a) {
   area = a;
