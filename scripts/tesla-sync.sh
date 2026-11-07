@@ -41,11 +41,16 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
 # 网页端用 fcntl.flock 持排他锁跨整个挂载周期, live-sync 持共享锁;
 # 这里拿不到锁立刻退出, 不排队堆积 (cron 每 10 分钟会再试)。
 exec 9>"$LOCK" 2>/dev/null || { echo "LOCK-OPEN-FAIL"; exit 1; }
-flock -n 9 || {
-    log "skip: usb lock held (viewer usb-manage / selfheal / another sync)"
-    echo "SKIP-LOCKED"
-    exit 0
-}
+if ! flock -n 9; then
+    # 在线同步只在复制片段时短暂持共享锁, 稍等再试一次,
+    # 避免每 10 分钟才一次的音频写入被偶发跳过 (网页管理会持锁数分钟, 等也没用)
+    sleep 2
+    if ! flock -n 9; then
+        log "skip: usb lock held (viewer usb-manage / selfheal / another sync)"
+        echo "SKIP-LOCKED"
+        exit 0
+    fi
+fi
 
 # --- 自动探测 ---
 find_gadget() {
