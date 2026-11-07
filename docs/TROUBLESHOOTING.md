@@ -126,7 +126,7 @@ losetup 失败 / 挂载失败
 
 ```sh
 # OpenWrt
-/etc/init.d/sentry-viewer restart
+/etc/init.d/tesla-viewer restart
 logread | grep sentry
 
 # systemd
@@ -134,7 +134,7 @@ systemctl status sentry-viewer
 journalctl -u sentry-viewer -n 50
 ```
 
-常见原因：`python3` 路径不对（改 `/etc/init.d/sentry-viewer` 里的 command）、端口被占（`netstat -ltn | grep 8080`）。
+常见原因：`python3` 路径不对（改 `/etc/init.d/tesla-viewer` 里的 command）、端口被占（`netstat -ltn | grep 8080`）。
 
 ## 设备发热严重
 
@@ -172,6 +172,6 @@ Tesla 一个事件目录里包含事件前后约 10 分钟的片段（每分钟�
    别的副本（比如 `/root/sentry-viewer.py`），改多少遍都不会生效。
 2. **确认进程真的重启了**：`ps w | grep sentry-viewer` 看 PID 是否变了。procd 的
    `restart` 只管理它自己拉起的实例；如果进程是手动/其它脚本启动的，先 `kill <pid>` 再
-   `/etc/init.d/sentry-viewer start`。
+   `/etc/init.d/tesla-viewer start`。
 3. **用页面内容校验**：`wget -q -O- http://127.0.0.1:8080/ | grep -c <新代码里的特征串>`，
    大于 0 才算部署成功，别只看页面 200。

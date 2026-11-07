@@ -22,10 +22,32 @@ import ssl
 import zipfile
 import tempfile
 import sys
+import fcntl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# 路径/端口优先取环境变量 (install.sh 写入 /etc/tesla-sentry.conf, 服务单元以 EnvironmentFile 注入),
-# 便于装到非 F50 设备上时改归档区、端口、缩略图缓存位置
+# ---- 配置加载兜底 ----
+# OpenWrt procd 不会把 init.d 脚本里 export 的变量传给服务进程 (实测 /proc/PID/environ 为空),
+# 而 systemd 的 EnvironmentFile 会全量注入 —— 两边行为不一致会让"照 README 改 conf 不生效"。
+# 在读取任何 TSF_* 之前, 把 conf 里尚未出现在环境变量中的项补进 os.environ。
+# 优先级: 显式环境变量 > /etc/tesla-sentry.conf > 代码默认值; 空值按"用默认"处理。
+def _load_conf(path="/etc/tesla-sentry.conf"):
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k.startswith("TSF_") and v and k not in os.environ:
+                    os.environ[k] = v
+    except OSError:
+        pass
+
+
+_load_conf()
+
+# 路径/端口优先取环境变量 (缺失时已由 _load_conf 从 conf 补齐), 便于装到非 F50 设备上时改归档区、端口等
 ARCHIVE = os.environ.get("TSF_ARCHIVE", "/archive")
 SKIN_DIR = os.path.join(ARCHIVE, ".skins")
 AUDIO_Q = os.path.join(ARCHIVE, "boombox-queue")
@@ -69,7 +91,7 @@ MAX_UPLOAD = 100 * 1024 * 1024  # 通用文件上传上限 100MB (皮肤/音频�
 # ---------------- 版本与在线升级 (OTA) ----------------
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 多数能通, 同时内置镜像源兜底, 依次尝试。
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.7.0"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://raw.githubusercontent.com/%s/main" % OTA_REPO,
@@ -212,6 +234,68 @@ def _write_each(paths, data):
         os.replace(tmp, p)          # 原子替换, 不会出现半个文件
 
 
+# OTA 配套脚本: (仓库相对路径, 设备文件名, 特征串, 最小字节数)
+# 旧版 OTA 只替换 sentry-viewer.py, 导致改了归档/同步脚本后老设备点"更新"永远不生效。
+OTA_SIDECARS = (
+    ("scripts/tesla-gadget.sh", "tesla-gadget.sh", b"#!/bin/sh", 200),
+    ("scripts/tesla-sync.sh", "tesla-sync.sh", b"#!/bin/sh", 200),
+    ("scripts/usb-selfheal.sh", "usb-selfheal.sh", b"#!/bin/sh", 200),
+    ("scripts/tesla-img.sh", "tesla-img.sh", b"#!/bin/sh", 200),
+    ("scripts/tsf-check.sh", "tsf-check.sh", b"#!/bin/sh", 200),
+    ("tesla-live-sync.py", "tesla-live-sync.py", b"def do_sync", 2000),
+)
+
+
+def _ota_sidecars(base):
+    """主程序升级后顺带更新配套脚本; 返回 (已更新列表, 跳过/失败数)。
+    只覆盖设备上已存在的同名文件; 单个失败不阻断主升级。"""
+    d = os.environ.get("TSF_DIR", "/opt/tesla-sentry")
+    if not os.path.isdir(d):
+        return [], len(OTA_SIDECARS)
+    updated, failed = [], 0
+    for rel, name, sig, minsz in OTA_SIDECARS:
+        dest = os.path.join(d, name)
+        if not os.path.isfile(dest):
+            failed += 1
+            continue
+        try:
+            data = _http_get("%s/%s?ts=%d" % (base, rel, int(time.time())),
+                             timeout=8, limit=512 << 10)
+            if len(data) < minsz or sig not in data:
+                raise ValueError("内容校验未通过")
+            with open(dest, "rb") as f:
+                if f.read() == data:
+                    continue                      # 内容一致, 不重写也不重启
+            tmp = dest + ".ota-tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            try:
+                os.chmod(tmp, 0o755 if name.endswith(".sh") else 0o644)
+            except OSError:
+                pass
+            os.replace(tmp, dest)
+            updated.append(name)
+        except Exception as ex:
+            failed += 1
+            try:
+                os.unlink(dest + ".ota-tmp")
+            except OSError:
+                pass
+            print("ota sidecar skip %s: %s" % (name, ex))
+    # 在线同步脚本换了必须重启常驻进程, 否则跑的还是旧代码
+    if "tesla-live-sync.py" in updated:
+        try:
+            if os.path.isfile("/etc/init.d/tesla-live"):
+                subprocess.Popen(["/etc/init.d/tesla-live", "restart"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif shutil.which("systemctl"):
+                subprocess.Popen(["systemctl", "restart", "tesla-live.service"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+    return updated, failed
+
+
 def _ota_restart():
     """优先交给 procd 的 init 脚本重启 (找不到就原地 exec)"""
     here = os.path.realpath(__file__)
@@ -226,7 +310,7 @@ def _ota_restart():
                 txt = f.read()
         except OSError:
             txt = ""
-        score = 2 if here in txt else (1 if d and d in txt else 0)
+        score = 2 if here in txt else (1 if ("sentry-viewer.py" in txt or (d and d in txt)) else 0)
         cands.append((score, p))
     cands.sort(reverse=True)
     if cands and cands[0][0] > 0:
@@ -297,13 +381,24 @@ def ota_apply():
         _write_each(_self_paths(), data)
     except Exception as ex:
         return False, "写入失败: %s" % ex
+    # 3.5) 配套脚本一并升级 (单个失败不影响主程序; 内容一致则跳过不重写)
+    try:
+        upd, skipped = _ota_sidecars(base)
+    except Exception as ex:
+        upd, skipped = [], len(OTA_SIDECARS)
+        print("ota sidecars error:", ex)
     try:
         with open(OTA_STATE, "w", encoding="utf-8") as f:
             json.dump({"applied": latest, "prev": prev, "at": int(time.time())}, f)
     except OSError:
         pass
+    msg = "已升级到 %s, 服务正在重启…" % latest
+    if upd:
+        msg += " 配套脚本已更新: " + ", ".join(upd)
+    if skipped:
+        msg += " (%d 个脚本源不可用, 保持原文件)" % skipped
     threading.Timer(1.2, _ota_restart).start()
-    return True, "已升级到 %s, 服务正在重启…" % latest
+    return True, msg
 
 
 def ota_rollback():
@@ -2813,10 +2908,50 @@ LOSETUP = os.environ.get("TSF_LOSETUP") or (
 )
 GADGET_DIR = os.environ.get("TSF_GADGET", "/sys/kernel/config/usb_gadget/linux")
 USB_AUTO_DETACH = 300  # 秒, 无操作自动恢复导出
+# 跨进程 U 盘互斥: 网页挂载(排他) / tesla-sync.sh(排他) / usb-selfheal.sh(排他) /
+# tesla-live-sync.py(共享) 共用同一锁文件; 排他锁在整个挂载周期内持有。
+# 设备实测 BusyBox flock 与 Python fcntl.flock 可互锁。
+USB_LOCK_FILE = os.environ.get("TSF_USB_LOCK", "/tmp/tsf-usb.lock")
 
 usb_lock = threading.Lock()
 usb_attached = False
 usb_timer = None
+_usb_flock_fd = None
+
+
+def _acquire_usb_flock(exclusive=True):
+    """拿跨进程锁, 失败立即返回 False (不排队, 由调用方跳过或重试)"""
+    global _usb_flock_fd
+    if _usb_flock_fd is not None:
+        return True
+    fd = None
+    try:
+        fd = os.open(USB_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+    except OSError:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        return False
+    _usb_flock_fd = fd
+    return True
+
+
+def _release_usb_flock():
+    global _usb_flock_fd
+    fd, _usb_flock_fd = _usb_flock_fd, None
+    if fd is None:
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
 
 
 def _udc():
@@ -2844,17 +2979,31 @@ def usb_attach():
     with usb_lock:
         if usb_attached and os.path.ismount(MNT):
             return True, "already"
-        os.makedirs(MNT, exist_ok=True)
+        # 先拿跨进程锁再动 UDC: 归档/自愈正在操作镜像时直接让开, 不抢 loop 与挂载点。
+        # 在线同步只短暂持共享锁, 等它放开即可, 避免用户偶发"点不动 U盘管理"。
+        for _ in range(6):
+            if _acquire_usb_flock():
+                break
+            time.sleep(0.4)
+        else:
+            return False, "U盘正被其它任务占用 (归档/自愈/同步), 稍后再试"
+        try:
+            os.makedirs(MNT, exist_ok=True)
+        except OSError as ex:
+            _release_usb_flock()
+            return False, "创建挂载点失败: " + str(ex)
         _gadget_rebind(False)  # 停止导出
         time.sleep(1)
         r = subprocess.run([LOSETUP, LOOPDEV, IMG], capture_output=True, text=True)
         if r.returncode != 0:
             _gadget_rebind(True)
+            _release_usb_flock()
             return False, "losetup 失败: " + r.stderr.strip()[-120:]
         r = subprocess.run(["mount", "-t", "exfat", LOOPDEV, MNT], capture_output=True, text=True)
         if r.returncode != 0:
             subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
             _gadget_rebind(True)
+            _release_usb_flock()
             return False, "挂载失败: " + r.stderr.strip()[-120:]
         usb_attached = True
         # 无操作自动恢复
@@ -2885,6 +3034,7 @@ def usb_detach():
         subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
         _gadget_rebind(True)
         usb_attached = False
+        _release_usb_flock()   # 挂载周期结束才释放, 失败路径继续持锁
         return True, "detached"
 
 
@@ -5582,11 +5732,20 @@ if __name__ == "__main__":
         sys.exit(0)
     print(f"Sentry viewer on 0.0.0.0:{PORT}")
     print("auth: %s (%s)" % ("ON, user=" + AUTH_USER if AUTH_ON else "OFF - 公网可直接访问!", AUTH_FILE))
-    # 启动自愈: 若上次退出时镜像仍处于管理挂载状态, 恢复导出
-    if os.path.ismount(MNT):
-        subprocess.run(["umount", MNT], capture_output=True)
-    subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
-    _gadget_rebind(True)
+    # 启动自愈: 若上次退出时镜像仍处于管理挂载状态, 恢复导出。
+    # 短暂重试拿锁, 避免与正在进行的归档/同步互相拆台; 拿不到就完全不碰 U 盘。
+    for _ in range(6):
+        if _acquire_usb_flock():
+            break
+        time.sleep(0.4)
+    if _usb_flock_fd is not None:
+        if os.path.ismount(MNT):
+            subprocess.run(["umount", MNT], capture_output=True)
+        subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
+        _gadget_rebind(True)
+        _release_usb_flock()
+    else:
+        print("startup self-heal skipped: usb lock held by another process")
     threading.Thread(target=disk_guard, daemon=True).start()
     threading.Thread(target=health_logger, daemon=True).start()
     threading.Thread(target=notify_loop, daemon=True).start()

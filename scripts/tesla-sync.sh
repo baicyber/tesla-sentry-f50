@@ -1,10 +1,19 @@
 #!/bin/sh
-# tesla-sync.sh - 归档哨兵视频 + 把锁车音/音效写入车机U盘
+# tesla-sync.sh - 把锁车音/音效写入车机U盘 (视频归档已交给 tesla-live-sync.py)
+#
+# 历史 (v2.7.0 之前): 本脚本按"归档目录不存在就 cp -r"复制车机 U 盘上的事件目录。
+#   但 tesla-live-sync.py 与 sentry-viewer.py 有 /archive/.pruned 墓碑与 RecentClips
+#   滚动窗口, 已清理的事件在车机 U 盘上仍然存在, 会被这里当成"新事件"重抄回来,
+#   形成 删除→重抄 死循环 (实测 .pruned 里同一事件被登记两次, 归档日志反复写满磁盘)。
+#   v2.7.0 起视频复制整个移除: 视频只由 tesla-live-sync.py 每 15 秒只读同步一次,
+#   它带墓碑与窗口过滤, 且全程不挂载、车机无感。
+#
+# 本脚本只做: 空闲检测 → 短暂停止导出 → 挂载镜像 → 写 Boombox 音频 → 恢复导出
 #
 # 安全机制:
-#  1. 镜像超过 TSF_IDLE 秒无写入才动手 (避免打断行车录制)
-#  2. 归档期间虚拟U盘短暂消失(几秒), 结束后立即恢复导出
-#  3. 网页处于"U盘管理"模式(镜像已被挂载)时自动跳过, 不抢 loop/UDC
+#  1. 跨进程互斥锁, 与网页 U盘管理 / usb-selfheal / tesla-live-sync 共用同一把锁
+#  2. 镜像超过 TSF_IDLE 秒无写入才动手 (避免打断行车录制)
+#  3. 网页"U盘管理"模式(镜像已被挂载)时自动跳过
 #  4. 全程日志
 
 [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf
@@ -15,6 +24,7 @@
 : "${TSF_MNT:=/tmp/teslamnt}"
 : "${TSF_IDLE:=600}"
 : "${TSF_LOG_DIR:=$TSF_DIR}"
+: "${TSF_USB_LOCK:=/tmp/tsf-usb.lock}"
 
 IMG="$TSF_IMG"
 ARCHIVE="$TSF_ARCHIVE"
@@ -22,7 +32,20 @@ AUDIO_Q="$ARCHIVE/boombox-queue"
 AUDIO_DONE="$ARCHIVE/boombox-done"
 MNT="$TSF_MNT"
 IDLE="$TSF_IDLE"
+LOCK="$TSF_USB_LOCK"
 LOG="$TSF_LOG_DIR/tesla-sync.log"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
+
+# --- 0. 跨进程互斥 ---
+# 网页端用 fcntl.flock 持排他锁跨整个挂载周期, live-sync 持共享锁;
+# 这里拿不到锁立刻退出, 不排队堆积 (cron 每 10 分钟会再试)。
+exec 9>"$LOCK" 2>/dev/null || { echo "LOCK-OPEN-FAIL"; exit 1; }
+flock -n 9 || {
+    log "skip: usb lock held (viewer usb-manage / selfheal / another sync)"
+    echo "SKIP-LOCKED"
+    exit 0
+}
 
 # --- 自动探测 ---
 find_gadget() {
@@ -41,7 +64,6 @@ elif command -v losetup >/dev/null 2>&1; then BB=$(command -v losetup)
 elif [ -x /opt/mu300/busybox-bin/losetup ]; then BB=/opt/mu300/busybox-bin/losetup
 else BB="busybox losetup"; fi
 
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
 restore() {
     [ -n "$UDC" ] || return 0
     echo "$UDC" > "$GADGET/UDC"
@@ -49,14 +71,14 @@ restore() {
     log "export restored, state=$(cat /sys/class/udc/$UDC/state 2>/dev/null)"
 }
 
-# 0. 网页 U 盘管理模式占用中则跳过
+# 1. 网页 U 盘管理模式占用中则跳过 (锁之外的第二道保险)
 if grep -qs " $MNT " /proc/mounts; then
     log "skip: mirror mounted by viewer usb-manage"
     echo "SKIP-MANAGED"
     exit 0
 fi
 
-# 1. 空闲检测 (设备可能没有 stat, 用 ls --full-time 换算)
+# 2. 空闲检测 (设备可能没有 stat, 用 ls --full-time 换算)
 now=$(date +%s)
 lsdate=$(ls -l --full-time "$IMG" 2>/dev/null | awk '{print $6, $7}')
 mtime=$(date -d "$lsdate" +%s 2>/dev/null)
@@ -73,11 +95,11 @@ fi
 
 log "=== sync start (idle ${age}s) ==="
 
-# 2. 短暂停止导出
+# 3. 短暂停止导出
 echo "" > "$GADGET/UDC"
 sleep 1
 
-# 3. 显式 losetup + 读写挂载 (归档要读, 音频要写)
+# 4. 显式 losetup + 读写挂载 (音频要写)
 mkdir -p "$MNT" "$AUDIO_Q" "$AUDIO_DONE"
 LB=$($BB -f 2>/dev/null)
 [ -z "$LB" ] && LB=/dev/loop3
@@ -91,23 +113,11 @@ if ! mount -t exfat "$LB" "$MNT" 2>>"$LOG"; then
     restore; exit 1
 fi
 
-# 4. 归档新事件 (已存在的目录跳过)
-copied=0
-for cat in SentryClips SavedClips RecentClips; do
-    mkdir -p "$ARCHIVE/$cat"
-    [ -d "$MNT/TeslaCam/$cat" ] || continue
-    for ev in "$MNT"/TeslaCam/"$cat"/*/; do
-        [ -d "$ev" ] || continue
-        name=$(basename "$ev")
-        [ -d "$ARCHIVE/$cat/$name" ] && continue
-        mkdir -p "$ARCHIVE/$cat/$name"
-        cp -r "$ev". "$ARCHIVE/$cat/$name/" 2>>"$LOG" && copied=$((copied+1)) \
-            || { log "copy fail: $cat/$name"; rm -rf "$ARCHIVE/$cat/$name"; }
-    done
-done
-log "archived $copied new events"
+# 5. 视频归档不再由本脚本负责, 只做一次存活提醒
+ps w 2>/dev/null | grep -v grep | grep -q tesla-live-sync.py || \
+    log "WARN: tesla-live-sync.py 未运行, 视频暂不归档 (请检查 /etc/init.d/tesla-live)"
 
-# 5. 把待写入的音频直接写进车机U盘根目录
+# 6. 把待写入的音频直接写进车机U盘根目录
 #    (上传的音频全部放根目录: LockChime.wav 即锁车音, 其它文件名原样放根目录)
 pushed=0
 has_audio=0
@@ -130,9 +140,9 @@ if [ "$has_audio" = "1" ]; then
     log "pushed $pushed audio -> USB root"
 fi
 
-# 6. 卸载并恢复导出
+# 7. 卸载并恢复导出
 umount "$MNT" 2>>"$LOG"
 $BB -d "$LB" 2>/dev/null
 sleep 1
 restore
-echo "SYNC-DONE copied=$copied audio=$pushed"
+echo "SYNC-DONE audio=$pushed"

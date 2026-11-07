@@ -16,11 +16,13 @@ PURGE=0
 
 echo "==> 停止服务"
 if [ -f /etc/rc.common ]; then
-    [ -x /etc/init.d/sentry-viewer ] && /etc/init.d/sentry-viewer stop 2>/dev/null || true
-    [ -x /etc/init.d/sentry-viewer ] && /etc/init.d/sentry-viewer disable 2>/dev/null || true
+    for svc in tesla-viewer sentry-viewer tesla-live; do
+        [ -x "/etc/init.d/$svc" ] && "/etc/init.d/$svc" stop 2>/dev/null || true
+        [ -x "/etc/init.d/$svc" ] && "/etc/init.d/$svc" disable 2>/dev/null || true
+    done
     [ -x /etc/init.d/tesla-gadget ] && /etc/init.d/tesla-gadget stop 2>/dev/null || true
     [ -x /etc/init.d/tesla-gadget ] && /etc/init.d/tesla-gadget disable 2>/dev/null || true
-    sed -i '/tesla-sync.sh/d' /etc/crontabs/root 2>/dev/null || true
+    sed -i '/tesla-sync.sh/d;/usb-selfheal.sh/d' /etc/crontabs/root 2>/dev/null || true
 else
     systemctl disable --now sentry-viewer.service 2>/dev/null || true
     systemctl disable --now tesla-gadget.service 2>/dev/null || true
@@ -33,7 +35,7 @@ echo "==> 恢复 USB 导出 (移除 mass_storage)"
 umount "$TSF_MNT" 2>/dev/null || true
 
 echo "==> 删除程序文件"
-rm -f /etc/init.d/tesla-gadget /etc/init.d/sentry-viewer
+rm -f /etc/init.d/tesla-gadget /etc/init.d/tesla-viewer /etc/init.d/tesla-live /etc/init.d/sentry-viewer
 rm -f /etc/systemd/system/tesla-gadget.service /etc/systemd/system/sentry-viewer.service
 [ -f /etc/systemd/system/tesla-gadget.service ] && systemctl daemon-reload || true
 rm -f "$TSF_DIR/sentry-viewer.py" "$TSF_DIR/tesla-gadget.sh" "$TSF_DIR/tesla-sync.sh"

@@ -303,10 +303,11 @@ secret=               # 可选: 签名密钥, 留空则由密码派生, 改密�
 - ⚠️ 认证本身走 HTTP 明文传输，公网穿透时请务必套一层 HTTPS（或用 FRP 的 TLS/stcp），否则密码可被中间人看到
 
 
-改完重启服务生效：
+改完重启服务生效（程序启动时会自己读 `/etc/tesla-sentry.conf` 补齐未设置的环境变量，所以 conf 里新增或修改的参数都能生效；procd 不继承 init.d 里的 export，这是必要的兜底。进程不会热加载，改完务必重启）：
 
 ```sh
-/etc/init.d/sentry-viewer restart
+/etc/init.d/tesla-viewer restart
+/etc/init.d/tesla-live restart
 /etc/init.d/tesla-gadget restart
 ```
 
@@ -318,7 +319,8 @@ secret=               # 可选: 签名密钥, 留空则由密码派生, 改密�
 /opt/tesla-sentry/
 ├── teslacam.img         # 虚拟U盘镜像 (exFAT, 稀疏文件)
 ├── tesla-gadget.sh      # 虚拟U盘开关脚本: on|off|status
-├── tesla-sync.sh        # 归档同步 + 音频写入
+├── tesla-sync.sh        # 定时挂载镜像 + 写入 Boombox 音频 (视频归档不在这里)
+├── tesla-live-sync.py   # 在线只读同步: 按 exFAT 解析镜像, 15 秒一轮, 带墓碑与滚动窗口
 ├── tesla-img.sh         # 安全写镜像 (自动 detach LUN, 避免主机缓存错乱)
 ├── usb-selfheal.sh      # LUN 被电脑"弹出"后自动挂回
 ├── tsf-start.sh         # 通用启动入口 (非 procd/systemd 系统用)

@@ -15,15 +15,16 @@
                   │                  │ lun.0/file = $TSF_IMG     │
                   │                  ▼                          │
                   │      teslacam.img (exFAT, 稀疏, 默认64G)     │
-                  │                  │                          │
-                  │                  │ 车闲置(镜像 mtime > IDLE) │
-                  │                  ▼                          │
-                  │      tesla-sync.sh:                       │
-                  │        unbind UDC → losetup → mount →     │
-                  │        拷贝新事件 → 写 Boombox/ → umount → │
-                  │        detach → rebind                    │
-                  │                  │                          │
-                  │                  ▼                          │
+                  │        │                     │               │
+                  │        │ os.pread 只读       │ 车闲置 > IDLE  │
+                  │        │ (每 15 秒)          │ (仅写音频时)   │
+                  │        ▼                     ▼               │
+                  │  tesla-live-sync.py    tesla-sync.sh:       │
+                  │   按 exFAT 解析,        unbind UDC → mount → │
+                  │   带 .pruned 墓碑       写 Boombox 音频 →    │
+                  │   + 滚动窗口过滤        umount → rebind      │
+                  │        │                                     │
+                  │        ▼                                     │
                   │      /archive (ext4, 日志式) ──► sentry-viewer.py :8080
                   └─────────────────────────────────────────────┘
 ```
@@ -44,24 +45,33 @@ Linux 内核的 USB Gadget 框架允许设备扮演 USB 外设。通过 configfs
 
 > 注意：修改 gadget 必须先 `echo "" > UDC` 解绑，**解绑期间所有 USB 功能（网卡、串口、U 盘）会同时消失**。因此所有涉及解绑的操作必须脱离 SSH 会话执行（`setsid`），否则命令会被自己掐断。
 
-## 3. 归档算法
+## 3. 归档与同步 (v2.7.0 起)
+
+**视频走在线只读同步，定时挂载脚本不再复制事件目录。**
 
 ```
-每分钟 cron 检查（实际每 10 分钟）:
-  1. 若 $TSF_MNT 已被挂载（网页 U 盘管理模式）→ 直接退出，不抢锁
-  2. 读镜像 mtime（设备可能没有 stat，用 ls --full-time + date -d 兜底）
-  3. mtime 距今 < IDLE(600s) → 车还在写，退出
-  4. 解绑 UDC（U盘从车机消失）
-  5. losetup 显式绑定 loop → mount -t exfat (读写)
-  6. 遍历 TeslaCam/{SentryClips,SavedClips,RecentClips}/*/
-     目标目录已存在 → 跳过；否则整目录 cp -r 到 /archive/<cat>/<事件名>/
-  7. 把 boombox-queue/ 里的音频拷到 <镜像>/Boombox/，成功后移到 boombox-done/
-  8. umount → losetup -d → 重新绑定 UDC（U盘回来）
+tesla-live-sync.py (常驻, 默认 15 秒一轮)
+  1. 拿 flock 共享锁 (网页管理/定时归档持排他锁时跳过本轮)
+  2. 只读打开 teslacam.img, 按 exFAT 规范解析引导扇区/FAT/目录项 (os.pread)
+  3. 连续两轮 (DataLength, ValidDataLength, mtime) 一致才认为片段写完
+  4. 跳过 /archive/.pruned 墓碑里的事件 (盒子侧已清理的)
+  5. RecentClips 只收滚动窗口内 (TSF_RECENT_ROLL_MIN, 默认 60 分钟)
+  6. 拷到 /archive/<cat>/<事件名>/
+  -> 全程不 mount、不写镜像, 车机无感
+
+tesla-sync.sh (cron, 每 10 分钟; 只负责写 Boombox 音频)
+  1. 拿 flock 排他锁; 拿不到直接跳过 (不排队堆积)
+  2. 镜像 mtime 距今 < IDLE(600s) → 车还在写, 退出
+  3. 解绑 UDC → losetup → mount -t exfat (读写)
+  4. 把 boombox-queue/ 音频写到镜像根目录, 成功后移到 boombox-done/
+  5. umount → losetup -d → 重新绑定 UDC
 ```
 
-**为什么要"短暂断开"**：exFAT 不是集群文件系统，同一时刻只能有一端挂载。Linux 侧要读镜像，就必须让车机先放手。
+**为什么定时脚本不再复制视频**：车机 U 盘上仍留着盒子侧已清理的旧事件，"目录不存在就 `cp -r`"会把它们重新抄回来，形成 删除→重抄 死循环（`.pruned` 里同一事件被重复登记、归档日志反复写满磁盘）。现在归档规则只有一份，就在 `tesla-live-sync.py` 里。
 
-**为什么只在空闲时做**：行车/哨兵录制期间镜像 mtime 持续更新，永远不会满足"空闲 600 秒"，所以不会打断录制。停车熄火后约 10 分钟开始归档，全程 5–15 秒。
+**为什么还要短暂断开**：写音频需要往 exFAT 镜像里写，而 exFAT 不是集群文件系统，同一时刻只能有一端挂载。视频同步是只读解析，不受此限制。
+
+**为什么只在空闲时挂载**：行车/哨兵录制期间镜像 mtime 持续更新，永远不会满足"空闲 600 秒"，所以不会打断录制。停车熄火后若队列里有音频，才会在约 10 分钟后挂载一次，全程 5–15 秒。
 
 ## 4. 断电与数据安全
 
@@ -70,7 +80,7 @@ Linux 内核的 USB Gadget 框架允许设备扮演 USB 外设。通过 configfs
 | 风险 | 缓解 |
 |---|---|
 | 正在写镜像时断电 → exFAT 损坏 | 镜像只由车机写（车机的写入是它自己的事）；Linux 侧只在归档窗口内挂载，且挂载前先解绑 UDC，避免双写 |
-| 归档拷贝中断 → 半个事件目录 | 先拷到目标目录，失败则 `rm -rf` 回滚；下次重跑 |
+| 音频写入中断 → 半个文件 | 只有 cp 成功才把音频移出队列；失败则留在 queue，下轮重试 |
 | 归档区断电损坏 | 归档区用 ext4（日志式），掉电后 fsck 自愈 |
 | 镜像彻底损坏 | 删掉镜像重建即可（车机会重新格式化，历史事件已在归档区） |
 
@@ -86,8 +96,8 @@ IDLE ───────────────────────► MA
         5 分钟无操作自动 detach (threading.Timer)
 ```
 
-- 管理模式期间，cron 归档任务检测到挂载点占用会自动跳过
-- 查看器进程启动时会自愈：若发现残留挂载，先 umount、detach loop、重新绑定 UDC
+- 网页挂载、定时归档、U盘自愈、在线同步共用 `/tmp/tsf-usb.lock`：前三者持排他锁，在线同步持共享锁；任一方持锁时其它入口自动跳过，不再出现并发抢 loop 设备与挂载点
+- 查看器进程启动时会自愈：先短暂重试拿锁，拿到才 umount、detach loop、重新绑定 UDC；拿不到则完全不碰 U 盘
 - 所有写操作后立即 `sync`，再恢复导出，避免缓存丢失
 
 ## 6. 安全边界

@@ -137,6 +137,18 @@ TSF_GADGET=$GADGET
 TSF_CACHE=$CACHE_DIR
 TSF_FFMPEG=$FFMPEG
 TSF_FFPROBE=$FFPROBE
+TSF_USB_LOCK=/tmp/tsf-usb.lock
+
+# ---- 归档清理 / 在线同步参数 (改完重启服务生效; 0 = 关闭对应策略) ----
+# 这些参数以前没写进 conf, OpenWrt 启动脚本又只导出固定变量,
+# 导致在 F50 上照 README 改清理窗口/保留天数完全不生效。
+TSF_RECENT_ROLL_MIN=60
+TSF_RECENT_KEEP_MIN=60
+TSF_BOX_KEEP_DAYS=14
+TSF_BOX_MAX_GB=12
+TSF_FREE_MIN_MB=4096
+TSF_FREE_TARGET_MB=10240
+TSF_LIVE_INTERVAL=15
 EOF
 
 # ---------------- 3.5 访问认证 ----------------
@@ -146,7 +158,7 @@ if [ -f "$AUTH_CONF" ]; then
 else
     AUTH_PASS=$(head -c 96 /dev/urandom | tr -dc 'a-z2-9' | head -c 10)
     cat > "$AUTH_CONF" <<EOF
-# 网页登录凭据 (改完执行 /etc/init.d/sentry-viewer restart 生效)
+# 网页登录凭据 (改完执行 /etc/init.d/tesla-viewer restart 生效)
 # 删掉本文件 = 关闭认证, 只有内网使用时才建议这么干
 user=admin
 pass=$AUTH_PASS
@@ -164,22 +176,22 @@ if [ -f /etc/rc.common ]; then
 START=99
 USE_PROCD=1
 start_service() {
-    [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf
+    set -a; [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf; set +a
     setsid /bin/sh "$TSF_DIR/tesla-gadget.sh" on </dev/null >/dev/null 2>&1 &
 }
 stop_service() {
-    [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf
+    set -a; [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf; set +a
     setsid /bin/sh "$TSF_DIR/tesla-gadget.sh" off </dev/null >/dev/null 2>&1 &
 }
 EOF
-    cat > /etc/init.d/sentry-viewer <<EOF
+    cat > /etc/init.d/tesla-viewer <<EOF
 #!/bin/sh /etc/rc.common
 START=99
 USE_PROCD=1
 start_service() {
-    [ -f $CONF ] && . $CONF
-    export TSF_DIR TSF_IMG TSF_ARCHIVE TSF_MNT TSF_LOOP TSF_PORT TSF_IDLE TSF_USB_TIMEOUT
-    export TSF_GADGET TSF_LOSETUP TSF_CACHE TSF_FFMPEG TSF_FFPROBE
+    # set -a 兼容会继承 shell 环境的 init; procd 不继承 export,
+    # 程序启动时会自己读 conf 补齐, 因此自定义清理/同步参数在 F50 上也能生效。
+    set -a; [ -f $CONF ] && . $CONF; set +a
     procd_open_instance
     procd_set_param command $PYTHON "\$TSF_DIR/sentry-viewer.py"
     procd_set_param respawn 3600 5 0
@@ -188,9 +200,14 @@ start_service() {
     procd_close_instance
 }
 EOF
-    chmod +x /etc/init.d/tesla-gadget /etc/init.d/sentry-viewer
+    # 旧版服务名统一成 tesla-viewer, 避免两个 procd 实例抢 8080
+    if [ -f /etc/init.d/sentry-viewer ]; then
+        /etc/init.d/sentry-viewer disable 2>/dev/null || true
+        rm -f /etc/init.d/sentry-viewer
+    fi
+    chmod +x /etc/init.d/tesla-gadget /etc/init.d/tesla-viewer
     /etc/init.d/tesla-gadget enable
-    /etc/init.d/sentry-viewer enable
+    /etc/init.d/tesla-viewer enable
 
     # 车机在线只读同步 (不挂载镜像, 车机无感, 新片段秒级进网页)
     cat > /etc/init.d/tesla-live <<EOF
@@ -198,8 +215,7 @@ EOF
 START=99
 USE_PROCD=1
 start_service() {
-    [ -f $CONF ] && . $CONF
-    export TSF_DIR TSF_IMG TSF_ARCHIVE TSF_MNT TSF_LIVE_INTERVAL
+    set -a; [ -f $CONF ] && . $CONF; set +a
     procd_open_instance
     procd_set_param command $PYTHON "\$TSF_DIR/tesla-live-sync.py"
     procd_set_param respawn 3600 5 0
@@ -274,8 +290,7 @@ else
     cat > "$TSF_DIR/tsf-start.sh" <<EOF
 #!/bin/sh
 # 通用启动入口 (rc.local / 手动 / supervisor 均可调用)
-[ -f $CONF ] && . $CONF
-export TSF_DIR TSF_IMG TSF_ARCHIVE TSF_MNT TSF_LOOP TSF_PORT TSF_GADGET TSF_LOSETUP TSF_CACHE TSF_FFMPEG TSF_FFPROBE
+set -a; [ -f $CONF ] && . $CONF; set +a
 sh "\$TSF_DIR/tesla-gadget.sh" on >/dev/null 2>&1
 pgrep -f tesla-live-sync.py >/dev/null 2>&1 || setsid $PYTHON "\$TSF_DIR/tesla-live-sync.py" </dev/null >>"\$TSF_DIR/tesla-live.log" 2>&1 &
 sleep 1
@@ -333,7 +348,7 @@ fi
 
 say "启动查看器 ..."
 if [ -f /etc/rc.common ]; then
-    /etc/init.d/sentry-viewer restart >/dev/null 2>&1 || true
+    /etc/init.d/tesla-viewer restart >/dev/null 2>&1 || true
 elif [ -d /etc/systemd/system ]; then
     systemctl restart sentry-viewer.service || true
 fi

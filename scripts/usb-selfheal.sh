@@ -5,7 +5,8 @@
 #       SCSI eject, 内核随即清空 lun.0/file, U 盘从此不再出现, 直到重新绑定镜像。
 # 本脚本检测到 LUN 为空时自动重新导出, 建议由 cron 每 1~2 分钟执行一次。
 #
-# 安全: 网页"U盘管理"模式(镜像已挂载)期间不干预, 避免抢 loop/UDC。
+# 安全: 与网页 U盘管理 / tesla-sync.sh / tesla-live-sync.py 共用跨进程锁,
+#       别人持锁时直接跳过; 网页"U盘管理"模式(镜像已挂载)期间同样不干预。
 
 [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf
 
@@ -13,11 +14,17 @@
 : "${TSF_IMG:=$TSF_DIR/teslacam.img}"
 : "${TSF_MNT:=/tmp/teslamnt}"
 : "${TSF_LOG_DIR:=$TSF_DIR}"
+: "${TSF_USB_LOCK:=/tmp/tsf-usb.lock}"
 
 IMG="$TSF_IMG"
 MNT="$TSF_MNT"
+LOCK="$TSF_USB_LOCK"
 LOG="$TSF_LOG_DIR/tesla-gadget.log"
 GADGET_SH="$TSF_DIR/tesla-gadget.sh"
+
+# 跨进程互斥: 拿不到锁立刻退出 (下一轮 cron 再来)
+exec 9>"$LOCK" 2>/dev/null || exit 0
+flock -n 9 || exit 0
 
 find_gadget() {
     if [ -n "$TSF_GADGET" ] && [ -d "$TSF_GADGET" ]; then echo "$TSF_GADGET"; return 0; fi
@@ -37,4 +44,5 @@ grep -q " $MNT " /proc/mounts && exit 0
 [ -n "$(cat "$LUN" 2>/dev/null)" ] && exit 0
 
 echo "[$(date +%Y-%m-%d\ %H:%M:%S)] selfheal: LUN empty (host ejected?), re-exporting" >> "$LOG"
-setsid sh "$GADGET_SH" on </dev/null >>"$LOG" 2>&1 &
+# 后台任务必须关掉 fd 9, 否则会继承锁直到它退出
+setsid sh "$GADGET_SH" on </dev/null >>"$LOG" 2>&1 9>&- &

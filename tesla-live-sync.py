@@ -24,6 +24,7 @@ exFAT 目录项里 DataLength 在文件关闭时才落最终值, 因此必须:
 """
 import argparse
 import datetime
+import fcntl
 import json
 import os
 import re
@@ -31,12 +32,33 @@ import struct
 import sys
 import time
 
+# 配置兜底: procd 不把 init.d 的 export 传给服务进程, 这里自己读 conf
+# (优先级: 显式环境变量 > /etc/tesla-sentry.conf > 代码默认值; 空值视为用默认)
+def _load_conf(path="/etc/tesla-sentry.conf"):
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k.startswith("TSF_") and v and k not in os.environ:
+                    os.environ[k] = v
+    except OSError:
+        pass
+
+
+_load_conf()
+
 IMG = os.environ.get("TSF_IMG", "/root/teslacam.img")
 ARCHIVE = os.environ.get("TSF_ARCHIVE", "/archive")
 MNT = os.environ.get("TSF_MNT", "/tmp/teslamnt")
 LOG = os.environ.get("TSF_LIVE_LOG", "/root/tesla-live.log")
 STATE = os.environ.get("TSF_LIVE_STATE", "/root/.tesla-live-state.json")
 INTERVAL = int(os.environ.get("TSF_LIVE_INTERVAL", "15"))
+# 与网页 U盘管理 / 定时归档 / U盘自愈共用的跨进程锁 (那边持排他, 这里持共享)
+USB_LOCK = os.environ.get("TSF_USB_LOCK", "/tmp/tsf-usb.lock")
 # 归档滚动窗口(分钟), 与 sentry-viewer.py 的 TSF_RECENT_ROLL_MIN 保持一致;
 # 窗口外的 RecentClips 根本不再抄进归档 —— 否则清掉的片段会被当成"新片段"重抄一遍,
 # 形成 删除→重抄 的死循环, 既拖慢新片段落地又白写 eMMC
@@ -52,6 +74,33 @@ def log(msg):
         with open(LOG, "a") as f:
             f.write(line + "\n")
     except Exception:
+        pass
+
+
+def usb_shared_lock():
+    """拿共享锁; 别人(网页挂载/归档/自愈)持排他锁时返回 None, 本轮直接跳过"""
+    fd = None
+    try:
+        fd = os.open(USB_LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return fd
+    except OSError:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        return None
+
+
+def usb_unlock(fd):
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
         pass
 
 
@@ -470,7 +519,18 @@ def main():
         exfat.close()
         return 0
 
+    lock_miss = 0
     while True:
+        lk = usb_shared_lock()
+        if lk is None:
+            # 网页正在管理U盘 / 定时归档正在挂载: 跳过本轮。
+            # 节流日志: 万一锁文件不可写导致长期停摆, 仍要留下线索。
+            lock_miss += 1
+            if lock_miss in (1, 20, 80):
+                log("跳过本轮: U盘被网页管理/归档占用, 或锁文件不可写 (%s), 连续 %d 轮" % (USB_LOCK, lock_miss))
+            time.sleep(args.interval)
+            continue
+        lock_miss = 0
         try:
             # 网页正在管理U盘(已挂载)时跳过, 避免与挂载视图不一致
             if os.path.ismount(MNT):
@@ -490,6 +550,8 @@ def main():
             do_sync(exfat, state)
         except Exception as e:
             log("轮询异常: %s" % e)
+        finally:
+            usb_unlock(lk)
         time.sleep(args.interval)
 
 
