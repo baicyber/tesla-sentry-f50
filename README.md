@@ -450,8 +450,6 @@ sudo ./uninstall.sh --purge      # 连镜像和归档一起删（不可恢复）
   </tr>
 </table>
 
-> 收款码已裁成只含二维码的正方形。更换二维码后运行 `python tools/gen_sponsor.py` 重新生成（需要 Pillow）。
-
 ## 💬 交流群
 
 > 遇到问题、想交流玩法，欢迎扫码加入群聊~
@@ -471,8 +469,6 @@ sudo ./uninstall.sh --purge      # 连镜像和归档一起删（不可恢复）
     <td align="center"><img src="docs/sponsor/web_wechatauthor.jpg" width="240" alt="作者微信二维码"><br><sub><b>微信 · 联系作者</b></sub></td>
   </tr>
 </table>
-
-> 网页端「⚙ 个性化」面板底部也常驻了赞助码与作者联系方式，切到任意设置子菜单都能看到。
 
 ## License
 
