@@ -91,7 +91,7 @@ MAX_UPLOAD = 100 * 1024 * 1024  # 通用文件上传上限 100MB (皮肤/音频�
 # ---------------- 版本与在线升级 (OTA) ----------------
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 多数能通, 同时内置镜像源兜底, 依次尝试。
-APP_VERSION = "2.8.0"
+APP_VERSION = "2.8.1"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://raw.githubusercontent.com/%s/main" % OTA_REPO,
@@ -1038,16 +1038,16 @@ select.ninput { cursor:pointer; }
       <div class="support-title">💬 交流加群</div>
       <div class="support-text">交流加群请联系作者，扫码关注抖音或添加微信好友~</div>
       <div class="support-qrs">
-        <figure><img src="/sponsor/douyin" alt="抖音二维码" loading="lazy"><figcaption>抖音 · @耶基大学懂事长</figcaption></figure>
-        <figure><img src="/sponsor/wechatauthor" alt="作者微信二维码" loading="lazy"><figcaption>微信 · 联系作者</figcaption></figure>
+        <figure><img src="/sponsor/douyin?v=__SPONSOR_VER__" alt="抖音二维码" loading="lazy"><figcaption>抖音 · @耶基大学懂事长</figcaption></figure>
+        <figure><img src="/sponsor/wechatauthor?v=__SPONSOR_VER__" alt="作者微信二维码" loading="lazy"><figcaption>微信 · 联系作者</figcaption></figure>
       </div>
     </div>
     <div class="support-sec">
       <div class="support-title">☕ 赞助</div>
       <div class="support-text">本项目完全开源免费，如果它帮到了你，欢迎支持博主一些token，助力项目持续更新~</div>
       <div class="support-qrs">
-        <figure><img src="/sponsor/alipay" alt="支付宝收款码" loading="lazy"><figcaption>支付宝</figcaption></figure>
-        <figure><img src="/sponsor/wechatpay" alt="微信收款码" loading="lazy"><figcaption>微信支付</figcaption></figure>
+        <figure><img src="/sponsor/alipay?v=__SPONSOR_VER__" alt="支付宝收款码" loading="lazy"><figcaption>支付宝</figcaption></figure>
+        <figure><img src="/sponsor/wechatpay?v=__SPONSOR_VER__" alt="微信收款码" loading="lazy"><figcaption>微信支付</figcaption></figure>
       </div>
     </div>
   </div>
@@ -5501,11 +5501,15 @@ class Handler(BaseHTTPRequestHandler):
         if not self._gate():
             return
         if path in ("/", "/index.html"):
+            # 二维码 URL 带内容版本号: 换码后旧图缓存立即失效, 避免浏览器显示未裁剪的旧二维码
+            sponsor_ver = hashlib.md5(b"".join(SPONSOR_BYTES[k] for k in sorted(SPONSOR_BYTES))).hexdigest()[:10]
             html = (HTML.replace("__CAT_NAMES__", json.dumps(CAT_NAMES, ensure_ascii=False))
-                    .replace("__I18N__", I18N_JS).replace("__LANGS__", LANG_JS))
+                    .replace("__I18N__", I18N_JS).replace("__LANGS__", LANG_JS)
+                    .replace("__SPONSOR_VER__", sponsor_ver))
             self._send(200, html.encode())
         elif path.startswith("/sponsor/"):
             # 赞助/联系作者二维码: 从单文件内嵌资源按需返回, 不占首屏 HTML 体积
+            # src 带 ?v=<内容hash> 时可长期强缓存; 不带版本号的旧链接一律不缓存, 防止陈旧图残留
             key = path[len("/sponsor/"):].split("?")[0]
             data = SPONSOR_BYTES.get(key)
             if not data:
@@ -5514,7 +5518,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "image/jpeg")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "public, max-age=604800")
+            self.send_header("Cache-Control", "public, max-age=604800, immutable" if "?v=" in path else "no-store")
             self.end_headers()
             self.wfile.write(data)
             return

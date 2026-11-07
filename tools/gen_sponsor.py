@@ -100,10 +100,12 @@ block = ("# 赞助 / 联系作者二维码 (压缩后 base64 内嵌, 单文件�
          "SPONSOR_BYTES = {k: base64.b64decode(v.split(\",\", 1)[1]) for k, v in SPONSOR_IMGS.items()}\n")
 
 src = open(SV, encoding="utf-8").read()
+# 连同块后的空行一起吃掉, 保证重复运行不会不断累积空行 (真正的幂等)
 src = re.sub(r"# 赞助 / 联系作者二维码[^\n]*\n"
              r"(?:# [^\n]*\n)?"
              r"SPONSOR_IMGS = \{.*?\n\}\n"
-             r"(?:SPONSOR_BYTES = \{[^\n]*\n)?",
+             r"(?:SPONSOR_BYTES = \{[^\n]*\n)?"
+             r"\n*",
              "", src, count=1, flags=re.S)
 src = re.sub(r"\nfor _k, _v in SPONSOR_IMGS\.items\(\):\n"
              r"    HTML = HTML\.replace\(\"__IMG_%s__\" % _k\.upper\(\), _v\)\n", "", src)
