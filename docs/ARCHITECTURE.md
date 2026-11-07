@@ -108,8 +108,11 @@ IDLE ───────────────────────► MA
 | `/api/usb/browse`、`/usbdl`、`/api/usb` | 路径 realpath 必须落在镜像挂载点内 |
 | 上传 | 单文件 ≤ 100MB；文件名仅允许 `[\w\-. ]`，自动去除目录部分 |
 | 音频 | ≤ 1MB（车机限制）；锁车音必须 WAV |
+| DELETE 类接口 | 与 GET / POST 一样先过 `_gate()` 登录校验 |
 
-**没有内置身份认证**。请只在内网使用，公网暴露请自行加反向代理认证或走 VPN。
+`install.sh` 默认生成 `/opt/tesla-sentry/auth.conf`（`admin` + 随机 10 位密码）。存在密码时 `AUTH_ON` 为真，页面 / 媒体流 / 缩略图 / 下载 / 全部 API 统一拦截：HMAC 签名 cookie（默认 30 天）或 HTTP Basic；同一 IP 在 10 分钟窗口内连错 8 次返回 429。删除 `auth.conf` 并重启即关闭认证，**仅建议纯内网**。
+
+认证本身走 HTTP 明文，公网暴露请自行套 HTTPS 或 VPN。
 
 ## 7. 播放器布局与同步策略
 
