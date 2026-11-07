@@ -67,7 +67,7 @@
 | 🔔 **飞书推送** | 哨兵触发后自动把时间 / 位置 / 触发原因 / 触发镜头 + **触发那一帧画面** 推到飞书（默认**自建应用私聊，只有本人可见**；也可用群机器人 webhook），可推**触发那一路的短视频**或封面卡片，带「查看录像」按钮 |
 | 🔊 **锁车音 / 音效** | 网页上传音频，全部直接写入 U 盘**根目录**（`LockChime.wav` 即锁车音） |
 | 🚙 **涂装管理** | 网页上传 png/jpg 到 U 盘根目录 `Wraps/`，车机端直接选用 |
-| 📂 **U 盘文件管理** | 网页直接浏览/上传/下载/删除车机 U 盘内容（临时断开、自动恢复导出） |
+| 📂 **U 盘文件管理** | 网页直接浏览/上传/下载/删除车机 U 盘内容（临时断开、自动恢复导出）；支持**多选文件与文件夹**批量删除 / 移动 / 复制 / 重命名，一键**清空 TeslaCam 全部录像**（不动 Boombox、Wraps 等其他根目录） |
 | 🛡 **断电自愈** | 车内 USB 硬断电场景友好：归档区 ext4 日志式、开机自检、服务自动拉起 |
 | 🔁 **弹出自动重挂** | 主机(车机/电脑)对 U 盘执行"弹出"会清空 mass_storage 的 LUN，`usb-selfheal.sh` 每 2 分钟检测并自动重新导出 |
 | 🚀 **开机自启** | OpenWrt `procd` 服务，USB 网卡 / 串口 / 虚拟 U 盘可共存 |
@@ -158,7 +158,7 @@ sudo ./install.sh --size 200 --port 8080 --archive /archive
 | 🎨 网页背景 | 上传 `.css` / `.jpg` / `.png` / `.webp`；CSS 里用 `/skin-media/文件名` 引用图片 |
 | 🔊 锁车语音 | 上传 WAV/MP3，全部直接写入车机 U 盘**根目录**；文件名为 `LockChime.wav` 的即锁车音，可"设为锁车音"改名 |
 | 🚙 涂装 | 上传 png/jpg/webp，直接写入 U 盘根目录 `Wraps/`，车机端设置里选用（带缩略图预览与删除） |
-| 📂 文件 | **车机U盘**：浏览/上传/下载/删除 U 盘任意目录（含根目录）；**归档区**：浏览 F50 内部文件 |
+| 📂 文件 | **车机U盘**：浏览/上传/下载 U 盘任意目录（含根目录），勾选后可批量删除 / 移动 / 复制 / 重命名，另有「清空 TeslaCam 全部录像」；**归档区**：浏览 F50 内部文件，同样支持批量操作 |
 | 🔔 推送 | 飞书推送哨兵事件（私聊仅本人 / 群机器人，含触发那一帧画面），见 [飞书推送](#飞书推送) |
 | 🌐 **多语言** | 界面支持中/英/德/法/意/西/荷/俄/日/韩，设置 → 语言 里切换，保存在本机浏览器 |
 | 🔄 更新 | 查看当前/最新版本与更新说明，一键检查并升级，出问题可回滚（见 [在线升级](#在线升级ota)） |
@@ -166,6 +166,10 @@ sudo ./install.sh --size 200 --port 8080 --archive /archive
 **锁车音要求**（特斯拉规范）：WAV、44.1kHz、16-bit、< 1MB、1–5 秒。上传的音频**全部写入 U 盘根目录**，其中 `LockChime.wav` 即锁车音（特斯拉只认根目录这个文件名）。车机端：Toybox → Boombox → Lock Sound → 选 USB。
 
 **U 盘文件管理模式**：点「连接车机U盘」→ 停止导出、挂载镜像 → 网页上改动直接写进车机 U 盘 → 点「恢复车机导出」或 **5 分钟无操作自动恢复**。行车/哨兵活跃时不要长时间挂着。
+
+**批量操作**：列表左侧勾选文件/文件夹（含目录），工具条可全选、删除、移动、复制、重命名。移动/复制需填目标目录（U 盘填相对路径、留空为根目录；归档区填 `/archive/...`），同名会跳过，目录不会被移进自身内部；删除与重命名均需确认。所有路径经服务端 realpath 校验，越界直接拒绝。
+
+**清空 TeslaCam 全部录像**：仅在「车机U盘」区域、且已连接管理时可用，二次确认后递归删除 `TeslaCam/` 下所有视频与事件文件夹，保留 `TeslaCam/`、`RecentClips/`、`SavedClips/`、`SentryClips/` 目录结构便于车机继续写入；`Boombox/`、`Wraps/` 等其它根目录完全不动。操作不可撤销。
 
 ---
 
@@ -352,6 +356,7 @@ secret=               # 可选: 签名密钥, 留空则由密码派生, 改密�
 | `/api/usb/attach` | POST | 连接车机U盘（临时停止导出 + 挂载） |
 | `/api/usb/detach` | POST | 恢复车机导出 |
 | `/api/usb/browse?dir=` | GET | 浏览车机U盘（相对路径） |
+| `/api/fm` | POST | 文件管理批量操作，JSON `{area:"usb"\|"archive", op:"delete"\|"move"\|"copy"\|"rename"\|"purge_teslacam", items:[], dest, name}`，返回 `{ok,msg,done,failed}`，路径越界/同名/移入自身均拒绝 |
 | `/api/upload/usb` | POST | 上传到车机U盘（multipart: `file`, `path`） |
 | `/api/upload/file` | POST | 上传到归档区（multipart: `file`, `path`） |
 | `/api/upload/skin` | POST | 上传皮肤 |
@@ -436,14 +441,16 @@ sudo ./uninstall.sh --purge      # 连镜像和归档一起删（不可恢复）
 
 ## ☕ 赞助
 
-> 本项目完全开源免费，如果它帮到了你，欢迎请作者喝一杯咖啡~ 
+> 本项目完全开源免费，如果它帮到了你，欢迎支持博主一些token，助力项目持续更新~
 
 <table>
   <tr>
-    <td align="center"><img src="docs/sponsor/alipay.jpg" width="320" alt="支付宝收款码"><br><sub><b>支付宝</b></sub></td>
-    <td align="center"><img src="docs/sponsor/wechat.jpg" width="320" alt="微信收款码"><br><sub><b>微信支付</b></sub></td>
+    <td align="center"><img src="docs/sponsor/web_alipay.jpg" width="240" alt="支付宝收款码"><br><sub><b>支付宝</b></sub></td>
+    <td align="center"><img src="docs/sponsor/web_wechatpay.jpg" width="240" alt="微信收款码"><br><sub><b>微信支付</b></sub></td>
   </tr>
 </table>
+
+> 收款码已裁成只含二维码的正方形。更换二维码后运行 `python tools/gen_sponsor.py` 重新生成（需要 Pillow）。
 
 ## 💬 交流群
 
@@ -455,6 +462,17 @@ sudo ./uninstall.sh --purge      # 连镜像和归档一起删（不可恢复）
     <td align="center"><img src="docs/sponsor/wechat_group.png" width="320" alt="微信群二维码"><br><sub><b>微信群</b>（二维码 11月12日前有效，过期进群请联系作者或QQ群）</sub></td>
   </tr>
 </table>
+
+**交流加群请联系作者**：群二维码过期、或想直接交流玩法，可关注抖音 `@耶基大学懂事长`（抖音号 `yejiuni`），或扫码添加作者微信好友拉你进群。
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/sponsor/web_douyin.jpg" width="240" alt="抖音二维码"><br><sub><b>抖音 · @耶基大学懂事长</b></sub></td>
+    <td align="center"><img src="docs/sponsor/web_wechatauthor.jpg" width="240" alt="作者微信二维码"><br><sub><b>微信 · 联系作者</b></sub></td>
+  </tr>
+</table>
+
+> 网页端「⚙ 个性化」面板底部也常驻了赞助码与作者联系方式，切到任意设置子菜单都能看到。
 
 ## License
 
