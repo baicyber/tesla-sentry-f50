@@ -97,7 +97,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.20"
+APP_VERSION = "2.8.21"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -1726,12 +1726,17 @@ async function refreshLive() {
       el.style.background = pct >= 90 ? '#e8443f' : color;
     };
     sw.style.display = '';
-    // 前两行各按自己的容量算, 第三行才是整盘
-    // 虚拟U盘: 镜像文件实占 / 镜像标称容量
-    tset('storvusb', dk.img_real, dk.img_nominal, 'storvusbbar', '#2f6ee0');
+    // 虚拟U盘: 卷内实际写入 / 镜像标称容量
+    // (img_real 是镜像在宿主盘上的预分配占用, 几乎等于标称容量, 永远 100% 不直观)
+    tset('storvusb', dk.img_used != null ? dk.img_used : dk.img_real, dk.img_nominal,
+         'storvusbbar', '#2f6ee0');
+    const vu = document.getElementById('storvusb');
+    if (vu) vu.title = t('车机 U 盘里已写入的数据 / 车机看到的容量');
     // 归档区: 已归档 / 可用上限 (= 已归档 + 盘剩余)
     const arcTot = (dk.arc_used || 0) + (dk.arc_free || 0);
     tset('storarc', dk.arc_used, arcTot, 'storarcbar', '#4cc38a');
+    const ia = document.getElementById('storarc');
+    if (ia) ia.title = t('盒子上保存的历史副本 (车机 U 盘里只保留滚动缓冲)');
     // 总占用: 整盘已用 / 整盘容量 (三行都在 tset 里按 90% 自动转红)
     tset('stortot', dk.disk_used, dk.disk_total, 'stortotbar', '#2f6ee0');
   } else {
@@ -4194,6 +4199,94 @@ def _proc_running(needle):
 
 _ARC_SIZE_CACHE = {"t": 0.0, "v": 0}
 
+_BITCOUNT = bytes(bin(i).count("1") for i in range(256))
+_IMG_USED_CACHE = {"t": 0.0, "path": "", "v": None}
+
+
+def _exfat_used(path):
+    """exFAT 镜像里「实际写入」了多少字节 = 已分配簇 × 簇大小。
+
+    镜像文件是预分配的 (st_blocks ≈ 标称容量), 用宿主盘上的占用来画进度条会一直是
+    100%, 所以这里读卷内 Allocation Bitmap (根目录里 type=0x81 的目录项) 数已用簇。
+    位图只覆盖簇堆, 通常几十~几百 KB, 读一次几毫秒。失败返回 None 交给上层兜底。
+    """
+    now = time.time()
+    if _IMG_USED_CACHE["v"] is not None and _IMG_USED_CACHE["path"] == path \
+            and now - _IMG_USED_CACHE["t"] < 60:
+        return _IMG_USED_CACHE["v"]
+    v = None
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        vbr = os.pread(fd, 512, 0)
+        if len(vbr) >= 512 and vbr[3:11] == b"EXFAT   ":
+            bps = 1 << vbr[108]
+            csize = bps << vbr[109]
+            heap = struct.unpack_from("<I", vbr, 88)[0] * bps
+            ccnt = struct.unpack_from("<I", vbr, 92)[0]
+            root = struct.unpack_from("<I", vbr, 96)[0]
+            fat_off = struct.unpack_from("<I", vbr, 80)[0]
+            fat_len = struct.unpack_from("<I", vbr, 84)[0]
+            nfats = vbr[110]
+            flags = struct.unpack_from("<H", vbr, 106)[0]
+            fat_at = (fat_off + (fat_len if (nfats > 1 and (flags & 0x1)) else 0)) * bps
+            hi = ccnt + 2
+
+            def nextc(c):
+                e = os.pread(fd, 4, fat_at + c * 4)
+                return struct.unpack("<I", e)[0] if len(e) == 4 else 0xFFFFFFFF
+
+            # 根目录簇链里找 Allocation Bitmap 目录项
+            bm_cl = bm_len = 0
+            c, guard = root, 0
+            while 2 <= c < hi and guard < 8192 and not bm_cl:
+                buf = os.pread(fd, csize, heap + (c - 2) * csize)
+                if not buf:
+                    break
+                for i in range(0, len(buf) - 31, 32):
+                    et = buf[i]
+                    if et == 0x00:
+                        break
+                    if et == 0x81:
+                        bm_cl = struct.unpack_from("<I", buf, i + 20)[0]
+                        bm_len = struct.unpack_from("<Q", buf, i + 24)[0]
+                        break
+                c = nextc(c)
+                guard += 1
+                if c >= 0xFFFFFFF7:
+                    break
+            if bm_cl:
+                need = min((ccnt + 7) // 8, bm_len or (ccnt + 7) // 8)
+                got, c, guard = 0, bm_cl, 0
+                used = 0
+                while got < need and 2 <= c < hi and guard < 65536:
+                    n = min(csize, need - got)
+                    buf = os.pread(fd, n, heap + (c - 2) * csize)
+                    if not buf:
+                        break
+                    for b in buf:
+                        used += _BITCOUNT[b]
+                    got += len(buf)
+                    c = nextc(c)
+                    guard += 1
+                    if c >= 0xFFFFFFF7:
+                        break
+                if got:
+                    v = used * csize
+    except Exception:
+        v = None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    # 只在成功时缓存, 解析失败下次再试 (可能是镜像还没建好)
+    if v is not None:
+        _IMG_USED_CACHE.update(t=now, path=path, v=v)
+    return v
+
+
 
 def archive_size():
     """归档区实际占用。os.walk 在文件多的时候要几十~几百毫秒, 而存储卡每 10 秒轮询一次,
@@ -4207,10 +4300,13 @@ def archive_size():
 
 
 def disk_usage():
-    """存储卡三行数据: 虚拟U盘(镜像实占) / 归档区 / 整盘总占用
+    """存储卡三行数据: 虚拟U盘(卷内已写入) / 归档区 / 整盘总占用
 
-    三行统一用「整盘容量」当分母, 所以三条进度条可以直接对比, 前两条加起来
-    约等于第三条 (差的几百 MB 是系统/日志等其它占用)。"""
+    三者口径不同, 不能相加:
+      虚拟U盘 = 镜像内部已分配空间 / 镜像标称容量 (镜像文件在宿主盘上是整份预分配的,
+                用宿主占用来画会永远是 100%)
+      归档区  = 盒子上的历史副本 / (副本 + 宿主盘剩余)
+      总占用  = 整块宿主盘已用 / 容量"""
     d = {}
     # 虚拟U盘: 稀疏镜像文件在宿主盘上的真实占用; 标称容量另给 (两者通常不等)
     try:
@@ -4219,6 +4315,18 @@ def disk_usage():
         d["img_real"] = getattr(im, "st_blocks", 0) * 512
     except OSError:
         d["img_nominal"] = d["img_real"] = 0
+    # 虚拟U盘「已写入」: 挂载时直接读 exFAT 的 statvfs (含文件系统开销, 最准),
+    # 没挂载时按 Allocation Bitmap 数已分配簇; 都失败才退回宿主盘实占
+    d["img_used"] = None
+    if os.path.ismount(MNT):
+        try:
+            st = os.statvfs(MNT)
+            if st.f_blocks > 0:
+                d["img_used"] = (st.f_blocks - st.f_bavail) * st.f_frsize
+        except OSError:
+            pass
+    if d["img_used"] is None:
+        d["img_used"] = _exfat_used(IMG)
     d["arc_used"] = archive_size()
     # 整盘 = 镜像文件所在分区 (镜像和归档同一块盘)
     d["disk_total"] = d["disk_used"] = d["disk_free"] = 0
