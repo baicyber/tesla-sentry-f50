@@ -10,6 +10,7 @@ import os
 import re
 import hmac
 import hashlib
+import math
 import shutil
 import struct
 import subprocess
@@ -96,7 +97,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.13"
+APP_VERSION = "2.8.14"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -843,7 +844,10 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .tp-badge.thr { background:#1f7ae0; color:#fff; }
 .tp-badge.brk { background:var(--panel2); color:var(--muted); }
 .tp-badge.brk.on { background:#ff453a; color:#fff; box-shadow:0 0 9px #ff453a66; }
-.tp-c.ap { background:linear-gradient(135deg,#f59e0b,#ef4444); color:#fff; font-size:10.5px; }
+.tp-c.ap { background:linear-gradient(135deg,#f59e0b,#ef4444); color:#fff; font-size:10.5px;
+  box-shadow:0 0 10px #ef444455; }
+/* 未启动: 同一个 AP 图标, 只是灰掉 (不是隐藏, 也不带文案), 一眼能看出"有这功能但没开" */
+.tp-c.ap.off { background:var(--panel2); color:var(--muted); box-shadow:inset 0 0 0 1px #ffffff2e; }
 .tp-c.st { background:var(--panel2); color:var(--muted); }
 .tp-c.st svg { width:20px; height:20px; }
 .tp-fold { display:block; margin:8px 0 0 auto; background:none; border:none; color:var(--muted);
@@ -2096,16 +2100,19 @@ function renderHud(f) {
   // f: 0=t 1=挡位 2=车速km/h 3=油门% 4=方向盘角度 5=刹车 6=转向灯 7=AP 8=lat 9=lon 10=heading 11=Ax 12=Ay 13=Az
   const q = id => document.getElementById(id);
   q('tp-gear').textContent = f[1];
-  q('tp-spd').textContent = Math.round(f[2]);
+  q('tp-spd').textContent = Math.max(0, Math.round(f[2]));   // 停车时 SEI 可能给微负值
   q('tp-date').textContent = telT0 ? fmtTelDate(new Date(telT0.getTime() + f[0]*1000)) : '—';
   q('tp-thr-n').textContent = f[3] + '%';
   q('tp-brk').classList.toggle('on', !!f[5]);   // 刹车只有布尔量, 不给百分比
   q('tp-bl').classList.toggle('on', f[6] === 1);
   q('tp-br').classList.toggle('on', f[6] === 2);
   const apNames = { 1: 'FSD', 2: 'AP', 3: 'TACC' };
-  const ap = q('tp-ap');
-  if (f[7]) { ap.style.display = ''; ap.textContent = apNames[f[7]] || 'AP'; }
-  else ap.style.display = 'none';
+  const ap = q('tp-ap'), apv = f[7] | 0;
+  // 图标常显: 启动时橙红渐变 (FSD/AP/TACC), 未启动时同一个图标灰掉
+  ap.style.display = '';
+  ap.textContent = apv ? (apNames[apv] || 'AP') : 'AP';
+  ap.classList.toggle('off', !apv);
+  ap.title = apv ? ('自动驾驶已启动 · ' + (apNames[apv] || 'AP')) : '自动驾驶未启动';
   q('tp-st').title = '方向盘角度 ' + f[4] + '°';
   const md = TEL_META || {};
   q('tp-rows').innerHTML =
@@ -2215,32 +2222,39 @@ function drawWm(ctx, t, W) {
   xr -= ctx.measureText('km/h').width + Math.round(6 * s);
   ctx.font = '800 ' + Math.round(22 * s) + 'px system-ui,"Segoe UI",sans-serif';
   ctx.fillStyle = '#fff';
-  const sp = String(Math.round(f[2]));
+  const sp = String(Math.max(0, Math.round(f[2])));
   ctx.fillText(sp, xr, yc + Math.round(1 * s));
-  if (f[7]) {
-    // AP / FSD 徽标: 与网页遥测面板同款 (琥珀→红渐变), 只在自动驾驶开启时出现
-    xr -= ctx.measureText(sp).width + Math.round(9 * s);
-    wmApBadge(ctx, xr, yc, ({ 1: 'FSD', 2: 'AP', 3: 'TACC' })[f[7]] || 'AP', s);
-  }
+  // AP 方向盘徽标: 开了辅助驾驶 = 橙红实心圆 + 白色方向盘, 没开 = 深灰半透明圆 + 灰色方向盘
+  // (以前没开就直接不画, 看起来像"没有这个图标"; 现在常显, 只区分状态)
+  xr -= ctx.measureText(sp).width + Math.round(9 * s);
+  const apv = f[7] | 0;
+  wmApWheel(ctx, xr, yc, s, apv !== 0);
   ctx.restore();
 }
-function wmApBadge(ctx, xRight, yMid, text, s) {
-  const fs = Math.round(11 * s);
-  ctx.font = '800 ' + fs + 'px system-ui,"Segoe UI",sans-serif';
-  const pw = ctx.measureText(text).width + Math.round(16 * s), ph = Math.round(22 * s);
-  const x = xRight - pw;
-  const sh = ctx.shadowBlur, ta = ctx.textAlign;
-  ctx.shadowBlur = 0;                       // 实心渐变色块, 不要投影
-  const g = ctx.createLinearGradient(x, 0, x + pw, 0);
-  g.addColorStop(0, '#f59e0b'); g.addColorStop(1, '#ef4444');
-  ctx.fillStyle = g;
-  rrPath(ctx, x, yMid - ph / 2, pw, ph, ph / 2); ctx.fill();
+function wmApWheel(ctx, xRight, yMid, s, on) {
+  // 圆形徽标 + 方向盘图形 (与遥测面板里的方向盘图标同款): 圆环 + 横辐 + 竖辐 + 中心毂
+  const R = Math.round(11 * s), cx = xRight - R, cy = yMid;
+  const sh = ctx.shadowBlur;
+  ctx.shadowBlur = 0;                       // 实心色块, 不要投影
+  if (on) {
+    const g = ctx.createLinearGradient(cx - R, cy - R, cx + R, cy + R);
+    g.addColorStop(0, '#f59e0b'); g.addColorStop(1, '#ef4444');
+    ctx.fillStyle = g;
+  } else {
+    ctx.fillStyle = 'rgba(38,46,56,.62)';   // 未启动: 中性灰底, 图标可见但明显灰掉
+  }
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+  const ir = R * 0.60, lw = Math.max(1.2 * s, R * 0.13);
+  const col = on ? '#fff' : '#c3ccd6';
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = lw;
+  ctx.beginPath(); ctx.arc(cx, cy, ir, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - ir, cy); ctx.lineTo(cx + ir, cy);
+  ctx.moveTo(cx, cy); ctx.lineTo(cx, cy + ir);
+  ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, R * 0.16, 0, Math.PI * 2); ctx.fill();
   ctx.shadowBlur = sh;
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#fff';
-  ctx.fillText(text, x + Math.round(8 * s), yMid + Math.round(fs * 0.36));
-  ctx.textAlign = ta;
-  return x - Math.round(8 * s);
+  return cx - R - Math.round(8 * s);
 }
 function updateHud(t) {
   if (!TEL || !TEL.frames || !TEL.frames.length) return;
@@ -4685,10 +4699,75 @@ def _wm_fontconf():
     return p
 
 
+def _wm_tw(text, fs):
+    """粗略估算文字宽度 (只用于胶囊宽度与槽位排布, 差几 px 不影响观感)"""
+    w = 0.0
+    for ch in str(text):
+        if ord(ch) > 0x2E80:
+            w += 1.0
+        elif ch == " ":
+            w += 0.28
+        elif ch in "·:":
+            w += 0.33
+        elif ch == "%":
+            w += 0.92
+        elif ch.isdigit():
+            w += 0.57
+        elif ch.isupper():
+            w += 0.68
+        else:
+            w += 0.52
+    return w * fs
+
+
+def _ass_pts(pts):
+    def n(v):
+        return ("%.1f" % v).rstrip("0").rstrip(".")
+    return "m " + " l ".join("%s %s" % (n(x), n(y)) for x, y in pts)
+
+
+def _ass_circle(cx, cy, r, steps=32):
+    return _ass_pts([(cx + r * math.cos(2 * math.pi * i / steps),
+                      cy + r * math.sin(2 * math.pi * i / steps)) for i in range(steps)])
+
+
+def _ass_rrect(x, y, w, h, r, steps=6):
+    """圆角矩形 (胶囊) 矢量路径"""
+    r = min(r, w / 2.0, h / 2.0)
+    pts = []
+    for cx0, cy0, a0, a1 in ((x + w - r, y + r, -90, 0), (x + w - r, y + h - r, 0, 90),
+                             (x + r, y + h - r, 90, 180), (x + r, y + r, 180, 270)):
+        for i in range(steps + 1):
+            a = math.radians(a0 + (a1 - a0) * float(i) / steps)
+            pts.append((cx0 + r * math.cos(a), cy0 + r * math.sin(a)))
+    return _ass_pts(pts)
+
+
+def _ass_wheel(cx, cy, r, seg=16):
+    """AP 方向盘徽标的两条矢量路径 (ASS p1 绘图): (圆形底, 方向盘图形)。
+    圆环用多段四边形拼出, 不依赖 libass 的填充规则。"""
+    badge = _ass_circle(cx, cy, r, 24)
+    ir = r * 0.60
+    lw = max(1.5, r * 0.17)
+    parts = []
+    for i in range(seg):
+        a1, a2 = 2 * math.pi * i / seg, 2 * math.pi * (i + 1) / seg
+        o1 = (cx + (ir + lw / 2) * math.cos(a1), cy + (ir + lw / 2) * math.sin(a1))
+        o2 = (cx + (ir + lw / 2) * math.cos(a2), cy + (ir + lw / 2) * math.sin(a2))
+        i1 = (cx + (ir - lw / 2) * math.cos(a1), cy + (ir - lw / 2) * math.sin(a1))
+        i2 = (cx + (ir - lw / 2) * math.cos(a2), cy + (ir - lw / 2) * math.sin(a2))
+        parts.append(_ass_pts([i1, o1, o2, i2]))
+    b = lw / 2.0
+    parts.append(_ass_pts([(cx - ir, cy - b), (cx + ir, cy - b), (cx + ir, cy + b), (cx - ir, cy + b)]))
+    parts.append(_ass_pts([(cx - b, cy), (cx - b, cy + ir), (cx + b, cy + ir), (cx + b, cy)]))
+    parts.append(_ass_circle(cx, cy, max(1.4, r * 0.14), 12))
+    return badge, " ".join(parts)
+
+
 def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
-    """生成与网页遥测面板同款的行车信息水印 ASS 字幕:
-    顶部半透明色带 + 每秒一行 (左: 日期时间 城市·街道 / 右: [FSD/AP] 挡位 车速 油门, 刹车亮红)。
-    size=(宽,高) 用于非 1280x720 的输出 (位置与字号按高度等比缩放)。无遥测/无字体返回 None。"""
+    """生成与网页播放器同款的行车信息水印 ASS 字幕 (导出视频用):
+    顶部淡色窄条 + 左侧「日期时间 城市·街道」+ 右侧「AP 方向盘 / 车速 km/h / 转向灯 / 挡位 / 刹车 / 油门」。
+    与前端 drawWm() 一一对应, 只是全部改成矢量色块 + 文字。无遥测/无字体返回 None。"""
     if not _wm_font():
         return None
     tel = telemetry_cached(fp)
@@ -4699,16 +4778,91 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
         t0 = datetime.datetime.strptime(os.path.basename(fp)[:19], "%Y-%m-%d_%H-%M-%S")
     except ValueError:
         t0 = None
-    loc = "·".join(x for x in (meta.get("city") or "", meta.get("street") or "") if x).strip()
+    loc = " · ".join(x for x in (meta.get("city") or "", meta.get("street") or "") if x).strip()
     dur = int(dur)
+    if dur < 1:
+        return None
     W, H = size if size else (1280, 720)
     W, H = max(320, int(W)), max(240, int(H))
-    fs = max(12, int(round(26 * H / 720.0)))      # 字号跟着输出高度缩放
-    mgn = max(8, int(round(24 * H / 720.0)))
-    band = max(24, int(round(62 * H / 720.0)))
+    s = W / 1280.0
+
+    pad = int(round(14 * s))
+    bh = int(round(46 * s))                  # 顶部窄条高度
+    yc = bh // 2
+    f_date, f_loc = max(9, int(round(14 * s))), max(8, int(round(13 * s)))
+    f_pill = max(8, int(round(12 * s)))      # 胶囊字号
+    f_num = max(10, int(round(22 * s)))      # 车速
+    f_unit = max(7, int(round(11 * s)))      # km/h
+    f_gear = max(8, int(round(14 * s)))      # 挡位字母
+    ph = int(round(24 * s))                  # 胶囊高
+    ppad = int(round(18 * s))                # 胶囊左右内边距
+    gap8, gap12 = int(round(8 * s)), int(round(12 * s))
+
+    # ---- 右侧槽位从右往左一次算好, 每秒复用 (数字变宽只往左长, 不挤动别人) ----
+    x = W - pad
+    thr_w = max(ph * 2, int(round(_wm_tw("100%", f_pill) + ppad)))
+    thr_x = x - thr_w
+    x = thr_x - gap8
+    brk_w = max(ph * 2, int(round(_wm_tw("刹车", f_pill) + ppad)))
+    brk_x = x - brk_w
+    x = brk_x - gap12
+    gr = int(round(13 * s))                  # 挡位圆半径
+    gear_cx = x - gr
+    x = gear_cx - gr - int(round(10 * s))
+    tri = int(round(9 * s))
+    rtri_x = x - tri                         # 右转向灯 (尖朝右)
+    x = rtri_x - int(round(7 * s))
+    ltri_x = x - tri                         # 左转向灯 (尖朝左)
+    x = ltri_x - gap12
+    unit_w = int(round(_wm_tw("km/h", f_unit)))
+    unit_cx = x - unit_w / 2.0
+    x -= unit_w + int(round(6 * s))
+    num_right = x                            # 车速右对齐线
+    R = int(round(11 * s))                   # AP 方向盘半径
+    wheel_gap = int(round(9 * s))            # 方向盘与车速之间的间距
+    x -= int(round(_wm_tw("000", f_num))) + wheel_gap + R * 2
+
+    C_WHITE, C_SOFT = "&H00FFFFFF&", "&H00F8F3EE&"
+    C_THR, C_BRK, C_BRK_OFF = "&H00E07A1F&", "&H003A45FF&", "&H00322820&"
+    C_GEAR, C_TRI_ON, C_TRI_OFF = "&H0059C734&", "&H000B9EF5&", "&H005F544A&"
+    C_AP_ON, C_AP_OFF, C_AP_GLY = "&H000B9EF5&", "&H00382E26&", "&H00D6CCC3&"
+
+    def esc(v):
+        return str(v).replace("\\", "").replace("{", "").replace("}", "").replace("\n", " ")
+
+    def ts(n):
+        n = int(n)
+        return "%d:%02d:%02d.000" % (n // 3600, n % 3600 // 60, n % 60)
+
+    lines = [
+        "[Script Info]", "ScriptType: v4.00+", "PlayResX: %d" % W, "PlayResY: %d" % H,
+        "WrapStyle: 2", "ScaledBorderAndShadow: yes", "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        # Wm: 带描边投影的文字; WmP: 胶囊/圆里的字 (无描边); WmV: 纯矢量色块
+        "Style: Wm,Noto Sans SC,%d,&H00FFFFFF,&H00FFFFFF,&H78000000,&H60000000,1,0,0,0,100,100,0,0,1,1,1,7,0,0,0,1" % f_date,
+        "Style: WmP,Noto Sans SC,%d,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1" % f_pill,
+        "Style: WmV,Noto Sans SC,%d,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1" % f_pill,
+        "",
+        "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+
+    def shape(a, b, color, path, alpha="&H00&", layer=1):
+        lines.append("Dialogue: %d,%s,%s,WmV,,0,0,0,,{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\1c%s\\1a%s}%s{\\p0}"
+                     % (layer, ts(a), ts(b), color, alpha, path))
+
+    def txt(a, b, style, an, px, py, fs, color, s_text):
+        lines.append("Dialogue: 2,%s,%s,%s,,0,0,0,,{\\an%d\\pos(%d,%d)\\fs%d\\1c%s}%s"
+                     % (ts(a), ts(b), style, an, int(px), int(py), fs, color, esc(s_text)))
+
+    # 顶部窄条: 与原版一致的 rgba(13,18,26,.15)
+    lines.append("Dialogue: 0,0:00:00.00,%s,,WmV,0,0,0,,{\\an7\\pos(0,0)\\bord0\\shad0"
+                 "\\1c&H1A120D&\\alpha&HD9&\\p1}%s{\\p0}"
+                 % (ts(dur), _ass_pts([(0, 0), (W, 0), (W, bh), (0, bh)])))
 
     def fr_at(ct):
-        """视频时间 ct (相对片段起点) 对应的遥测帧"""
         lo, hi, ans = 0, len(frames) - 1, frames[0]
         while lo <= hi:
             mid = (lo + hi) >> 1
@@ -4719,47 +4873,57 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
                 hi = mid - 1
         return ans
 
-    def esc(s):
-        return s.replace("\\", "").replace("{", "").replace("}", "").replace("\n", " ")
+    fr = [fr_at(ss + n) for n in range(dur)]
 
-    lines = [
-        "[Script Info]", "ScriptType: v4.00+", "PlayResX: %d" % W, "PlayResY: %d" % H, "WrapStyle: 2", "",
-        "[V4+ Styles]",
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
-        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
-        "Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Wm,Noto Sans SC,%d,&H00FFFFFF,&H00FFFFFF,&H96000000,&H7F000000,1,0,0,0,100,100,0,0,1,2,1,7,%d,%d,0,1" % (fs, mgn, mgn),
-        "Style: WmBr,Noto Sans SC,%d,&H002045FF,&H002045FF,&H96000000,&H7F000000,1,0,0,0,100,100,0,0,1,2,1,8,%d,%d,0,1" % (fs, mgn, mgn),
-        "",
-        "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-    ]
-    # 顶部色带 (整段): 模拟网页 rgba(13,18,26,.15) 的窄条
-    lines.append("Dialogue: 0,0:00:00.00,%d:%02d:%02d.00,,Wm,0,0,0,,{\\an7\\pos(0,0)\\bord0\\shad0"
-                 "\\1c&H1A120D&\\alpha&HD9&\\p1}m 0 0 l %d 0 %d %d 0 %d{\\p0}"
-                 % (dur // 3600, dur % 3600 // 60, dur % 60, W, W, band, band))
+    def spans(keyf):
+        i = 0
+        while i < dur:
+            k = keyf(i)
+            j = i
+            while j + 1 < dur and keyf(j + 1) == k:
+                j += 1
+            yield i, j + 1, k
+            i = j + 1
+
+    # ---- 左: 日期时间 + 城市·街道 (每秒) ----
     for n in range(dur):
-        f = fr_at(ss + n)
         if t0 is not None:
-            ts = (t0 + datetime.timedelta(seconds=ss + n)).strftime("%m-%d %H:%M:%S")
+            date_s = (t0 + datetime.timedelta(seconds=ss + n)).strftime("%Y/%m/%d %H:%M:%S")
         else:
-            ts = ""
-        left = esc(" ".join(x for x in (ts, loc) if x))
-        right = "%s %d km/h · 油门%d%%" % (f[1], int(round(f[2])), int(f[3]))
-        ap = {1: "FSD", 2: "AP", 3: "TACC"}.get(f[7]) if len(f) > 7 else None
-        if ap:
-            right = ap + " · " + right
-        ev = "0:00:%02d.000" % n
-        ev2 = "0:00:%02d.000" % (n + 1) if n + 1 < dur else "%d:%02d:%02d.000" % (dur // 3600, dur % 3600 // 60, dur % 60)
-        if left:
-            lines.append("Dialogue: 1,%s,%s,Wm,,0,0,0,,{\\an7\\pos(%d,%d)}%s"
-                         % (ev, ev2, mgn, band // 2, left))
-        lines.append("Dialogue: 1,%s,%s,Wm,,0,0,0,,{\\an9\\pos(%d,%d)}%s"
-                     % (ev, ev2, W - mgn, band // 2, esc(right)))
-        if f[5]:
-            lines.append("Dialogue: 1,%s,%s,WmBr,,0,0,0,,{\\an8\\pos(%d,%d)}刹车"
-                         % (ev, ev2, W // 2, band // 2))
+            date_s = ""
+        if date_s:
+            txt(n, n + 1, "Wm", 4, pad, yc, f_date, C_WHITE, date_s)
+        if loc:
+            txt(n, n + 1, "Wm", 4, pad + _wm_tw(date_s, f_date) + int(round(10 * s)), yc,
+                f_loc, C_SOFT, loc)
+
+    # ---- 右: 油门 / 刹车 / 挡位 / 转向灯 (状态相同的连续秒合并, 减小字幕体积) ----
+    for a, b, k in spans(lambda n: (int(round(fr[n][3])), bool(fr[n][5]), fr[n][1], fr[n][6])):
+        thr, brk, gear, turn = k
+        shape(a, b, C_THR, _ass_rrect(thr_x, yc - ph / 2.0, thr_w, ph, ph / 2.0))
+        txt(a, b, "WmP", 5, thr_x + thr_w / 2.0, yc, f_pill, C_WHITE, "%d%%" % thr)
+        shape(a, b, C_BRK if brk else C_BRK_OFF, _ass_rrect(brk_x, yc - ph / 2.0, brk_w, ph, ph / 2.0),
+              "&H00&" if brk else "&H70&")
+        txt(a, b, "WmP", 5, brk_x + brk_w / 2.0, yc, f_pill, C_WHITE if brk else C_SOFT, "刹车")
+        shape(a, b, C_GEAR, _ass_circle(gear_cx, yc, gr, 28))
+        txt(a, b, "WmP", 5, gear_cx, yc, f_gear, C_WHITE, gear)
+        shape(a, b, C_TRI_ON if turn == 2 else C_TRI_OFF,
+              _ass_pts([(rtri_x, yc - tri * 0.62), (rtri_x, yc + tri * 0.62), (rtri_x + tri, yc)]))
+        shape(a, b, C_TRI_ON if turn == 1 else C_TRI_OFF,
+              _ass_pts([(ltri_x + tri, yc - tri * 0.62), (ltri_x + tri, yc + tri * 0.62), (ltri_x, yc)]))
+
+    # ---- 右: AP 方向盘 + 车速 (按"车速 + AP 状态"分组; 数字变宽时方向盘跟着左移, 与网页一致) ----
+    for a, b, k in spans(lambda n: (max(0, int(round(fr[n][2]))), int(fr[n][7] or 0) in (1, 2, 3))):
+        sp, on = k
+        nw = _wm_tw(str(sp), f_num)
+        disc, glyph = _ass_wheel(num_right - nw - wheel_gap - R, yc, R)
+        shape(a, b, C_AP_ON if on else C_AP_OFF, disc, "&H00&" if on else "&H61&")
+        shape(a, b, C_WHITE if on else C_AP_GLY, glyph, layer=2)
+        txt(a, b, "Wm", 5, num_right - nw / 2.0, yc, f_num, C_WHITE, str(sp))
+        txt(a, b, "Wm", 5, unit_cx, yc, f_unit, C_SOFT, "km/h")
+
     p = os.path.join(RES_DIR, "wm-%s.ass" % hashlib.md5(
-        ("%s|%d|%d|%dx%d" % (fp, int(ss), dur, W, H)).encode()).hexdigest()[:16])
+        ("%s|%d|%d|%dx%d|ap6" % (fp, int(ss), dur, W, H)).encode()).hexdigest()[:16])
     with open(p, "w", encoding="utf-8") as fo:
         fo.write("\n".join(lines) + "\n")
     return p
@@ -4793,7 +4957,7 @@ def _make_push_video(fp, off, quality="480p", dur=30):
             ass = _wm_ass(fp, ss, dur, meta) or ""
     except Exception:
         ass = ""
-    key = hashlib.md5(("%s|%d|%.2f|%s|%d|%s" % (fp, int(off), ss, quality, dur, "wm" if ass else "-")).encode()).hexdigest()[:16]
+    key = hashlib.md5(("%s|%d|%.2f|%s|%d|%s" % (fp, int(off), ss, quality, dur, "wm2" if ass else "-")).encode()).hexdigest()[:16]
     out = os.path.join(RES_DIR, "push-%s.mp4" % key)
     if os.path.isfile(out) and os.path.getsize(out) > 0:
         return out
