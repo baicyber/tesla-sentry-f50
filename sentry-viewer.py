@@ -98,7 +98,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.30"
+APP_VERSION = "2.8.32"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -869,6 +869,8 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .vgrid { display:grid; gap:3px; background:var(--stage); }
 .vcell { position:relative; overflow:hidden; background:var(--stage); cursor:zoom-in; aspect-ratio:16/9; }
 .vcell.focused { grid-column:1/-1; grid-row:1/-1; cursor:zoom-out; }
+/* 单路: 格子高度由 JS 按画面真实比例算 (4:3 片源不裁上下), 关掉 16/9 的 CSS 约束 */
+.vgrid.one .vcell { aspect-ratio:auto; }
 .vcell video { width:100%; height:100%; background:var(--stage); object-fit:cover; display:block; }
 /* 以下是叠在视频画面上的浮层, 永远在深色画面上, 用固定颜色 */
 .startmask { position:absolute; inset:0; z-index:5; background:rgba(0,0,0,.55); color:#fff; font-size:16px; display:none; align-items:center; justify-content:center; cursor:pointer; letter-spacing:1px; }
@@ -885,6 +887,16 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .ic-mid { display:flex; align-items:baseline; gap:12px; margin:10px 0 2px; flex-wrap:wrap; }
 .ic-big { font-size:30px; font-weight:700; letter-spacing:.5px; color:var(--text); }
 .ic-sub { font-size:12.5px; color:var(--muted); }
+/* 画面选择条: 默认单路(触发画面), 点其他路/全览才加载对应视频 */
+.cambar { display:none; gap:6px; flex-wrap:wrap; justify-content:center; max-width:980px; width:100%; margin:0 auto; }
+.cambar.show { display:flex; }
+.cambar button { background:var(--panel2); color:var(--muted); border:1px solid var(--line2); border-radius:8px;
+  font-size:12.5px; padding:8px 12px; cursor:pointer; }
+.cambar button.on { background:var(--blue); border-color:var(--blue); color:#fff; }
+/* 触发摄像头那一路: 与片段芯片一致的红点标记 */
+.cambar button.trig::before { content:''; display:inline-block; width:5px; height:5px; border-radius:50%;
+  background:#ff453a; margin-right:5px; vertical-align:1px; }
+.cambar button.trig.on::before { background:#fff; }
 .clipbar { display:none; gap:6px; flex-wrap:wrap; margin-top:9px; }
 .clipbar.show { display:flex; }
 .clipbar button { background:var(--panel2); color:var(--muted); border:1px solid var(--line2); border-radius:8px;
@@ -1119,6 +1131,7 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
       <div class="startmask" id="startmask">▶ 轻触开始同步播放</div>
       <div class="vgrid" id="vgrid"></div>
     </div>
+    <div class="cambar" id="cambar"></div>
     <div class="infocard" id="infocard">
       <div class="ic-top"><span class="ic-time" id="ic-time">—</span><span class="ic-badge" id="ic-cat">—</span></div>
       <div class="ic-mid"><span class="ic-big" id="ic-big">—</span><span class="ic-sub" id="ic-sub"></span></div>
@@ -1693,10 +1706,7 @@ function openDeepLink() {
     if (tabs.children[idx]) tabs.children[idx].classList.add('active');
     currentCat = c; reasonFilter = 'all'; render(c); openPlayer(ev);
     const cam = new URLSearchParams(location.search).get('cam');
-    if (cam) {
-      const cell = document.querySelector(`#vgrid .vcell[data-cam="${cam}"]`);
-      if (cell) focusCell(cell);
-    }
+    if (cam) setCam(cam);
     if (q.get('exp') === '1') setTimeout(openExport, 600);
     return;
   }
@@ -1992,13 +2002,20 @@ function layoutPlayer() {
   if (w > 0) {
     const gap = 3;
     const cw = (w - gap * (d[0] - 1)) / d[0];
-    vg.style.gridAutoRows = Math.round(cw * 9 / 16) + 'px';
+    /* 单路: 按画面真实比例 (哨兵片源多为 4:3), 不然 16:9 的格子会把上下裁掉 */
+    let ar = 9 / 16;
+    if (n === 1) {
+      const v0 = vg.querySelector('video');
+      if (v0 && v0.videoWidth > 0 && v0.videoHeight > 0) ar = v0.videoHeight / v0.videoWidth;
+    }
+    vg.style.gridAutoRows = Math.round(cw * ar) + 'px';
   }
 }
 /* 点击任意一路: 单路铺满; 再点一次(或 Esc)恢复多路 */
 function focusCell(cell) {
   const vg = document.getElementById('vgrid');
   const cells = [...vg.children];
+  if (cells.length < 2) return;     // 单路模式已经是满宽, 再放大没有意义
   const wasFocused = cell.classList.contains('focused');
   cells.forEach(c => { c.classList.remove('focused'); c.style.display = ''; });
   if (wasFocused) { layoutPlayer(); return; }
@@ -2026,6 +2043,47 @@ function triggerClip(ev, clips) {
   });
   return best;
 }
+/* 画面模式: 'all' = 全览 (所有方位同屏), 其他 = 单路 (只加载这一路的视频)。
+   默认是触发摄像头那一路 —— 单路既秒开又省流量, 其他方位等用户点按钮再加载。 */
+let camSel = 'all';
+function triggerCam(ev) {
+  const md = (ev && ev.meta) || {};
+  const c = md.camera;
+  if (c === undefined || c === null || String(c).trim() === '' || !isSentryEv(md)) return '';
+  return CAM_IDX[+c] || '';
+}
+function pickDefaultCam() {
+  const vs = curVids();
+  const tc = triggerCam(cur);
+  if (tc && vs.some(v => (v.cam || '') === tc)) return tc;
+  const s = camSort(vs);
+  return s.length ? (s[0].cam || '') : 'all';   // 没有触发画面信息就用第一路(通常是前视)
+}
+/* 单路 ↔ 全览切换: 保留当前进度, 只加载被选中的那一路 */
+function setCam(c) {
+  if (c === camSel) return;
+  const old = document.querySelector('#vgrid video');
+  const t0 = old ? (old.currentTime || 0) : 0;
+  camSel = c;
+  pendSeek = t0;          // 换画面不回到片头, 接着刚才的位置播
+  renderClip();
+}
+function renderCamBar() {
+  const bar = document.getElementById('cambar');
+  const all = camSort(curVids());
+  if (!bar) return;
+  /* 只有一路画面时没必要显示选择条 */
+  if (all.length < 2) { bar.className = 'cambar'; bar.innerHTML = ''; return; }
+  const tc = triggerCam(cur);
+  bar.className = 'cambar show';
+  bar.innerHTML = all.map(v => {
+    const c = v.cam || '';
+    const isTrig = !!c && c === tc;
+    return `<button class="${camSel === c ? 'on' : ''}${isTrig ? ' trig' : ''}"` +
+      (isTrig ? ' title="触发画面"' : '') + ` onclick="setCam('${c}')">${camLabel(c)}</button>`;
+  }).join('') +
+    `<button class="${camSel === 'all' ? 'on' : ''}" onclick="setCam('all')">${t('全览')}</button>`;
+}
 function openPlayer(ev) {
   cur = ev;
   curClips = groupVideos(ev.videos);
@@ -2035,6 +2093,7 @@ function openPlayer(ev) {
   const hit = triggerClip(ev, curClips);
   curClipIx = hit ? hit.ix : (curClips.length ? curClips.length - 1 : 0);
   pendSeek = hit ? Math.max(0, hit.off - 5) : 0;
+  camSel = pickDefaultCam();     // 默认单路: 触发摄像头
   renderClip();
 }
 /* 播放器打开/切段时, 把相邻段的当前清晰度让服务端提前转好。
@@ -2044,10 +2103,14 @@ let kicked = new Set();
 function kickGroup(ix) {
   const c = curClips[ix];
   if (!c || curQ === 'orig') return;
-  const tag = curQ + ' ' + c.key;
+  const tag = curQ + ' ' + c.key + ' ' + camSel;
   if (kicked.has(tag)) return;
   kicked.add(tag);
-  const paths = camSort(c.vids).map(v => v.url);
+  /* 单路模式只预转被选中的那一路, 其他方位等用户点按钮再说 */
+  const vids = camSel === 'all' ? camSort(c.vids)
+                                : c.vids.filter(v => (v.cam || '') === camSel);
+  const paths = vids.map(v => v.url);
+  if (!paths.length) return;
   try { fetch('/api/kick', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({paths: paths, q: curQ})}).catch(() => {}); } catch (e) {}
 }
@@ -2057,7 +2120,15 @@ function renderClip() {
   pendSeek = 0;
   const clip = curClips[curClipIx] || { key: '', vids: [] };
   const vg = document.getElementById('vgrid'); vg.innerHTML = '';
-  camSort(clip.vids).forEach(v => {
+  /* 单路模式: 只这一路进 DOM —— 没被选中的方位连请求都不会发出去 */
+  const allVids = camSort(clip.vids);
+  let shown = allVids;
+  if (camSel !== 'all') {
+    const one = allVids.filter(v => (v.cam || '') === camSel);
+    if (one.length) shown = one;
+    else camSel = 'all';          // 这一段没有该方位, 退回全览
+  }
+  shown.forEach(v => {
     const cell = document.createElement('div'); cell.className = 'vcell';
     cell.dataset.cam = v.cam || '';
     const vid = document.createElement('video');
@@ -2095,8 +2166,14 @@ function renderClip() {
     const lb = document.createElement('span'); lb.className = 'clabel'; lb.textContent = camShort(v.cam);
     cell.appendChild(vid); cell.appendChild(cl); cell.appendChild(lb);
     cell.onclick = () => focusCell(cell);
+    /* 单路: 拿到真实宽高后按画面比例重算格子高度 (4:3 片源不再被裁) */
+    if (shown.length === 1) {
+      vid.addEventListener('loadedmetadata', () => { if (vg.children.length === 1) layoutPlayer(); });
+    }
     vg.appendChild(cell);
   });
+  vg.classList.toggle('one', shown.length === 1);   // 单路: 交给 JS 按画面比例定行高
+  renderCamBar();
   document.getElementById('ic-time').textContent = evTime(ev);
   const pt = document.getElementById('ptitle');
   if (pt) pt.textContent = t(CATS_NAME[currentCat] || currentCat) + ' · ' + evTime(ev);
@@ -2105,7 +2182,10 @@ function renderClip() {
   document.getElementById('ic-big').textContent =
     (md0.reason && (reasonLabel(md0.reason) || md0.reason)) || CATS_NAME[currentCat] || currentCat;
   const mb = (ev.size || 0) / 1048576;
-  document.getElementById('ic-sub').innerHTML = clip.vids.length + ' 路画面 · <span id="ic-dur">--:--</span>' + (mb >= 0.05 ? ' · ' + (mb >= 1 ? mb.toFixed(1) + ' MB' : Math.round(mb * 1024) + ' KB') : '');
+  const camTxt = camSel === 'all'
+    ? (shown.length + ' 路同屏')
+    : (camLabel(camSel) + ' 单路' + (clip.vids.length > shown.length ? ' (共 ' + clip.vids.length + ' 路可选)' : ''));
+  document.getElementById('ic-sub').innerHTML = camTxt + ' · <span id="ic-dur">--:--</span>' + (mb >= 0.05 ? ' · ' + (mb >= 1 ? mb.toFixed(1) + ' MB' : Math.round(mb * 1024) + ' KB') : '');
   const cb = document.getElementById('clipbar');
   if (curClips.length > 1) {
     const hitClip = triggerClip(ev, curClips);
@@ -2150,7 +2230,7 @@ function renderClip() {
   kickGroup(curClipIx - 1);
   if (syncTimer) clearInterval(syncTimer);
   syncTimer = setInterval(tick, 250);
-  const sortedVids = camSort(clip.vids);
+  const sortedVids = camSort(shown);
   loadTelemetry(sortedVids.length ? sortedVids[0].url : null, md);
 }
 
@@ -6035,47 +6115,46 @@ def order_files(names):
 
 
 # ---------- 新事件 360p 预热: 点开秒开 ----------
-# 实测 (T760 / 8 核): 一段 60 秒的 1280x960 转 360p 要 13~16 秒, 4 路 2 并发要 56 秒 ——
-# 用户点开就是干等一分钟。这里在新事件落盘后, 后台把「默认打开的那一组」先转好。
-# 刻意保守:
-#   * 只转触发段那一组 (event.json 决定), 不转整个事件: 整事件 163MB/个, 27 个事件要 4.4GB,
-#     而缓存上限只有 2GB; 只转触发段约 15MB/事件, 全加起来 ~400MB
+# 实测 (T760 / 8 核): 一段 60 秒的 1280x960 转 360p 要 13~16 秒。
+# 播放器默认单路 (触发摄像头), 所以只转那一路:
+#   * 触发段 + 前后各一段, 每事件 3 个文件 (~4MB), 不再是 12 个 (整组 4~6 路 x 3 段)
 #   * 单路串行, 且只借 Q_SEM 一个名额: 有人在看视频 / 有人在等转码就让位
-#     (实测 2 并发 56s 反而比串行 52s 慢, 8 核被 2x4 线程吃满, 给用户留余量更划算)
 #   * 最近 2 分钟还在写的事件跳过, 免得转半截文件
 PREWARM = {"on": os.environ.get("TSF_PREWARM", "1") != "0", "done": 0, "last": "", "skip": {}}
 PREWARM_CATS = ("SentryClips", "SavedClips")
-PREWARM_MAX_CAM = 6
 PREWARM_Q = "360p"
 
 
+def _cam_of(f):
+    """片段文件名末尾是方位: 2026-11-08_19-43-36-front.mp4 -> front"""
+    return cam_of(f)
+
+
 def _prewarm_targets(cat, name):
-    """该事件默认打开的那一组 mp4 及前后相邻组 (每组最多 6 路)。
-    只预热触发组的话, 用户播到段尾跨进下一组、或点开前一段, 全是 MISS,
-    四路一起阻塞在按需转码上 —— 这就是「播着播着全体缓冲中」。"""
+    """只预热「触发摄像头」那一路 (触发段 + 前后各一段)。
+    默认播放器就是单路, 其他方位等用户点按钮时再按需转 —— 以前每段转满 6 路、
+    三段共 12 个文件, 现在只要 3 个, 同一个事件省 3/4 的 CPU 和缓存。"""
     fp, _off, _meta = _pick_clip(cat, name)
     if not fp:
         return []
     d = os.path.dirname(fp)
+    cam = _cam_of(os.path.basename(fp))
     try:
-        names = [f for f in os.listdir(d) if f.lower().endswith(".mp4")]
+        names = [f for f in os.listdir(d)
+                 if f.lower().endswith(".mp4") and _cam_of(f) == cam]
     except OSError:
-        return []
-    if not names:
-        return []
+        return [fp]
     by_group = {}
     for f in names:
-        by_group.setdefault(clip_key(f), []).append(f)
+        by_group[clip_key(f)] = f
     k = clip_key(os.path.basename(fp))
     if k not in by_group:
-        return []
+        return [fp]
     gkeys = sorted(by_group)
     gi = gkeys.index(k)
-    # 转码顺序 = 观看概率: 触发组 → 下一组 (播放向前推进) → 上一组
-    out = []
-    for g in [k] + gkeys[gi + 1:gi + 2] + (gkeys[gi - 1:gi] if gi > 0 else []):
-        out += [os.path.join(d, f) for f in order_files(by_group[g])[:PREWARM_MAX_CAM]]
-    return out
+    # 顺序 = 观看概率: 触发段 → 下一段 (播放向前推进) → 上一段
+    order = [k] + gkeys[gi + 1:gi + 2] + (gkeys[gi - 1:gi] if gi > 0 else [])
+    return [os.path.join(d, by_group[g]) for g in order if g in by_group]
 
 
 def _prewarm_pick():
@@ -7630,15 +7709,6 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError:
                     pass
                 peer_dead = False
-                # 单路限速 ~3x 实时码率: 公网入口走 frp 隧道, 四路同时拉流时,
-                # 先起跑的那一路能冲到 6MB/s 把整段缓存满, 其余几路被挤到 15KB/s
-                # (低于 360p 实时所需的 ~63KB/s) —— 表现就是有的格子秒开、有的永远缓冲中。
-                # 限速后谁也不能独占隧道, TCP 剩余容量留给慢流, 四路基本同速起播。
-                kbps = RES_SCALE.get(qv, (0, 0, 8000))[2]
-                pace = kbps * 1000 / 8 * 3        # bytes/s, 允许 3 倍实时灌入缓冲
-                bucket = min(512 * 1024 / pace, 3.0)   # 允许 ~512KB 的突发(首帧/moov 快速到位)
-                w_start = time.time()
-                w_bytes = 0
                 with open(fp, "rb") as f:
                     f.seek(start)
                     remain = length
@@ -7662,11 +7732,6 @@ class Handler(BaseHTTPRequestHandler):
                             peer_dead = True
                             break
                         remain -= len(chunk)
-                        w_bytes += len(chunk)
-                        if pace:
-                            ahead = w_bytes / pace - (time.time() - w_start)
-                            if ahead > bucket:
-                                time.sleep(min(ahead - bucket, 0.4))
                         if time.time() > deadline:
                             break     # 链路太慢, 交还线程给别的请求
             except (BrokenPipeError, ConnectionResetError):
