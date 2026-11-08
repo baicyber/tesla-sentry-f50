@@ -97,7 +97,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.16"
+APP_VERSION = "2.8.17"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -853,12 +853,12 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .tp-badge.thr { background:#1f7ae0; color:#fff; }
 .tp-badge.brk { background:var(--panel2); color:var(--muted); }
 .tp-badge.brk.on { background:#ff453a; color:#fff; box-shadow:0 0 9px #ff453a66; }
-.tp-c.ap { background:linear-gradient(135deg,#f59e0b,#ef4444); color:#fff; font-size:10.5px;
-  box-shadow:0 0 10px #ef444455; }
-/* 未启动: 同一个 AP 图标, 只是灰掉 (不是隐藏, 也不带文案), 一眼能看出"有这功能但没开" */
-.tp-c.ap.off { background:var(--panel2); color:var(--muted); box-shadow:inset 0 0 0 1px #ffffff2e; }
 .tp-c.st { background:var(--panel2); color:var(--muted); }
-.tp-c.st svg { width:20px; height:20px; }
+.tp-c.st svg { width:20px; height:20px; transition:transform .18s ease-out; }
+/* 自动驾驶状态直接挂在方向盘这颗图标上 (AP/EAP/FSD 共用):
+   启动时蓝色 (与车机上 AP 图标同色), 未启动时灰底, 不再额外占一个 "AP" 徽标 */
+.tp-c.st.ap-on { background:linear-gradient(135deg,#2f7cf6,#1d5fd0); color:#fff;
+  box-shadow:0 0 10px #2f7cf655; }
 .tp-fold { display:block; margin:8px 0 0 auto; background:none; border:none; color:var(--muted);
   font-size:12px; cursor:pointer; padding:4px 2px; }
 .tp-rows { border-top:1px solid var(--line); margin-top:2px; padding-top:8px; display:grid;
@@ -1099,7 +1099,6 @@ select.ninput { cursor:pointer; }
             <span class="tp-badge brk" id="tp-brk" title="刹车 (数据源只有踩下/未踩, 无踏板开度)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="7.6"/><circle cx="12" cy="12" r="2.5"/><path d="M17.4 6.6l2.7-2.7"/></svg><b>刹车</b></span>
             <span class="tp-badge thr" id="tp-thr" title="油门"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M9.4 3.6h5.2a1.7 1.7 0 0 1 1.68 1.93l-1.35 12.3a1.8 1.8 0 0 1-1.79 1.6h-2.28a1.8 1.8 0 0 1-1.79-1.6L7.72 5.53A1.7 1.7 0 0 1 9.4 3.6z"/><path d="M8.6 15.1h6.8"/></svg><b id="tp-thr-n">0%</b></span>
             <span class="tp-c st" id="tp-st" title="方向盘角度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/><path d="M3.2 10.5h6M14.8 10.5h6M12 14.6V21"/></svg></span>
-            <span class="tp-c ap" id="tp-ap" style="display:none">AP</span>
           </span>
         </div>
         <button class="tp-fold" id="tp-fold" onclick="toggleTelRows()">收起详细数据 ⌃</button>
@@ -2116,13 +2115,13 @@ function renderHud(f) {
   q('tp-bl').classList.toggle('on', f[6] === 1);
   q('tp-br').classList.toggle('on', f[6] === 2);
   const apNames = { 1: 'FSD', 2: 'AP', 3: 'TACC' };
-  const ap = q('tp-ap'), apv = f[7] | 0;
-  // 图标常显: 启动时橙红渐变 (FSD/AP/TACC), 未启动时同一个图标灰掉
-  ap.style.display = '';
-  ap.textContent = apv ? (apNames[apv] || 'AP') : 'AP';
-  ap.classList.toggle('off', !apv);
-  ap.title = apv ? ('自动驾驶已启动 · ' + (apNames[apv] || 'AP')) : '自动驾驶未启动';
-  q('tp-st').title = '方向盘角度 ' + f[4] + '°';
+  // 自动驾驶状态就挂在方向盘那颗图标上 (AP/EAP/FSD 共用同一个方向盘, 不再单独占一个 "AP" 徽标);
+  // 启动时橙红渐变, 未启动时灰底, 图标本身按方向盘角度旋转
+  const apv = f[7] | 0, st = q('tp-st');
+  st.classList.toggle('ap-on', !!apv);
+  st.title = '方向盘角度 ' + f[4] + '° · ' + (apv ? ((apNames[apv] || 'AP') + ' 已启动') : '自动驾驶未启动');
+  const ang = Math.max(-400, Math.min(400, Number(f[4]) || 0));
+  st.querySelector('svg').style.transform = 'rotate(' + ang + 'deg)';
   const md = TEL_META || {};
   q('tp-rows').innerHTML =
     (md.est_lat && md.est_lon ? '<div><span class="k">坐标</span>' + md.est_lat + ', ' + md.est_lon + '</div>' : '') +
@@ -2246,8 +2245,9 @@ function wmApWheel(ctx, xRight, yMid, s, on) {
   const sh = ctx.shadowBlur;
   ctx.shadowBlur = 0;                       // 实心色块, 不要投影
   if (on) {
+    // 启动: 蓝色渐变 (与车机上 AP 图标同色), 不再是橙红
     const g = ctx.createLinearGradient(cx - R, cy - R, cx + R, cy + R);
-    g.addColorStop(0, '#f59e0b'); g.addColorStop(1, '#ef4444');
+    g.addColorStop(0, '#2f7cf6'); g.addColorStop(1, '#1d5fd0');
     ctx.fillStyle = g;
   } else {
     ctx.fillStyle = 'rgba(38,46,56,.62)';   // 未启动: 中性灰底, 图标可见但明显灰掉
@@ -2442,13 +2442,13 @@ function openExport() {
     lb.appendChild(document.createTextNode(camLabel(v.cam) + ' (' + v.cam + ')'));
     box.appendChild(lb);
   });
-  // 水印勾选: 有遥测数据才可用, 默认勾上
+  // 水印勾选: 默认勾上。没有遥测的片段(停车哨兵)也允许加, 只是水印里只有时间+地点
   const hasTel = !!(TEL && TEL.frames && TEL.frames.length);
   const wm = document.getElementById('expwm'), wmRow = document.getElementById('expwm-row');
-  wm.disabled = !hasTel;
-  wm.checked = hasTel;
-  wmRow.style.opacity = hasTel ? '' : '.45';
-  wmRow.title = hasTel ? '' : '该片段没有行车遥测数据 (SEI)';
+  wm.disabled = false;
+  wm.checked = true;
+  wmRow.style.opacity = '';
+  wmRow.title = hasTel ? '' : '该片段没有行车遥测 (SEI), 水印只显示时间与地点';
   expQ = curQ;  // 默认跟随当前播放清晰度
   renderExpQ();
   document.getElementById('expp').classList.add('open');
@@ -2459,17 +2459,16 @@ function doExport() {
   if (!cur) return;
   const sel = [...document.querySelectorAll('#expchks input:checked')].map(c => c.value);
   if (!sel.length) { toast('请至少选择一路'); return; }
-  const telOk = !!(TEL && TEL.frames && TEL.frames.length);
-  const wm = document.getElementById('expwm').checked && telOk;
+  const wm = document.getElementById('expwm').checked;
   closeExport();
   if (sel.length === 1 && !wm) {
     const v = curVids().find(x => x.cam === sel[0]);
     if (v) location.href = '/dl?path=' + encodeURIComponent('/archive/' + v.url.replace(/^\/media\//, '')) + (expQ !== 'orig' ? '&q=' + expQ : '');
     return;
   }
-  // iOS 上浏览器合成只能出 webm (微信发不出去), 交给设备端 ffmpeg 直接生成 mp4
-  if (IS_IOS) { startServerExport(sel, wm); return; }
-  startLocalStitch(sel, document.getElementById('stitch'), wm);
+  // 带水印/多路一律交给设备端 ffmpeg: 直接出标准 H.264 mp4,
+  // 浏览器 canvas 合成只能出 webm (微信发不出去), iOS 上还会被截断
+  startServerExport(sel, wm);
 }
 /* 设备端合成导出: 输出标准 H.264 mp4 (带 faststart), 微信/相册都能直接发 */
 function startServerExport(sel, wm) {
@@ -2490,7 +2489,7 @@ function startServerExport(sel, wm) {
   fetch('/api/export/burn', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cat: cat, name: name, cams: sel, wm: !!wm, files: files,
-                           q: (expQ === '480p' || expQ === '360p') ? '480p' : '720p' })
+                           q: ({ 'orig': 'orig', '720p': '720p', '480p': '480p', '360p': '360p' })[expQ] || '720p' })
   }).then(r => r.json()).then(d => {
     if (!d.ok) { stitchFail(d.error || '导出失败'); return; }
     pollExport(d.id);
@@ -4776,13 +4775,14 @@ def _ass_wheel(cx, cy, r, seg=16):
 def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
     """生成与网页播放器同款的行车信息水印 ASS 字幕 (导出视频用):
     顶部淡色窄条 + 左侧「日期时间 城市·街道」+ 右侧「AP 方向盘 / 车速 km/h / 转向灯 / 挡位 / 刹车 / 油门」。
-    与前端 drawWm() 一一对应, 只是全部改成矢量色块 + 文字。无遥测/无字体返回 None。"""
+    与前端 drawWm() 一一对应, 只是全部改成矢量色块 + 文字。
+    片段没有行车遥测 (停车哨兵录的片段不写 SEI) 时退化成「时间 + 地点」,
+    不再直接返回 None —— 否则用户勾了水印却拿到一段没有水印的视频。无字体时才返回 None。"""
     if not _wm_font():
         return None
-    tel = telemetry_cached(fp)
-    if not tel or not tel.get("frames"):
-        return None
-    frames = tel["frames"]
+    tel = telemetry_cached(fp) or {}
+    frames = tel.get("frames") or []      # 空列表 = 该片段没有遥测, 只画时间地点
+    has_tel = bool(frames)
     try:
         t0 = datetime.datetime.strptime(os.path.basename(fp)[:19], "%Y-%m-%d_%H-%M-%S")
     except ValueError:
@@ -4796,15 +4796,20 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
     # 水印大小跟画面高度走 (同样高度下观感一致, 4:3 的 960x720 也不会显得过小);
     # 极窄画面再用宽度兜底, 免得右侧元素挤出画外
     s = min(H / 720.0, W / 900.0)
+    # 360p 这种超小画布: 字号给一个下限, 并去掉 km/h 与转向三角腾位置,
+    # 否则 8px 的中文会被压成一团黑点; 480p 空间够, 仍保留完整元素
+    narrow = W < 560
+    if narrow:
+        s = max(s, 0.72)
 
     pad = int(round(14 * s))
     bh = int(round(46 * s))                  # 顶部窄条高度
     yc = bh // 2
     f_date, f_loc = max(9, int(round(14 * s))), max(8, int(round(13 * s)))
-    f_pill = max(8, int(round(12 * s)))      # 胶囊字号
-    f_num = max(10, int(round(22 * s)))      # 车速
-    f_unit = max(7, int(round(11 * s)))      # km/h
-    f_gear = max(8, int(round(14 * s)))      # 挡位字母
+    f_pill = max(9, int(round(12 * s)))      # 胶囊字号
+    f_num = max(12, int(round(22 * s)))      # 车速
+    f_unit = max(9, int(round(11 * s)))      # km/h
+    f_gear = max(9, int(round(14 * s)))      # 挡位字母
     ph = int(round(24 * s))                  # 胶囊高
     ppad = int(round(18 * s))                # 胶囊左右内边距
     gap8, gap12 = int(round(8 * s)), int(round(12 * s))
@@ -4821,12 +4826,14 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
     gear_cx = x - gr
     x = gear_cx - gr - int(round(10 * s))
     tri = int(round(9 * s))
-    rtri_x = x - tri                         # 右转向灯 (尖朝右)
-    x = rtri_x - int(round(7 * s))
-    ltri_x = x - tri                         # 左转向灯 (尖朝左)
-    x = ltri_x - gap12
+    if not narrow:
+        rtri_x = x - tri                     # 右转向灯 (尖朝右)
+        x = rtri_x - int(round(7 * s))
+        ltri_x = x - tri                     # 左转向灯 (尖朝左)
+        x = ltri_x - gap12
     unit_w = int(round(_wm_tw("km/h", f_unit) * 1.06)) + 2   # 略放大: km/h 用左锚, 尾部留白更安全
-    x -= unit_w + int(round(6 * s))
+    if not narrow:
+        x -= unit_w + int(round(6 * s))
     num_right = x                            # 车速右对齐线 = km/h 左锚基准
     R = int(round(11 * s))                   # AP 方向盘半径
     wheel_gap = int(round(9 * s))            # 方向盘与车速之间的间距
@@ -4835,7 +4842,8 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
     C_WHITE, C_SOFT = "&H00FFFFFF&", "&H00F8F3EE&"
     C_THR, C_BRK, C_BRK_OFF = "&H00E07A1F&", "&H003A45FF&", "&H00322820&"
     C_GEAR, C_TRI_ON, C_TRI_OFF = "&H0059C734&", "&H000B9EF5&", "&H005F544A&"
-    C_AP_ON, C_AP_OFF, C_AP_GLY = "&H000B9EF5&", "&H00382E26&", "&H00D6CCC3&"
+    # AP 蓝 = 车机上自动驾驶图标的蓝 (#2f7cf6), ASS 用 BGR
+    C_AP_ON, C_AP_OFF, C_AP_GLY = "&H00F67C2F&", "&H00382E26&", "&H00D6CCC3&"
 
     def esc(v):
         return str(v).replace("\\", "").replace("{", "").replace("}", "").replace("\n", " ")
@@ -4888,7 +4896,7 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
                 hi = mid - 1
         return ans
 
-    fr = [fr_at(ss + n) for n in range(dur)]
+    fr = [fr_at(ss + n) for n in range(dur)] if has_tel else []
 
     def spans(keyf):
         i = 0
@@ -4903,7 +4911,8 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
     # ---- 左: 日期时间 + 城市·街道 合成一行 (由 libass 顺序排版, 不依赖宽度估算) ----
     for n in range(dur):
         if t0 is not None:
-            date_s = (t0 + datetime.timedelta(seconds=ss + n)).strftime("%Y/%m/%d %H:%M:%S")
+            dt = t0 + datetime.timedelta(seconds=ss + n)
+            date_s = dt.strftime("%m/%d %H:%M:%S" if narrow else "%Y/%m/%d %H:%M:%S")
         else:
             date_s = ""
         seg = []
@@ -4915,7 +4924,8 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
             txt_raw(n, n + 1, 4, pad, yc, f_date, "  ".join(seg))
 
     # ---- 右: 油门 / 刹车 / 挡位 / 转向灯 (状态相同的连续秒合并, 减小字幕体积) ----
-    for a, b, k in spans(lambda n: (int(round(fr[n][3])), bool(fr[n][5]), fr[n][1], fr[n][6])):
+    for a, b, k in (spans(lambda n: (int(round(fr[n][3])), bool(fr[n][5]), fr[n][1], fr[n][6]))
+                    if has_tel else ()):
         thr, brk, gear, turn = k
         shape(a, b, C_THR, _ass_rrect(thr_x, yc - ph / 2.0, thr_w, ph, ph / 2.0))
         txt(a, b, "WmP", 5, thr_x + thr_w / 2.0, yc, f_pill, C_WHITE, "%d%%" % thr)
@@ -4924,13 +4934,15 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
         txt(a, b, "WmP", 5, brk_x + brk_w / 2.0, yc, f_pill, C_WHITE if brk else C_SOFT, "刹车")
         shape(a, b, C_GEAR, _ass_circle(gear_cx, yc, gr, 28))
         txt(a, b, "WmP", 5, gear_cx, yc, f_gear, C_WHITE, gear)
-        shape(a, b, C_TRI_ON if turn == 2 else C_TRI_OFF,
-              _ass_pts([(rtri_x, yc - tri * 0.62), (rtri_x, yc + tri * 0.62), (rtri_x + tri, yc)]))
-        shape(a, b, C_TRI_ON if turn == 1 else C_TRI_OFF,
-              _ass_pts([(ltri_x + tri, yc - tri * 0.62), (ltri_x + tri, yc + tri * 0.62), (ltri_x, yc)]))
+        if not narrow:
+            shape(a, b, C_TRI_ON if turn == 2 else C_TRI_OFF,
+                  _ass_pts([(rtri_x, yc - tri * 0.62), (rtri_x, yc + tri * 0.62), (rtri_x + tri, yc)]))
+            shape(a, b, C_TRI_ON if turn == 1 else C_TRI_OFF,
+                  _ass_pts([(ltri_x + tri, yc - tri * 0.62), (ltri_x + tri, yc + tri * 0.62), (ltri_x, yc)]))
 
     # ---- 右: AP 方向盘 + 车速 (按"车速 + AP 状态"分组; 数字变宽时方向盘跟着左移, 与网页一致) ----
-    for a, b, k in spans(lambda n: (max(0, int(round(fr[n][2]))), int(fr[n][7] or 0) in (1, 2, 3))):
+    for a, b, k in (spans(lambda n: (max(0, int(round(fr[n][2]))), int(fr[n][7] or 0) in (1, 2, 3)))
+                    if has_tel else ()):
         sp, on = k
         nw = _wm_tw(str(sp), f_num) * 1.04 + 1          # 宁大勿小: 估大只会让方向盘偏左一点
         disc, glyph = _ass_wheel(num_right - nw - wheel_gap - R, yc, R)
@@ -4938,10 +4950,11 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
         shape(a, b, C_WHITE if on else C_AP_GLY, glyph, layer=2)
         # 数字右锚(6) / km/h 左锚(4): 位数变化只往左长, 两个元素永远不会互相压叠
         txt(a, b, "Wm", 6, num_right, yc, f_num, C_WHITE, str(sp))
-        txt(a, b, "Wm", 4, num_right + int(round(6 * s)), yc, f_unit, C_SOFT, "km/h")
+        if not narrow:
+            txt(a, b, "Wm", 4, num_right + int(round(6 * s)), yc, f_unit, C_SOFT, "km/h")
 
     p = os.path.join(RES_DIR, "wm-%s.ass" % hashlib.md5(
-        ("%s|%d|%d|%dx%d|ap7" % (fp, int(ss), dur, W, H)).encode()).hexdigest()[:16])
+        ("%s|%d|%d|%dx%d|ap10|t%d" % (fp, int(ss), dur, W, H, len(frames))).encode()).hexdigest()[:16])
     with open(p, "w", encoding="utf-8") as fo:
         fo.write("\n".join(lines) + "\n")
     return p
@@ -5484,6 +5497,20 @@ def probe_size(path):
         return None
 
 
+def probe_fps(path):
+    """返回视频帧率 (float); 失败返回 0。原画导出时用来保留源帧率。"""
+    try:
+        out = subprocess.run([FFPROBE_BIN, "-v", "error", "-select_streams", "v:0",
+                              "-show_entries", "stream=r_frame_rate",
+                              "-of", "default=nw=1:nk=1", path],
+                             capture_output=True, timeout=20).stdout.decode().strip()
+        num, _, den = out.partition("/")
+        v = float(num) / (float(den) if den else 1.0)
+        return v if 0 < v < 240 else 0.0
+    except Exception:
+        return 0.0
+
+
 def mem_available_mb():
     """读取 MemAvailable, 用于合成前的内存兜底检查"""
     try:
@@ -5634,7 +5661,8 @@ def start_stitch(cat, name, cams):
 # iOS 26 起录 mp4 还会被截断(实测只留前几秒)。所以苹果设备改由设备端 ffmpeg 出片。
 # 负载控制: 多路时先逐路单独降采样成小文件(同时只解 1 路 1080p), 再拼小文件,
 # 避免 2~4 路 1080p 同时解码触发内核 lockup。
-EXPORT_Q = {"720p": 720, "480p": 480}
+# 0 表示"原画": 按源分辨率出片 (单路 1280x960 就是 1280x960, 不再降到 720 行)
+EXPORT_Q = {"720p": 720, "480p": 480, "360p": 360, "orig": 0}
 
 
 def _ffrun(cmd, timeout=900):
@@ -5658,7 +5686,7 @@ def _ffrun(cmd, timeout=900):
     return p.returncode, (err or b"").decode("utf-8", "ignore")[-300:]
 
 
-def _export_worker(job_id, paths, out_path, total, wm, height):
+def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
     n = len(paths)
     tmpdir = os.path.join(STITCH_DIR, "ex-" + job_id.replace("/", "_"))
     os.makedirs(tmpdir, exist_ok=True)
@@ -5677,25 +5705,48 @@ def _export_worker(job_id, paths, out_path, total, wm, height):
                 job["err"] = (msg or "ffmpeg 失败")[:300]
 
     try:
-        # 画面尺寸: 单路保持原比例; 多路统一 2 列网格, 输出仍是 16:9 便于水印排版
+        # 画面尺寸: 单路保持源比例; 多路也按源画面比例取格子, 不留黑边
+        # (以前多路固定 1280x720 再把 4:3 的源 pad 进 16:9 格子, 每格左右各 12.5% 黑边)
+        sw, sh = probe_size(paths[0]) or (1280, 960)
+        sw, sh = max(2, int(sw)), max(2, int(sh))
+        target = EXPORT_Q.get(q, 720)                 # 0 = 原画
+        fps = 15
+        if q == "orig":
+            # 原画保留源帧率 (车机大多是 36fps, 封顶 30: 再高只会拖慢编码, 肉眼看不出)
+            fps = max(15, min(30, int(round(probe_fps(paths[0])) or 15)))
+        cell = []                                     # 每路的目标格子 (w, h)
+        pos = []                                      # 每路在画布里的左上角
         if n == 1:
-            OH = height
-            # 单路宽度由源宽高比决定 (特斯拉原片是 1280x960 的 4:3, 720p 下实际输出 960x720)。
-            # 水印 ASS 的 PlayRes 必须用这个真实宽度, 不能写死 1280, 否则 x 坐标被压 0.75 倍。
-            sw, sh = probe_size(paths[0]) or (1280, 960)
-            OW = max(2, int(round(sw * float(OH) / max(1, sh) / 2.0)) * 2)
+            OH = target or sh
+            OH -= OH % 2
+            OW = max(2, int(round(sw * float(OH) / sh / 2.0)) * 2)
         else:
             cols, rows = 2, (n + 1) // 2
-            OW, OH = 1280, 720
-            CW, CH = OW // cols, OH // rows
+            base = target or min(960, sh)             # 多路"原画"封顶 960: 4 路同时解 1080p 会吃满内存
+            CH = max(2, (base // rows) - (base // rows) % 2)
+            CW = max(2, int(round(sw * float(CH) / sh / 2.0)) * 2)
+            # 画布像素兜底 (1.4MP): 2 路时 1920x720 已经够大, 再多只会拖慢编码
+            px = CW * cols * CH * rows
+            if px > 1400000:
+                k = math.sqrt(1400000.0 / px)
+                CH = max(2, int(round(CH * k / 2.0)) * 2)
+                CW = max(2, int(round(sw * float(CH) / sh / 2.0)) * 2)
+            OW, OH = CW * cols, CH * rows
+            cell = [(CW, CH)] * n
+            pos = [((i % 2) * CW, (i // 2) * CH) for i in range(n)]
+            if n == 3:
+                # 3 路: 第三路铺满下面一整行, 不留一块黑格子
+                cell[2] = (CW * 2, CH)
+                pos[2] = (0, CH)
 
         # 第一步: 逐路降采样 (顺序执行, 峰值只有 1 路 1080p 解码)
         small = []
         if n > 1:
             for i, fp in enumerate(paths):
                 sp = os.path.join(tmpdir, "c%d.mp4" % i)
-                vf = ("scale=%d:%d:force_original_aspect_ratio=decrease,"
-                      "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=15" % (CW, CH, CW, CH))
+                cw, ch = cell[i] if i < len(cell) else (CW, CH)
+                vf = ("scale=%d:%d:force_original_aspect_ratio=increase,"
+                      "crop=%d:%d,setsar=1,fps=%d" % (cw, ch, cw, ch, fps))
                 code, err = _ffrun([FFMPEG_BIN, "-nostdin", "-hide_banner", "-loglevel", "error",
                                     "-threads", "2", "-i", fp, "-vf", vf, "-an",
                                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
@@ -5728,12 +5779,12 @@ def _export_worker(job_id, paths, out_path, total, wm, height):
             cmd += ["-i", f]
         fc = []
         if n == 1:
-            fc.append("[0:v]scale=-2:%d,setsar=1,fps=15[v0]" % height)
+            fc.append("[0:v]scale=%d:%d,setsar=1,fps=%d[v0]" % (OW, OH, fps))
             last = "[v0]"
         else:
             for i in range(n):
                 fc.append("[%d:v]setsar=1[v%d]" % (i, i))
-            cells = "|".join("%d_%d" % ((i % 2) * CW, (i // 2) * CH) for i in range(n))
+            cells = "|".join("%d_%d" % (pos[i][0], pos[i][1]) for i in range(n))
             fc.append("".join("[v%d]" % i for i in range(n)) +
                       "xstack=inputs=%d:layout=%s:fill=black[vg]" % (n, cells))
             last = "[vg]"
@@ -5845,12 +5896,11 @@ def start_export(cat, name, cams, wm=True, q="720p", files=None):
     job_id = "%s-ex%d" % (name.replace(":", "-"), int(now * 1000) % 1000000)
     out_path = os.path.join(STITCH_DIR, job_id + ".mp4")
     total = probe_duration(paths[0]) or 60
-    height = EXPORT_Q.get(q, 720)
     with STITCH_LOCK:
         STITCH_JOBS[job_id] = {"state": "running", "pct": 0, "path": None, "size": 0,
                                "name": "%s_%d路.mp4" % (name, len(files))}
     threading.Thread(target=_export_worker,
-                     args=(job_id, paths, out_path, total, bool(wm), height), daemon=True).start()
+                     args=(job_id, paths, out_path, total, bool(wm), q), daemon=True).start()
     return job_id, None
 
 
