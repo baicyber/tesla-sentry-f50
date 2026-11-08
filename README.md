@@ -25,11 +25,11 @@
 | 📊 遥测与元数据 | 直读码流内嵌 SEI protobuf：挡位 / 车速 / 油门 / 刹车 / 方向盘角度 / 转向灯 / AP 状态 / 坐标 / 三轴加速度，随进度逐帧跳动；`event.json` 提供时间 / 城市 / 街道 / 触发原因 / 触发画面 |
 | 🔍 筛选与预览 | 触发原因 + 日期胶囊叠加筛选；`?ev=` `?date=` `?cat=` `?cam=` `?exp=1` 深链；📡 实时预览页、存储条与在线同步状态 |
 | 📶 清晰度 | 播放可选 原画 / 720p / 480p / 360p（服务端转码缓存，2 并发、上限 2GB），内网默认原画、公网默认 360p |
-| 🎞 导出 | 单路下载、zip 打包（可选清晰度）、浏览器本机 canvas 合成多路 webm / mp4（2×2、3×2，固定原画）；导出水印由**前端 canvas** 烧录，服务端 ASS 水印只用于飞书推送短视频 |
+| 🎞 导出 | 单路下载、zip 打包（可选清晰度）、多路合成（2×2 / 3×2）；电脑用浏览器 canvas 实时合成（mp4 优先，退回 webm），**iPhone / iPad 改由设备端 ffmpeg 直出 H.264 mp4**（Safari 只能录 webm，微信发不出去）；水印含时间 / 地点 / 车速 / 挡位 / 转向灯 / 油门 / 刹车 / **FSD·AP 徽标** |
 | 📂 文件管理 | U 盘 / 归档区浏览上传下载，多选批量删除 / 移动 / 复制 / 重命名（realpath 防逃逸）；一键清空 `TeslaCam/` 全部录像（保留目录结构、不动 Boombox / Wraps）；U 盘管理模式 5 分钟无操作自动恢复导出 |
 | 🔔 飞书推送 | 私聊（仅本人）/ 群机器人，触发那一帧封面卡片或触发点前 5 秒短视频，可烧行车信息水印；去重、延迟 20 秒、失败重试 3 次，导出浮层也能直接推送 |
 | 🔐 登录保护 | `install.sh` 默认生成随机 10 位密码（admin），HMAC 签名 cookie 保留 30 天 + HTTP Basic；10 分钟内连错 8 次返回 429；设置 → 账号可改密码 / 退出 |
-| 🔄 在线升级 | 多源并发竞速 + GitHub API 实时兜底，下载后校验 → 备份 → 原子替换 → 自动重启，出问题一键回滚 |
+| 🔄 在线升级 | 多源并发竞速 + GitHub API 实时兜底，下载后校验 → 备份 → 原子替换 → 自动重启，出问题一键回滚；设置 → 更新里可勾选**自动更新**（默认开启，检测到新版且没人看视频时自动升） |
 | 🎨 个性化 | 深 / 浅 / 自动主题、10 种界面语言、网页背景换肤、锁车音（`LockChime.wav`）、涂装 `Wraps/` |
 | 🛡 稳定性 | 归档区 ext4 日志式、开机自检、服务自动拉起、LUN 被弹出后 cron `*/2` 自动重挂、断电自愈 |
 
@@ -125,6 +125,30 @@ OTA、飞书推送、认证的参数**不写入这个 conf**，走环境变量�
 - **车机不认盘**：确认 `/sys/class/udc/` 有控制器、`grep exfat /proc/filesystems` 有输出，再跑 `/opt/tesla-sentry/tesla-gadget.sh status`；新盘首次插车提示格式化属正常。
 - **播放黑屏**：视频是 H.265 / HEVC，Windows 用 Edge / Chrome（需 HEVC 解码器）、iPhone Safari 原生支持，部分安卓浏览器不支持。
 - **网页没有事件**：看 `/opt/tesla-sentry/` 下的 `tesla-live.log`、`tesla-sync.log`；先确认顶部同步状态胶囊在线，再核对归档目录与镜像路径。
+
+### 检查更新失败（连不上 GitHub）
+
+国内网络下 `raw.githubusercontent.com`、`fastly/testingcf.jsdelivr.net` 基本会被 RST 或 TLS 干扰，第三方反代也会时通时断，所以「检查更新」偶尔会报**所有下载源均不可用**。2.8.13 起的处理方式：
+
+- 内置 7 个源（`ghfast.top`、`gcore.jsdelivr.net`、`ghproxy.net`、`gh-proxy.org`、`gh-proxy.com`、raw、jsDelivr）**并发竞速**，任一可用即可，不再按顺序一个个等超时；
+- 报错会逐个列出失败的源及其原因（超时 / 连接被阻断 / 证书被劫持 / DNS 解析失败），一眼能看出是墙还是镜像挂了；
+- 自动更新默认开启，网络恢复后每 5 分钟重试一次并自动升级，不用一直手点。
+
+想自己加源，把可用的镜像写进配置即可（逗号分隔，`https://域名/<仓库路径>/main` 形式）：
+
+```bash
+echo 'TSF_OTA_SOURCES=https://ghfast.top/https://raw.githubusercontent.com/baicyber/tesla-sentry-f50/main,https://gcore.jsdelivr.net/gh/baicyber/tesla-sentry-f50@main' >> /etc/tesla-sentry.conf
+/etc/init.d/tesla-viewer restart
+```
+
+**老版本（2.8.12 及更早）连检查都失败、进不了升级入口**时，直接在设备上手动覆盖一次，之后就回到自动更新：
+
+```bash
+wget -O /tmp/sv.py https://ghfast.top/https://raw.githubusercontent.com/baicyber/tesla-sentry-f50/main/sentry-viewer.py \
+  || wget -O /tmp/sv.py https://gcore.jsdelivr.net/gh/baicyber/tesla-sentry-f50@main/sentry-viewer.py
+python3 -m py_compile /tmp/sv.py && cp /tmp/sv.py /opt/tesla-sentry/sentry-viewer.py \
+  && chmod 755 /opt/tesla-sentry/sentry-viewer.py && /etc/init.d/tesla-viewer restart
+```
 
 更多排障见 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)；实现原理（exFAT 只读解析、双链路互斥、SEI 解码、U 盘管理状态机）见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 

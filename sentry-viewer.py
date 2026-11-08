@@ -17,6 +17,8 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
+import socket
 import http.client
 import ssl
 import zipfile
@@ -92,13 +94,18 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 
 # ---------------- 版本与在线升级 (OTA) ----------------
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
-# 国内直连 raw.githubusercontent 多数能通, 同时内置镜像源兜底, 依次尝试。
-APP_VERSION = "2.8.10"
+# 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
+# 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
+APP_VERSION = "2.8.13"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
-    "https://raw.githubusercontent.com/%s/main" % OTA_REPO,
-    "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,
-    "https://cdn.jsdelivr.net/gh/%s@main" % OTA_REPO,
+    "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
+    "https://gcore.jsdelivr.net/gh/%s@main" % OTA_REPO,                              # 1.1s
+    "https://ghproxy.net/https://raw.githubusercontent.com/%s/main" % OTA_REPO,      # 2.4s
+    "https://gh-proxy.org/https://raw.githubusercontent.com/%s/main" % OTA_REPO,     # 3.2s
+    "https://gh-proxy.com/https://raw.githubusercontent.com/%s/main" % OTA_REPO,     # 时通时断, 兜底
+    "https://raw.githubusercontent.com/%s/main" % OTA_REPO,                          # 海外线路
+    "https://cdn.jsdelivr.net/gh/%s@main" % OTA_REPO,                                # 海外线路
 ])
 OTA_SOURCES = [s.strip().rstrip("/") for s in os.environ.get("TSF_OTA_SOURCES", _OTA_DEFAULT).split(",") if s.strip()]
 OTA_BACKUP = os.environ.get("TSF_OTA_BACKUP", "/opt/tesla-sentry/sentry-viewer.bak.py")
@@ -127,11 +134,35 @@ def _src_order():
     return order
 
 
-def _race_get(path, timeout, limit, validate=None):
-    """并发竞速所有下载源, 谁先返回【通过校验】的数据就用谁 (DashPlay 式自动切换源)。
-    单个源被墙/超时不影响其它源; 返回 (data, base)。"""
+def _err_kind(ex):
+    """把网络异常翻成一句人话, 更新页里直接能看出是哪个源被墙/超时/被劫持"""
+    s = str(ex)
+    if isinstance(ex, urllib.error.HTTPError):
+        return "HTTP %d" % ex.code
+    if isinstance(ex, socket.timeout) or "timed out" in s:
+        return "超时"
+    if "RemoteDisconnected" in s or "Connection reset" in s or "reset by peer" in s or "EOF occurred" in s:
+        return "连接被阻断"
+    if "CERTIFICATE_VERIFY_FAILED" in s or "certificate verify failed" in s:
+        return "证书被劫持"
+    if "Name does not resolve" in s or "Name or service not known" in s or "getaddrinfo" in s:
+        return "DNS 解析失败"
+    if "BAD_RECORD_MAC" in s or "WRONG_VERSION_NUMBER" in s or "SSL" in s or "TLS" in s:
+        return "TLS 被干扰"
+    if "IncompleteRead" in s or "incomplete" in s.lower():
+        return "下载中断"
+    return type(ex).__name__
+
+
+def _race_get(path, timeout, limit, validate=None, collect=False, grace=1.0):
+    """并发竞速所有下载源, 单个源被墙/超时不影响其它源。
+    collect=False: 谁先返回【通过校验】的数据就用谁, 返回 (data, base)。
+    collect=True:  返回 [(base, data), ...] 全部成功的源 —— 首次成功后最多再等 grace 秒
+                   就收工, 由调用方按版本号挑最新的 (镜像 CDN 常缓存旧清单)。
+    全挂时抛错, 并把每个源的失败原因列出来。"""
     lock = threading.Lock()
-    got = []
+    got, bad, done = [], {}, [0]
+    first_ok = [0.0]
 
     def worker(base):
         try:
@@ -139,27 +170,46 @@ def _race_get(path, timeout, limit, validate=None):
             if data and (validate is None or validate(data)):
                 with lock:
                     got.append((base, data))
-        except Exception:
-            pass
+                    if not first_ok[0]:
+                        first_ok[0] = time.time()
+            else:
+                with lock:
+                    bad[base] = "内容校验失败"
+        except Exception as ex:
+            with lock:
+                bad[base] = _err_kind(ex)
+        finally:
+            with lock:
+                done[0] += 1
 
     order = _src_order()
     for base in order:
         threading.Thread(target=worker, args=(base,), daemon=True).start()
     deadline = time.time() + timeout + 1.5
-    while time.time() < deadline and not got:
+    while time.time() < deadline:
+        with lock:
+            n_ok, n_done, t0 = len(got), done[0], first_ok[0]
+        if n_done >= len(order):
+            break
+        if not collect and n_ok:
+            break
+        if collect and n_ok and t0 and time.time() > t0 + grace:
+            break
         time.sleep(0.05)
-    if not got:
-        raise RuntimeError("所有下载源均不可用 (%s)" % ", ".join(
-            urllib.parse.urlsplit(b).netloc for b in order))
-    # 多个源同时成功时, 按源优先级取第一个
-    got.sort(key=lambda x: order.index(x[0]))
-    base, data = got[0]
+    with lock:
+        results, fails = list(got), dict(bad)
+    if not results:
+        detail = " · ".join("%s %s" % (urllib.parse.urlsplit(b).netloc, fails.get(b, "无响应"))
+                            for b in order)
+        raise RuntimeError("所有下载源均不可用 (%s)" % detail)
+    results.sort(key=lambda x: order.index(x[0]))
+    base = results[0][0]
     try:   # 记住本次最快的源
         with open(OTA_SRC_PREF, "w", encoding="utf-8") as f:
             json.dump({"last_good": base, "at": int(time.time())}, f)
     except OSError:
         pass
-    return data, base
+    return results if collect else (results[0][1], base)
 
 
 def _vtuple(v):
@@ -210,8 +260,37 @@ def ota_latest(force=False):
     apith = threading.Thread(target=api_worker, daemon=True)
     apith.start()
 
-    raw, base = _race_get("/version.json?ts=%d" % int(now), timeout=6, limit=256 << 10, validate=ok)
-    raced = json.loads(raw.decode("utf-8", "replace"))
+    raced = None
+    base = None
+    err = ""
+    try:
+        res = _race_get("/version.json?ts=%d" % int(now), timeout=6, limit=256 << 10,
+                        validate=ok, collect=True, grace=1.5)
+    except RuntimeError as ex:
+        res, err = [], str(ex)
+    parsed = []
+    for b, r in res:
+        try:
+            jj = json.loads(r.decode("utf-8", "replace"))
+        except Exception:
+            continue
+        if str(jj.get("version") or "").strip():
+            parsed.append((b, jj))
+    if parsed:
+        # 镜像 CDN 会缓存旧清单 (实测 ghfast.top 拿到过 2.8.10 而仓库已是 2.8.13),
+        # 所以不取"第一个成功的", 而是取版本号最大的那个; 同版本时 _race_get 已按源优先级排好
+        best = 0
+        for i in range(1, len(parsed)):
+            if _vtuple(parsed[i][1].get("version")) > _vtuple(parsed[best][1].get("version")):
+                best = i
+        base, raced = parsed[best]
+    else:
+        # 一个源都没给出可用清单: 走 GitHub API 兜底, 再不行就把各源的失败原因报上去
+        j2 = _api_manifest(timeout=6)
+        if j2 and str(j2.get("version") or "").strip():
+            raced, base = j2, "https://api.github.com"
+        else:
+            raise RuntimeError(err or "下载源返回的清单无法解析")
     # jsDelivr 等镜像的 @main 缓存可能停留在很旧的版本: 比本机还旧就多等一会儿实时源
     stale = _vtuple(raced.get("version")) < _vtuple(APP_VERSION)
     if not fresh and apith.is_alive():
@@ -233,7 +312,9 @@ def ota_check(force=False):
     cur = APP_VERSION
     out = {"ok": True, "current": cur, "latest": "", "date": "", "notes": [],
            "has_update": False, "source": "", "error": "",
-           "rollback_ready": os.path.isfile(OTA_BACKUP)}
+           "rollback_ready": os.path.isfile(OTA_BACKUP),
+           "auto": load_settings().get("auto_update", True),
+           "auto_checked": AUTO_UPD["last_check"], "auto_msg": AUTO_UPD["last_result"]}
     try:
         j = ota_latest(force)
     except Exception as ex:
@@ -461,6 +542,96 @@ def ota_rollback():
     return True, "已回滚到上一版本, 服务正在重启…"
 
 
+# ---------- 自动更新 ----------
+# 设置存在 settings.json (与 auth.conf 同目录), 默认开启: 每 5 分钟看一次有没有新版本,
+# 有就等"没人在看视频/没有导出任务"的窗口自动升级 (升级只重启本服务, 约 5 秒)
+SETTINGS_FILE = os.environ.get("TSF_SETTINGS", "/opt/tesla-sentry/settings.json")
+AUTO_UPD = {"last_check": 0, "last_result": "", "last_apply": 0, "next_try": 0}
+
+
+def load_settings():
+    d = {"auto_update": True}
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            j = json.load(f)
+        if isinstance(j, dict) and "auto_update" in j:
+            d["auto_update"] = bool(j["auto_update"])
+    except (OSError, ValueError):
+        pass
+    return d
+
+
+def save_settings(patch):
+    d = load_settings()
+    d.update(patch or {})
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE) or ".", exist_ok=True)
+        tmp = SETTINGS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+        os.replace(tmp, SETTINGS_FILE)
+    except OSError:
+        pass
+    return d
+
+
+def _update_window_ok():
+    """自动升级前探一下: 有人在拉视频/正在导出时先不动, 免得把人正在看的东西打断"""
+    try:
+        if MEDIA_ACTIVE[0] > 0:
+            return False
+    except Exception:
+        pass
+    with STITCH_LOCK:
+        if any(j.get("state") == "running" for j in STITCH_JOBS.values()):
+            return False
+    return True
+
+
+def auto_update_loop():
+    time.sleep(90)                       # 开机先让同步与服务稳定
+    while True:
+        try:
+            if not load_settings().get("auto_update", True):
+                time.sleep(300)
+                continue
+            if time.time() < AUTO_UPD["next_try"]:
+                time.sleep(60)
+                continue
+            j = ota_check(False)
+            AUTO_UPD["last_check"] = int(time.time())
+            if j.get("error"):
+                AUTO_UPD["last_result"] = "检查失败: " + j["error"]
+                AUTO_UPD["next_try"] = time.time() + 1800
+                time.sleep(60)
+                continue
+            if not j.get("has_update"):
+                AUTO_UPD["last_result"] = "已是最新 (%s)" % APP_VERSION
+                AUTO_UPD["next_try"] = time.time() + 1800
+                time.sleep(60)
+                continue
+            AUTO_UPD["last_result"] = "发现 v%s, 等待空闲后自动升级" % j.get("latest")
+            for _ in range(30):          # 最多等 30 分钟的空闲窗口
+                if _update_window_ok():
+                    break
+                time.sleep(60)
+            if not _update_window_ok():
+                AUTO_UPD["next_try"] = time.time() + 1800
+                time.sleep(60)
+                continue
+            ok, msg = ota_apply()
+            AUTO_UPD["last_apply"] = int(time.time())
+            AUTO_UPD["last_result"] = ("自动升级: " if ok else "自动升级失败: ") + str(msg)
+            if ok:
+                time.sleep(30)           # ota_apply 已安排 1.2s 后重启, 进程会被替换
+            AUTO_UPD["next_try"] = time.time() + 1800
+            time.sleep(60)
+        except Exception as ex:
+            AUTO_UPD["last_result"] = "自动更新异常: %s" % ex
+            AUTO_UPD["next_try"] = time.time() + 1800
+            time.sleep(120)
+
+
 
 
 
@@ -534,17 +705,26 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .chip:hover { color:var(--text); border-color:var(--muted2); }
 .chip.on { background:var(--blue); border-color:var(--blue); color:#fff; }
 .chip .n { opacity:.62; margin-left:4px; font-variant-numeric:tabular-nums; }
-/* 存储卡: 虚拟U盘 / 归档区 / 总占用 三行, 每行各自一条进度条
-   (行距刻意压紧, 三行总高约 100px, 手机首屏别占太多) */
+/* 存储卡: 默认只露「虚拟U盘」一行, 右下角小箭头展开归档区/总占用
+   (行距刻意压紧, 收起时约 40px, 手机首屏别占太多) */
 .storwrap { padding:8px 16px 0; }
-.storcard { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:8px 13px 9px; box-shadow:var(--shadow); }
+.storcard { position:relative; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:8px 13px 9px; box-shadow:var(--shadow); }
 .storrow { display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:4px; }
 .storrow + .storbar { margin-bottom:7px; }
 .storbar:last-child { margin-bottom:0; }
 .storlab { font-size:12px; color:var(--text); font-weight:600; }
 .storval { font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
-.storbar { height:4px; border-radius:2px; background:var(--line2); overflow:hidden; }
+/* 进度条右侧留出小箭头的位子, 三行等宽 */
+.storbar { height:4px; margin-right:24px; border-radius:2px; background:var(--line2); overflow:hidden; }
 .storbar i { display:block; height:100%; width:0; background:var(--blue); border-radius:2px; transition:width .4s; }
+.storextra { display:none; }
+.storcard.open .storextra { display:block; }
+.stortog { position:absolute; right:4px; bottom:3px; width:22px; height:20px; padding:0; border:0; border-radius:6px;
+  background:transparent; color:var(--muted2); cursor:pointer; display:flex; align-items:center; justify-content:center;
+  -webkit-tap-highlight-color:transparent; }
+.stortog svg { width:13px; height:13px; transition:transform .2s; }
+.stortog:hover { color:var(--text); background:var(--panel2); }
+.storcard.open .stortog svg { transform:rotate(180deg); }
 /* 主题切换按钮: 自动/浅色/深色 循环 */
 #theme { background:var(--panel2); border:none; color:var(--muted); font-size:15px; cursor:pointer; border-radius:10px; width:36px; height:32px; }
 #theme:hover { color:var(--text); }
@@ -754,6 +934,11 @@ select.ninput { cursor:pointer; }
 .updtag { font-size:11px; padding:1px 8px; border-radius:9px; background:var(--amberbg); color:var(--amber); border:1px solid var(--amberline); white-space:nowrap; }
 .updtag.new { background:rgba(232,68,63,.14); color:var(--accent); border-color:rgba(232,68,63,.32); }
 .updnotes { display:none; background:var(--panel2); border-radius:10px; padding:9px 12px; font-size:12.5px; line-height:1.85; color:var(--muted); margin:6px 0 2px; }
+/* 自动更新开关: 一行 + 右侧勾选框, 默认勾上 */
+.updauto { display:flex; align-items:center; gap:8px; margin:10px 0 2px; padding-top:10px;
+  border-top:1px solid var(--line); font-size:13px; color:var(--text); cursor:pointer; }
+.updauto span { flex:1; }
+.updauto input[type=checkbox] { width:18px; height:18px; margin:0; accent-color:var(--accent); cursor:pointer; }
 .updbtns { display:flex; gap:8px; margin:10px 0 8px; }
 .updbtns .mini { flex:1; padding:9px 0; border-radius:9px; background:var(--panel2); border:none; color:var(--text); font-size:13px; cursor:pointer; }
 .updbtns .mini.logout { background:transparent; border:1px solid var(--accent); color:var(--accent); }
@@ -864,13 +1049,16 @@ select.ninput { cursor:pointer; }
 <span id="live" title="车机在线只读同步状态" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:4px 10px;white-space:nowrap"><span id="livedot" style="width:7px;height:7px;border-radius:50%;background:#5f6b76"></span><span id="livetxt">同步状态</span></span>
 <nav class="tabs" id="tabs"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()">🌗</button><button id="gear" title="设置">⚙</button></header>
 <nav class="storwrap" id="storwrap" style="display:none">
-  <div class="storcard">
+  <div class="storcard" id="storcard">
 <div class="storrow"><span class="storlab">虚拟U盘</span><span class="storval" id="storvusb"></span></div>
 <div class="storbar"><i id="storvusbbar"></i></div>
+<div class="storextra" id="storextra">
 <div class="storrow"><span class="storlab">归档区</span><span class="storval" id="storarc"></span></div>
 <div class="storbar"><i id="storarcbar"></i></div>
 <div class="storrow"><span class="storlab">总占用</span><span class="storval" id="stortot"></span></div>
 <div class="storbar"><i id="stortotbar"></i></div>
+</div>
+<button class="stortog" id="stortog" onclick="toggleStor()" title="展开归档区和总占用" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
 </nav>
 <nav class="filters" id="filters"></nav>
@@ -1097,6 +1285,11 @@ select.ninput { cursor:pointer; }
     <div class="updrow"><span class="updk">当前版本</span><b id="upd-cur">—</b></div>
     <div class="updrow"><span class="updk">最新版本</span><b id="upd-new">—</b><span class="updtag" id="upd-tag">未检查</span></div>
     <div class="updnotes" id="upd-notes"></div>
+    <label class="updauto" title="检测到新版本时, 在没人看视频的空闲时刻自动升级 (只重启本服务, 约 5 秒)">
+      <span>自动更新</span>
+      <input type="checkbox" id="upd-auto" checked onchange="setAutoUpdate(this.checked)">
+    </label>
+    <div class="hint" id="upd-autohint">—</div>
     <div class="updbtns">
       <button class="mini" id="upd-check" onclick="otaCheck(true)">检查更新</button>
       <button class="mini primary" id="upd-go" onclick="otaApply()" disabled>立即升级</button>
@@ -1237,6 +1430,15 @@ function cycleTheme() {
   applyTheme(nxt);
 }
 applyTheme(localStorage.getItem('tsf_theme') || 'auto');
+/* ---------- 存储卡展开/收起 ----------
+   默认只显示「虚拟U盘」一行; 点卡片右下角小箭头才展开「归档区 / 总占用」 */
+function toggleStor() {
+  const c = document.getElementById('storcard'), b = document.getElementById('stortog');
+  if (!c || !b) return;
+  const open = c.classList.toggle('open');
+  b.title = open ? '收起归档区和总占用' : '展开归档区和总占用';
+  b.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
 if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if ((localStorage.getItem('tsf_theme') || 'auto') === 'auto') applyTheme('auto');
 });
@@ -1245,6 +1447,9 @@ if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListen
 const Q_LIST = [['orig', '原画'], ['720p', '720p'], ['480p', '480p'], ['360p', '360p']];
 const isLanNet = /^(100\.96\.|192\.168\.|10\.|127\.)/.test(location.hostname);
 let curQ = localStorage.getItem('tsfq') || (isLanNet ? 'orig' : '360p');
+/* 苹果设备: 合成改走设备端 (Safari 的 MediaRecorder 只能出 webm, 微信不认) */
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 if (!Q_LIST.some(x => x[0] === curQ)) curQ = 'orig';
 function qUrl(u) { return curQ === 'orig' ? u : u + '?q=' + curQ; }
 function renderQSel() {
@@ -1460,9 +1665,8 @@ async function refreshLive() {
     dot.style.background = '#e8443f';
     txt.textContent = t('同步服务未运行');
   }
-  // 存储卡: 虚拟U盘 / 归档区 / 总占用, 三行都用「整盘容量」当分母, 便于横向对比
-  const sw = document.getElementById('storwrap');
-  const dk = live.disk;
+  // 存储卡: 默认只显示虚拟U盘, 点右下角小箭头再展开归档区/总占用
+  const sw = document.getElementById('storwrap');  const dk = live.disk;
   if (dk && dk.disk_total > 0) {
     const GB = 1073741824;
     const gb = n => {
@@ -2013,7 +2217,30 @@ function drawWm(ctx, t, W) {
   ctx.fillStyle = '#fff';
   const sp = String(Math.round(f[2]));
   ctx.fillText(sp, xr, yc + Math.round(1 * s));
+  if (f[7]) {
+    // AP / FSD 徽标: 与网页遥测面板同款 (琥珀→红渐变), 只在自动驾驶开启时出现
+    xr -= ctx.measureText(sp).width + Math.round(9 * s);
+    wmApBadge(ctx, xr, yc, ({ 1: 'FSD', 2: 'AP', 3: 'TACC' })[f[7]] || 'AP', s);
+  }
   ctx.restore();
+}
+function wmApBadge(ctx, xRight, yMid, text, s) {
+  const fs = Math.round(11 * s);
+  ctx.font = '800 ' + fs + 'px system-ui,"Segoe UI",sans-serif';
+  const pw = ctx.measureText(text).width + Math.round(16 * s), ph = Math.round(22 * s);
+  const x = xRight - pw;
+  const sh = ctx.shadowBlur, ta = ctx.textAlign;
+  ctx.shadowBlur = 0;                       // 实心渐变色块, 不要投影
+  const g = ctx.createLinearGradient(x, 0, x + pw, 0);
+  g.addColorStop(0, '#f59e0b'); g.addColorStop(1, '#ef4444');
+  ctx.fillStyle = g;
+  rrPath(ctx, x, yMid - ph / 2, pw, ph, ph / 2); ctx.fill();
+  ctx.shadowBlur = sh;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, x + Math.round(8 * s), yMid + Math.round(fs * 0.36));
+  ctx.textAlign = ta;
+  return x - Math.round(8 * s);
 }
 function updateHud(t) {
   if (!TEL || !TEL.frames || !TEL.frames.length) return;
@@ -2217,7 +2444,49 @@ function doExport() {
     if (v) location.href = '/dl?path=' + encodeURIComponent('/archive/' + v.url.replace(/^\/media\//, '')) + (expQ !== 'orig' ? '&q=' + expQ : '');
     return;
   }
+  // iOS 上浏览器合成只能出 webm (微信发不出去), 交给设备端 ffmpeg 直接生成 mp4
+  if (IS_IOS) { startServerExport(sel, wm); return; }
   startLocalStitch(sel, document.getElementById('stitch'), wm);
+}
+/* 设备端合成导出: 输出标准 H.264 mp4 (带 faststart), 微信/相册都能直接发 */
+function startServerExport(sel, wm) {
+  const parts = ((curVids()[0] || {}).url || '').replace(/^\/media\//, '').split('/');
+  const cat = parts[0] || '', name = parts[1] || '';
+  if (!name) { toast('取不到当前事件信息, 请刷新重试'); return; }
+  /* 只导出用户当前正在看的这一分钟, 把真实文件名告诉设备端 */
+  const files = curVids()
+    .filter(v => sel.indexOf(v.cam) >= 0)
+    .map(v => v.f || v.url.split('/').pop())
+    .filter(Boolean);
+  const st = document.getElementById('stitch');
+  const fill = document.getElementById('stfill'), pct = document.getElementById('stpct'),
+        hint = document.getElementById('sthint');
+  fill.style.width = '0%'; pct.textContent = '0%';
+  hint.textContent = '正在设备上合成 mp4 (约 1~3 分钟, 请保持页面打开)…';
+  st.classList.add('open');
+  fetch('/api/export/burn', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cat: cat, name: name, cams: sel, wm: !!wm, files: files,
+                           q: (expQ === '480p' || expQ === '360p') ? '480p' : '720p' })
+  }).then(r => r.json()).then(d => {
+    if (!d.ok) { stitchFail(d.error || '导出失败'); return; }
+    pollExport(d.id);
+  }).catch(e => stitchFail('导出失败: ' + e));
+}
+function pollExport(id) {
+  fetch('/api/stitch/status?id=' + encodeURIComponent(id)).then(r => r.json()).then(d => {
+    if (d.state === 'error') { stitchFail(d.err || '导出失败'); return; }
+    const pct = d.pct || 0;
+    document.getElementById('stfill').style.width = pct + '%';
+    document.getElementById('stpct').textContent = pct + '%';
+    if (d.state === 'done') {
+      document.getElementById('sthint').textContent = '合成完成, 开始下载…';
+      location.href = '/api/export/burn/dl?id=' + encodeURIComponent(id);
+      setTimeout(() => document.getElementById('stitch').classList.remove('open'), 2500);
+      return;
+    }
+    setTimeout(() => pollExport(id), 1000);
+  }).catch(() => setTimeout(() => pollExport(id), 1500));
 }
 function doPushFeishu() {
   if (!cur) return;
@@ -2290,7 +2559,9 @@ function startLocalStitch(sel, st, wm, push) {
     setTimeout(res, 30000);
   }))).then(() => {
     let mime = '';
-    for (const m of ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4']) {
+    // 优先录 mp4 (微信/相册直接可发), 浏览器不支持再退 webm
+    for (const m of ['video/mp4;codecs=avc1.42E01E', 'video/mp4',
+                     'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']) {
       if (MediaRecorder.isTypeSupported(m)) { mime = m; break; }
     }
     if (!mime) { cleanup(); st.classList.remove('open'); toast('此浏览器不支持本机合成'); return; }
@@ -2462,7 +2733,7 @@ function stab(which) {
     if (b) b.classList.toggle('active', k === which);
     if (t) t.style.display = k === which ? '' : 'none';
   });
-  if (which === 'update') otaCheck(false);
+  if (which === 'update') { otaCheck(false); autoLoad(); }
   if (which === 'notify') ntLoad();
   if (which === 'auth') pwLoad();
   if (which === 'wraps') refreshWraps();
@@ -2644,6 +2915,7 @@ async function otaCheck(force) {
     } else { n.style.display = 'none'; n.innerHTML = ''; }
     document.getElementById('upd-go').disabled = !j.has_update;
     document.getElementById('upd-rb').style.display = j.rollback_ready ? '' : 'none';
+    renderAutoUpdate(j);
     msg.textContent = j.error
       ? t('连不上 GitHub') + ': ' + j.error + ' ' + t('(可稍后重试)')
       : (t('来源') + ': ' + (j.source || '-') + (j.date ? ' · ' + j.date : '') + (j.has_update ? '' : ' · ' + t('已是最新')));
@@ -2651,6 +2923,52 @@ async function otaCheck(force) {
   } catch (e) {
     tag.className = 'updtag'; tag.textContent = t('检查失败');
     msg.textContent = t('检查失败') + ': ' + e;
+  }
+}
+/* 自动更新开关: 勾选即写入 settings.json (默认开启) */
+function renderAutoUpdate(j) {
+  const cb = document.getElementById('upd-auto'), el = document.getElementById('upd-autohint');
+  if (!cb || !el) return;
+  cb.checked = !!j.auto;
+  let s = j.auto
+    ? '已开启: 每 5 分钟检查一次, 发现新版本且没人看视频时自动升级'
+    : '已关闭: 只用下方按钮手动升级';
+  if (j.auto) {
+    const when = j.auto_checked ? new Date(j.auto_checked * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
+    if (when || j.auto_msg) s += '<br>上次 ' + (when ? when + ' · ' : '') + (j.auto_msg || '');
+  }
+  el.innerHTML = s;
+}
+/* 打开"更新"页时同步一次自动更新开关的真实状态 (不依赖检查结果) */
+async function autoLoad() {
+  try {
+    const s = await (await fetch('/api/settings', { cache: 'no-store' })).json();
+    const cb = document.getElementById('upd-auto'), el = document.getElementById('upd-autohint');
+    if (!cb || !el) return;
+    cb.checked = !!s.auto_update;
+    let txt = s.auto_update
+      ? '已开启: 每 5 分钟检查一次, 发现新版本且没人看视频时自动升级'
+      : '已关闭: 只用下方按钮手动升级';
+    const when = s.auto_checked ? new Date(s.auto_checked * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
+    if (s.auto_update && (when || s.auto_msg)) txt += '<br>上次 ' + (when ? when + ' · ' : '') + (s.auto_msg || '');
+    el.innerHTML = txt;
+  } catch (e) {}
+}
+async function setAutoUpdate(on) {
+  const cb = document.getElementById('upd-auto'), el = document.getElementById('upd-autohint');
+  try {
+    const j = await (await fetch('/api/ota/auto', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on: !!on })
+    })).json();
+    if (!j.ok) throw new Error(j.msg || '保存失败');
+    el.innerHTML = on
+      ? '已开启: 每 5 分钟检查一次, 发现新版本且没人看视频时自动升级'
+      : '已关闭: 只用下方按钮手动升级';
+    if (on) setTimeout(() => otaCheck(false), 800);
+  } catch (e) {
+    cb.checked = !on;
+    toast('❌ 自动更新设置失败: ' + (e.message || e));
   }
 }
 /* 服务重启期间轮询, 起来后自动刷新页面 */
@@ -3586,31 +3904,69 @@ def fm_action(area, op, items, dest, name):
     return False, "未知操作: %s" % op, 0, [], {}
 
 
-def serve_file(self, fp):
-    """流式发送文件 (支持 Range), 用于下载"""
+def _range_bounds(hdr, size):
+    """解析 Range 头, 返回 (start, end) / None(整体) / 'BAD'(格式错) / 'UNSAT'(越界)
+    iOS/Safari 的下载器会先发 bytes=-N (取尾部) 探一下 moov, 必须支持,
+    否则连接会被直接掐断, 手机端只会存到前一小段 (表现为"下载下来只有 1 秒")。"""
+    if not hdr:
+        return None
+    m = re.match(r"bytes=(\d*)-(\d*)$", (hdr or "").strip())
+    if not m:
+        return "BAD"
+    a, b = m.group(1), m.group(2)
+    if a == "" and b == "":
+        return "BAD"
+    if a == "":                       # bytes=-N: 最后 N 字节
+        n = int(b)
+        if n <= 0 or size <= 0:
+            return "UNSAT"
+        return (max(0, size - n), size - 1)
+    start = int(a)
+    if start >= size:
+        return "UNSAT"
+    end = int(b) if b else size - 1
+    if end < start:
+        return "UNSAT"
+    return (start, min(end, size - 1))
+
+
+def serve_file(self, fp, head_only=False):
+    """流式发送文件 (支持 Range / HEAD), 用于下载"""
     fn = os.path.basename(fp)
     ext = fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
     ct = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp",
           "css": "text/css", "html": "text/html", "htm": "text/html", "txt": "text/plain",
           "json": "application/json", "pdf": "application/pdf", "svg": "image/svg+xml",
           "mp4": "video/mp4", "mp3": "audio/mpeg", "wav": "audio/wav"}.get(ext, "application/octet-stream")
-    size = os.path.getsize(fp)
-    rng = self.headers.get("Range")
-    if rng:
-        mm2 = re.match(r"bytes=(\d+)-(\d*)", rng)
-        start = int(mm2.group(1))
-        end = int(mm2.group(2)) if mm2.group(2) else size - 1
+    try:
+        size = os.path.getsize(fp)
+    except OSError:
+        self._send(404, b"not found")
+        return
+    rb = _range_bounds(self.headers.get("Range"), size)
+    if rb in ("BAD", "UNSAT"):
+        self.send_response(416 if rb == "UNSAT" else 400)
+        if rb == "UNSAT":
+            self.send_header("Content-Range", "bytes */%d" % size)
+        self.send_header("Content-Length", "0")
+        self.send_header("Accept-Ranges", "bytes")
+        self.end_headers()
+        return
+    if rb:
+        start, end = rb
     else:
         start, end = 0, size - 1
-    length = end - start + 1
-    self.send_response(206 if rng else 200)
+    length = max(0, end - start + 1)
+    self.send_response(206 if rb else 200)
     self.send_header("Content-Type", ct)
     self.send_header("Content-Length", str(length))
     self.send_header("Accept-Ranges", "bytes")
-    self.send_header("Content-Disposition", f'attachment; filename="{urllib.parse.quote(fn)}"')
-    if rng:
-        self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+    self.send_header("Content-Disposition", 'attachment; filename="%s"' % urllib.parse.quote(fn))
+    if rb:
+        self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
     self.end_headers()
+    if head_only:
+        return
     with open(fp, "rb") as f:
         f.seek(start)
         remain = length
@@ -3618,7 +3974,10 @@ def serve_file(self, fp):
             chunk = f.read(min(65536, remain))
             if not chunk:
                 break
-            self.wfile.write(chunk)
+            try:
+                self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                return
             remain -= len(chunk)
 
 
@@ -3756,6 +4115,7 @@ STITCH_JOBS = {}
 STITCH_LOCK = threading.Lock()
 # 视频流并发上限: 事件多的时候浏览器会一口气请求上百个预览, 不限流会拖死设备
 MEDIA_SEM = threading.BoundedSemaphore(int(os.environ.get("TSF_MEDIA_CONN", "8")))
+MEDIA_ACTIVE = [0]        # 正在推送的视频流数量: 自动升级要等它归零, 别打断正在看的人
 THUMB_DIR = os.environ.get("TSF_CACHE", "/opt/mu300") + "/thumbs"
 THUMB_SEM = threading.BoundedSemaphore(2)
 THUMB_W = 400
@@ -4325,10 +4685,10 @@ def _wm_fontconf():
     return p
 
 
-def _wm_ass(fp, ss, dur, meta):
+def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
     """生成与网页遥测面板同款的行车信息水印 ASS 字幕:
-    顶部半透明色带 + 每秒一行 (左: 日期时间 城市·街道 / 右: 挡位 车速 油门, 刹车亮红)。
-    返回 ass 路径; 无遥测数据或无字体时返回 None。"""
+    顶部半透明色带 + 每秒一行 (左: 日期时间 城市·街道 / 右: [FSD/AP] 挡位 车速 油门, 刹车亮红)。
+    size=(宽,高) 用于非 1280x720 的输出 (位置与字号按高度等比缩放)。无遥测/无字体返回 None。"""
     if not _wm_font():
         return None
     tel = telemetry_cached(fp)
@@ -4341,6 +4701,11 @@ def _wm_ass(fp, ss, dur, meta):
         t0 = None
     loc = "·".join(x for x in (meta.get("city") or "", meta.get("street") or "") if x).strip()
     dur = int(dur)
+    W, H = size if size else (1280, 720)
+    W, H = max(320, int(W)), max(240, int(H))
+    fs = max(12, int(round(26 * H / 720.0)))      # 字号跟着输出高度缩放
+    mgn = max(8, int(round(24 * H / 720.0)))
+    band = max(24, int(round(62 * H / 720.0)))
 
     def fr_at(ct):
         """视频时间 ct (相对片段起点) 对应的遥测帧"""
@@ -4358,20 +4723,20 @@ def _wm_ass(fp, ss, dur, meta):
         return s.replace("\\", "").replace("{", "").replace("}", "").replace("\n", " ")
 
     lines = [
-        "[Script Info]", "ScriptType: v4.00+", "PlayResX: 1280", "PlayResY: 720", "WrapStyle: 2", "",
+        "[Script Info]", "ScriptType: v4.00+", "PlayResX: %d" % W, "PlayResY: %d" % H, "WrapStyle: 2", "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Wm,Noto Sans SC,26,&H00FFFFFF,&H00FFFFFF,&H96000000,&H7F000000,1,0,0,0,100,100,0,0,1,2,1,7,24,24,0,1",
-        "Style: WmBr,Noto Sans SC,26,&H002045FF,&H002045FF,&H96000000,&H7F000000,1,0,0,0,100,100,0,0,1,2,1,8,24,24,0,1",
+        "Style: Wm,Noto Sans SC,%d,&H00FFFFFF,&H00FFFFFF,&H96000000,&H7F000000,1,0,0,0,100,100,0,0,1,2,1,7,%d,%d,0,1" % (fs, mgn, mgn),
+        "Style: WmBr,Noto Sans SC,%d,&H002045FF,&H002045FF,&H96000000,&H7F000000,1,0,0,0,100,100,0,0,1,2,1,8,%d,%d,0,1" % (fs, mgn, mgn),
         "",
         "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     # 顶部色带 (整段): 模拟网页 rgba(13,18,26,.15) 的窄条
     lines.append("Dialogue: 0,0:00:00.00,%d:%02d:%02d.00,,Wm,0,0,0,,{\\an7\\pos(0,0)\\bord0\\shad0"
-                 "\\1c&H1A120D&\\alpha&HD9&\\p1}m 0 0 l 1280 0 1280 62 0 62{\\p0}"
-                 % (dur // 3600, dur % 3600 // 60, dur % 60))
+                 "\\1c&H1A120D&\\alpha&HD9&\\p1}m 0 0 l %d 0 %d %d 0 %d{\\p0}"
+                 % (dur // 3600, dur % 3600 // 60, dur % 60, W, W, band, band))
     for n in range(dur):
         f = fr_at(ss + n)
         if t0 is not None:
@@ -4380,14 +4745,21 @@ def _wm_ass(fp, ss, dur, meta):
             ts = ""
         left = esc(" ".join(x for x in (ts, loc) if x))
         right = "%s %d km/h · 油门%d%%" % (f[1], int(round(f[2])), int(f[3]))
+        ap = {1: "FSD", 2: "AP", 3: "TACC"}.get(f[7]) if len(f) > 7 else None
+        if ap:
+            right = ap + " · " + right
         ev = "0:00:%02d.000" % n
         ev2 = "0:00:%02d.000" % (n + 1) if n + 1 < dur else "%d:%02d:%02d.000" % (dur // 3600, dur % 3600 // 60, dur % 60)
         if left:
-            lines.append("Dialogue: 1,%s,%s,Wm,,0,0,0,,{\\an7\\pos(24,32)}%s" % (ev, ev2, left))
-        lines.append("Dialogue: 1,%s,%s,Wm,,0,0,0,,{\\an9\\pos(1256,32)}%s" % (ev, ev2, esc(right)))
+            lines.append("Dialogue: 1,%s,%s,Wm,,0,0,0,,{\\an7\\pos(%d,%d)}%s"
+                         % (ev, ev2, mgn, band // 2, left))
+        lines.append("Dialogue: 1,%s,%s,Wm,,0,0,0,,{\\an9\\pos(%d,%d)}%s"
+                     % (ev, ev2, W - mgn, band // 2, esc(right)))
         if f[5]:
-            lines.append("Dialogue: 1,%s,%s,WmBr,,0,0,0,,{\\an8\\pos(640,32)}刹车" % (ev, ev2))
-    p = os.path.join(RES_DIR, "wm-%s.ass" % hashlib.md5(("%s|%d|%d" % (fp, int(ss), dur)).encode()).hexdigest()[:16])
+            lines.append("Dialogue: 1,%s,%s,WmBr,,0,0,0,,{\\an8\\pos(%d,%d)}刹车"
+                         % (ev, ev2, W // 2, band // 2))
+    p = os.path.join(RES_DIR, "wm-%s.ass" % hashlib.md5(
+        ("%s|%d|%d|%dx%d" % (fp, int(ss), dur, W, H)).encode()).hexdigest()[:16])
     with open(p, "w", encoding="utf-8") as fo:
         fo.write("\n".join(lines) + "\n")
     return p
@@ -5057,6 +5429,227 @@ def start_stitch(cat, name, cams):
     return job_id, None
 
 
+# ---------- 服务端"带水印导出": 给 iOS / 微信 一份标准 H.264 mp4 ----------
+# 为什么不用浏览器合成: iOS Safari 的 MediaRecorder 只认 video/webm (微信发不出去),
+# iOS 26 起录 mp4 还会被截断(实测只留前几秒)。所以苹果设备改由设备端 ffmpeg 出片。
+# 负载控制: 多路时先逐路单独降采样成小文件(同时只解 1 路 1080p), 再拼小文件,
+# 避免 2~4 路 1080p 同时解码触发内核 lockup。
+EXPORT_Q = {"720p": 720, "480p": 480}
+
+
+def _ffrun(cmd, timeout=900):
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as ex:
+        return -1, str(ex)
+    try:
+        with open("/proc/%d/oom_score_adj" % p.pid, "w") as f:
+            f.write("800")            # 内存吃紧时先杀 ffmpeg, 保住主服务
+    except OSError:
+        pass
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            p.kill()
+        except OSError:
+            pass
+        return -1, "转码超时"
+    return p.returncode, (err or b"").decode("utf-8", "ignore")[-300:]
+
+
+def _export_worker(job_id, paths, out_path, total, wm, height):
+    n = len(paths)
+    tmpdir = os.path.join(STITCH_DIR, "ex-" + job_id.replace("/", "_"))
+    os.makedirs(tmpdir, exist_ok=True)
+
+    def setpct(v):
+        with STITCH_LOCK:
+            job = STITCH_JOBS.get(job_id)
+            if job:
+                job["pct"] = max(0, min(99, int(v)))
+
+    def fail(msg):
+        with STITCH_LOCK:
+            job = STITCH_JOBS.get(job_id)
+            if job:
+                job["state"] = "error"
+                job["err"] = (msg or "ffmpeg 失败")[:300]
+
+    try:
+        # 画面尺寸: 单路保持原比例; 多路统一 2 列网格, 输出仍是 16:9 便于水印排版
+        if n == 1:
+            OW, OH = -2, height
+        else:
+            cols, rows = 2, (n + 1) // 2
+            OW, OH = 1280, 720
+            CW, CH = OW // cols, OH // rows
+
+        # 第一步: 逐路降采样 (顺序执行, 峰值只有 1 路 1080p 解码)
+        small = []
+        if n > 1:
+            for i, fp in enumerate(paths):
+                sp = os.path.join(tmpdir, "c%d.mp4" % i)
+                vf = ("scale=%d:%d:force_original_aspect_ratio=decrease,"
+                      "pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=15" % (CW, CH, CW, CH))
+                code, err = _ffrun([FFMPEG_BIN, "-nostdin", "-hide_banner", "-loglevel", "error",
+                                    "-threads", "2", "-i", fp, "-vf", vf, "-an",
+                                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+                                    "-threads", "2", "-y", sp], timeout=600)
+                if code != 0 or not os.path.isfile(sp):
+                    fail(err or ("第 %d 路降采样失败" % (i + 1)))
+                    return
+                small.append(sp)
+                setpct((i + 1) / float(n) * 70)
+        else:
+            small = paths
+
+        ass = ""
+        if wm:
+            try:
+                meta = {}
+                try:
+                    with open(os.path.join(os.path.dirname(paths[0]), "event.json"),
+                              encoding="utf-8", errors="ignore") as f:
+                        meta = json.load(f) or {}
+                except Exception:
+                    meta = {}
+                ass = _wm_ass(paths[0], 0, probe_duration(paths[0]) or 0, meta,
+                              size=(OW if OW > 0 else 1280, OH)) or ""
+            except Exception:
+                ass = ""
+
+        cmd = [FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-y", "-filter_threads", "1"]
+        for f in small:
+            cmd += ["-i", f]
+        fc = []
+        if n == 1:
+            fc.append("[0:v]scale=-2:%d,setsar=1,fps=15[v0]" % height)
+            last = "[v0]"
+        else:
+            for i in range(n):
+                fc.append("[%d:v]setsar=1[v%d]" % (i, i))
+            cells = "|".join("%d_%d" % ((i % 2) * CW, (i // 2) * CH) for i in range(n))
+            fc.append("".join("[v%d]" % i for i in range(n)) +
+                      "xstack=inputs=%d:layout=%s:fill=black[vg]" % (n, cells))
+            last = "[vg]"
+        if ass:
+            sub = "subtitles='%s':fontsdir='%s'" % (ass.replace(":", "\\:").replace("'", ""),
+                                                    FONT_DIR.replace("'", ""))
+            fc.append("%s%s[vout]" % (last, sub))
+            last = "[vout]"
+        cmd += ["-filter_complex", ";".join(fc), "-map", last, "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p",
+                "-threads", "2", "-c:a", "aac", "-b:a", "96k",
+                "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", out_path]
+        env = dict(os.environ)
+        if ass:
+            fcnf = _wm_fontconf()
+            if fcnf:
+                env["FONTCONFIG_FILE"] = fcnf
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        try:
+            with open("/proc/%d/oom_score_adj" % p.pid, "w") as f:
+                f.write("800")
+        except OSError:
+            pass
+        deadline = time.time() + max(600, (total or 60) * 40)
+        for raw in p.stdout:
+            line = raw.decode("utf-8", "ignore").strip()
+            if line.startswith("out_time_us=") and total:
+                try:
+                    done = int(line.split("=", 1)[1]) / 1000000.0
+                    setpct(70 + min(29, done / float(total) * 29))
+                except ValueError:
+                    pass
+            if time.time() > deadline:
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+                break
+        err = p.stderr.read().decode("utf-8", "ignore")
+        code = p.wait()
+        if code == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
+            with STITCH_LOCK:
+                job = STITCH_JOBS.get(job_id)
+                if job:
+                    job["state"] = "done"
+                    job["pct"] = 100
+                    job["path"] = out_path
+                    job["size"] = os.path.getsize(out_path)
+        else:
+            tail = [x for x in (err or "").strip().splitlines() if x.strip()]
+            fail(tail[-1] if tail else ("ffmpeg 退出码 %d" % code))
+    except Exception as ex:
+        fail(str(ex))
+    finally:
+        try:
+            for f in os.listdir(tmpdir):
+                os.unlink(os.path.join(tmpdir, f))
+            os.rmdir(tmpdir)
+        except OSError:
+            pass
+
+
+def start_export(cat, name, cams, wm=True, q="720p", files=None):
+    """创建"服务端带水印导出"任务, 返回 (job_id, 错误)
+    files: 前端指定要导出的具体片段文件名 (用户正在看的那一分钟),
+           不传则退回"最新一组"的行为。"""
+    if not os.path.isfile(FFMPEG_BIN):
+        return None, "设备上没有 ffmpeg, 无法生成 mp4"
+    evdir = safe_archive_dir(os.path.join(ARCHIVE, cat, name))
+    if not evdir or not os.path.isdir(evdir):
+        return None, "事件不存在"
+    if isinstance(files, list) and files:
+        picked = []
+        for f in files:
+            b = safe_name(str(f))
+            if not b or not b.lower().endswith(".mp4"):
+                continue
+            if not os.path.isfile(os.path.join(evdir, b)):
+                continue
+            if cams and cam_of(b) not in cams:
+                continue
+            if b not in picked:
+                picked.append(b)
+        files = order_files(picked) if picked else []
+    else:
+        files = [f for f in os.listdir(evdir) if f.lower().endswith(".mp4")]
+        files = latest_group(files)
+        if cams:
+            files = [f for f in files if cam_of(f) in cams]
+        files = order_files(files)
+    if not files:
+        return None, "没有可导出的片段"
+    with STITCH_LOCK:
+        if any(j.get("state") == "running" for j in STITCH_JOBS.values()):
+            return None, "已有导出/合成任务在进行, 请等它完成"
+    avail = mem_available_mb()
+    if 0 < avail < 260:
+        return None, "设备可用内存不足(%dMB), 稍后再试" % avail
+    paths = [os.path.join(evdir, f) for f in files]
+    os.makedirs(STITCH_DIR, exist_ok=True)
+    now = time.time()
+    for old in os.listdir(STITCH_DIR):
+        p = os.path.join(STITCH_DIR, old)
+        try:
+            if os.path.isfile(p) and now - os.path.getmtime(p) > 3600:
+                os.unlink(p)
+        except OSError:
+            pass
+    job_id = "%s-ex%d" % (name.replace(":", "-"), int(now * 1000) % 1000000)
+    out_path = os.path.join(STITCH_DIR, job_id + ".mp4")
+    total = probe_duration(paths[0]) or 60
+    height = EXPORT_Q.get(q, 720)
+    with STITCH_LOCK:
+        STITCH_JOBS[job_id] = {"state": "running", "pct": 0, "path": None, "size": 0,
+                               "name": "%s_%d路.mp4" % (name, len(files))}
+    threading.Thread(target=_export_worker,
+                     args=(job_id, paths, out_path, total, bool(wm), height), daemon=True).start()
+    return job_id, None
+
+
 # ---------- 行车遥测: 解码视频 SEI 里的 SeiMetadata protobuf ----------
 # Tesla 在车辆行驶中录制的片段里, 每帧塞一条 SEI(type 6) NAL,
 # payload 以 magic 0x42 0x42 0x69 开头, 后跟 protobuf:
@@ -5688,6 +6281,49 @@ class Handler(BaseHTTPRequestHandler):
                 fields[nm.group(1)] = data.decode("utf-8", "replace").strip()
         return file_fn, file_data, fields
 
+    def do_HEAD(self):
+        """只回头部: iOS/安卓下载器在真正下载前常先 HEAD 探大小, 不支持会退化成"边播边存"的残缺文件"""
+        def hdr_only(code, extra=None):
+            self.send_response(code)
+            for k, v in (extra or []):
+                self.send_header(k, v)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        if not self._gate():
+            return
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if path == "/dl":
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            fp = safe_archive_path(q.get("path", [""])[0])
+            if not fp:
+                hdr_only(404)
+                return
+            out = fp
+            qv = q.get("q", [""])[0]
+            if qv in RES_SCALE:
+                out = get_variant(fp, qv)
+            serve_file(self, out, head_only=True)
+            return
+        m = re.match(r"^/media/([\w-]+)/([\w\-. ]+)/([\w\-. ]+)$", path)
+        if m:
+            fp = os.path.normpath(os.path.join(ARCHIVE, m.group(1), m.group(2), m.group(3)))
+            if not fp.startswith(ARCHIVE) or not os.path.isfile(fp):
+                hdr_only(404)
+                return
+            try:
+                size = str(os.path.getsize(fp))
+            except OSError:
+                hdr_only(404)
+                return
+            hdr_only(200, [("Content-Type", "video/mp4"), ("Content-Length", size),
+                           ("Accept-Ranges", "bytes")])
+            return
+        if path.startswith("/api/export/"):
+            hdr_only(200, [("Content-Type", "video/mp4"), ("Accept-Ranges", "bytes")])
+            return
+        hdr_only(405)
+
     def do_GET(self):
         path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         if path == "/login":
@@ -5777,6 +6413,44 @@ class Handler(BaseHTTPRequestHandler):
                 os.unlink(fp)
             except OSError:
                 pass
+        elif path == "/api/export/burn/dl":
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            jid = q.get("id", [""])[0]
+            job = STITCH_JOBS.get(jid)
+            if not job or job.get("state") != "done" or not os.path.isfile(job.get("path") or ""):
+                self._send(404, b"not ready")
+                return
+            fp = job["path"]
+            fname = job.get("name") or "teslacam.mp4"
+            try:
+                size = os.path.getsize(fp)
+            except OSError:
+                self._send(404, b"gone")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Accept-Ranges", "bytes")
+            # ASCII 兜底文件名 + UTF-8 原名: iOS 下载器对百分号编码的中文名会显示成乱码
+            self.send_header("Content-Disposition",
+                             'attachment; filename="teslacam.mp4"; filename*=UTF-8\'\'%s'
+                             % urllib.parse.quote(fname))
+            self.end_headers()
+            try:
+                with open(fp, "rb") as f:
+                    while True:
+                        chunk = f.read(262144)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            with STITCH_LOCK:
+                STITCH_JOBS.pop(jid, None)
+            try:
+                os.unlink(fp)
+            except OSError:
+                pass
         elif path == "/api/events":
             self._json(list_events())
         elif path == "/api/live/status":
@@ -5805,6 +6479,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/ota/check":
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             self._json(ota_check(force=q.get("force", ["0"])[0] == "1"))
+        elif path == "/api/settings":
+            self._json({"ok": True, "auto_update": load_settings().get("auto_update", True),
+                        "auto_checked": AUTO_UPD["last_check"], "auto_msg": AUTO_UPD["last_result"]})
         elif path == "/api/skins":
             skins = sorted(f for f in os.listdir(SKIN_DIR)
                            if f != "active.json" and os.path.isfile(os.path.join(SKIN_DIR, f)))
@@ -5985,6 +6662,7 @@ class Handler(BaseHTTPRequestHandler):
             if not MEDIA_SEM.acquire(timeout=20):
                 self._send(503, b"busy")
                 return
+            MEDIA_ACTIVE[0] += 1
             try:
                 self.send_response(206 if rng else 200)
                 self.send_header("Content-Type", "video/mp4")
@@ -6005,6 +6683,7 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
             finally:
+                MEDIA_ACTIVE[0] = max(0, MEDIA_ACTIVE[0] - 1)
                 MEDIA_SEM.release()
 
     def _serve_thumb(self, path):
@@ -6192,6 +6871,33 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/ota/rollback":
             ok, msg = ota_rollback()
             self._json({"ok": ok, "msg": msg})
+            return
+        if path == "/api/ota/auto":
+            body = self._read_json()
+            if body == "TOOBIG" or not isinstance(body, dict):
+                self._json({"ok": False, "msg": "参数错误"}, 400)
+                return
+            on = bool(body.get("on"))
+            save_settings({"auto_update": on})
+            if on:
+                AUTO_UPD["next_try"] = 0        # 刚打开就尽快检查一次, 不用等下一轮
+            self._json({"ok": True, "auto": on})
+            return
+        if path == "/api/export/burn":
+            body = self._read_json()
+            if body == "TOOBIG":
+                self._json({"ok": False, "error": "请求体过大 (上限 1MB)"}, 413)
+                return
+            if not isinstance(body, dict):
+                self._json({"ok": False, "error": "参数错误"}, 400)
+                return
+            jid, err = start_export(body.get("cat") or "", body.get("name") or "",
+                                    body.get("cams") or [], body.get("wm", True),
+                                    body.get("q") or "720p", body.get("files"))
+            if not jid:
+                self._json({"ok": False, "error": err}, 400)
+                return
+            self._json({"ok": True, "id": jid})
             return
         if path == "/api/stitch":
             body = self._read_json()
@@ -6439,4 +7145,5 @@ if __name__ == "__main__":
     threading.Thread(target=disk_guard, daemon=True).start()
     threading.Thread(target=health_logger, daemon=True).start()
     threading.Thread(target=notify_loop, daemon=True).start()
+    threading.Thread(target=auto_update_loop, daemon=True).start()
     srv.serve_forever()
