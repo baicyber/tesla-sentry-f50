@@ -337,13 +337,28 @@ fi
 say "启动虚拟U盘 ..."
 sh "$TSF_DIR/tesla-gadget.sh" on || echo "  [警告] 虚拟U盘启动失败, 见 $TSF_DIR/tesla-gadget.log"
 
-# 中文字体: 飞书推送视频烧录行车信息水印时由 libass 使用; 缺失只影响水印, 不影响其它功能
-if ! ls "$TSF_DIR"/fonts/*.ttf >/dev/null 2>&1; then
+# 中文字体: 设备端烧录行车信息水印时由 libass 使用。
+# 没有字体时导出会明确提示"缺少中文字体"(也可以在导出面板点「安装字体」补), 不影响其它功能。
+if ! ls "$TSF_DIR"/fonts/*.ttf "$TSF_DIR"/fonts/*.otf >/dev/null 2>&1; then
     say "下载中文字体 (水印用, 约 17MB) ..."
     mkdir -p "$TSF_DIR/fonts"
-    curl -sL --max-time 600 -o "$TSF_DIR/fonts/NotoSansSC.ttf" -C - \
+    FT="$TSF_DIR/fonts/NotoSansSC.ttf"
+    for U in \
         "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf" \
-        || echo "  [提示] 字体下载失败, 不影响使用; 需要水印时可手动补: 见 README"
+        "https://gcore.jsdelivr.net/gh/google/fonts@main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf" \
+        "https://ghfast.top/https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf" \
+        "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf"
+    do
+        curl -sL --max-time 600 -o "$FT.part" "$U" 2>/dev/null || continue
+        SZ=$(wc -c < "$FT.part" 2>/dev/null || echo 0)
+        if [ "$SZ" -gt 2000000 ]; then
+            mv -f "$FT.part" "$FT"
+            echo "  [OK] 字体已安装 ($((SZ/1048576))MB)"
+            break
+        fi
+        rm -f "$FT.part"
+    done
+    [ -f "$FT" ] || echo "  [提示] 字体下载失败, 不影响其它功能; 进网页 → 导出面板 → 点「安装字体」即可补上"
 fi
 
 say "启动查看器 ..."

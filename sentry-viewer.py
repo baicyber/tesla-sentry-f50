@@ -97,7 +97,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.18"
+APP_VERSION = "2.8.19"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -1136,6 +1136,14 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
     <input type="checkbox" id="expwm" style="margin-top:2px">
     <span style="line-height:1.45">叠加行车信息水印<small style="display:block;color:#7d8894;font-size:11px;margin-top:2px">半透明单行: 时间/位置/车速/挡位/油门/刹车, 基本不挡画面</small></span>
   </label>
+  <div class="expitem" id="expfont-row" style="border-top:1px solid var(--line2);margin-top:6px;flex-direction:column;align-items:stretch;gap:7px">
+    <span id="expfont-txt" style="font-size:12px;line-height:1.5;color:#7d8894">水印字体: 检查中…</span>
+    <div id="expfont-btns" style="display:none;gap:8px">
+      <button class="mini" id="expfont-btn" onclick="installFont()">安装字体</button>
+      <button class="mini" id="expfont-up" onclick="document.getElementById('fontfile').click()">上传字体</button>
+    </div>
+    <input type="file" id="fontfile" accept=".ttf,.otf,.ttc" style="display:none" onchange="uploadFont(this)">
+  </div>
   <div class="expitem" id="expq-row" style="border-top:1px solid var(--line2);margin-top:6px">
     <span style="flex:0 0 auto;color:#c6cdd4;cursor:default">下载清晰度</span>
     <div class="qsel" id="expq" style="flex:1;display:flex;justify-content:flex-end"></div>
@@ -2123,6 +2131,7 @@ function renderHud(f) {
   q('tp-date').textContent = telT0 ? fmtTelDate(new Date(telT0.getTime() + f[0]*1000)) : '—';
   q('tp-thr-n').textContent = f[3] + '%';
   q('tp-brk').classList.toggle('on', !!f[5]);   // 刹车只有布尔量, 不给百分比
+  // 转向灯: HUD 由 CSS 的 tpBlink 动画负责闪 (.on 只表示"打了哪边的灯")
   q('tp-bl').classList.toggle('on', f[6] === 1);
   q('tp-br').classList.toggle('on', f[6] === 2);
   const apNames = { 1: 'FSD', 2: 'AP', 3: 'TACC' };
@@ -2224,12 +2233,13 @@ function drawWm(ctx, t, W) {
   ctx.font = '800 ' + Math.round(14 * s) + 'px system-ui,"Segoe UI",sans-serif';
   ctx.fillText(f[1], xr - gr, yc + Math.round(1 * s));
   xr -= gr * 2 + Math.round(10 * s);
-  // 转向灯三角 (右/左)
+  // 转向灯三角 (右/左): 打灯是"一闪一闪", 不是常亮 (0.4s 一个节拍, 与导出视频里的水印同相位)
   const triS = Math.round(9 * s);
-  ctx.fillStyle = f[6] === 2 ? '#f59e0b' : '#4a545f';
+  const blinkOn = (Math.floor(t / 0.4) % 2) === 0;
+  ctx.fillStyle = (f[6] === 2 && blinkOn) ? '#f59e0b' : '#4a545f';
   ctx.beginPath(); ctx.moveTo(xr - triS, yc - triS * 0.62); ctx.lineTo(xr - triS, yc + triS * 0.62); ctx.lineTo(xr, yc); ctx.closePath(); ctx.fill();
   xr -= triS + Math.round(7 * s);
-  ctx.fillStyle = f[6] === 1 ? '#f59e0b' : '#4a545f';
+  ctx.fillStyle = (f[6] === 1 && blinkOn) ? '#f59e0b' : '#4a545f';
   ctx.beginPath(); ctx.moveTo(xr, yc - triS * 0.62); ctx.lineTo(xr, yc + triS * 0.62); ctx.lineTo(xr - triS, yc); ctx.closePath(); ctx.fill();
   xr -= triS + Math.round(12 * s);
   // 车速 (先画右侧单位, 再画数字, 保证 "数字 km/h" 顺序)
@@ -2483,15 +2493,84 @@ function openExport() {
   wmRow.title = hasTel ? '' : '该片段没有行车遥测 (SEI), 水印只显示时间与地点';
   expQ = curQ;  // 默认跟随当前播放清晰度
   renderExpQ();
+  checkFont();
   document.getElementById('expp').classList.add('open');
 }
 function closeExport() { document.getElementById('expp').classList.remove('open'); }
+/* ---- 水印字体: 设备端烧 ASS 字幕必须有中文字体, 没有就烧不出水印 (以前是静默跳过) ---- */
+let fontReady = null, fontInfo = null;
+/* 字体状态: 页面加载时预热一次, 导出面板直接用缓存值 —— 播放器开着 4~6 路视频时
+   浏览器对同域的 6 个连接会被视频占满, 面板里临时发的请求会一直排在"检查中" */
+function paintFont() {
+  const txt = document.getElementById('expfont-txt'), btns = document.getElementById('expfont-btns');
+  if (!txt) return;
+  if (fontReady === null) {
+    txt.textContent = '水印字体: 状态未知 (不影响其它功能)';
+    if (btns) btns.style.display = 'none';
+    return;
+  }
+  if (fontReady) {
+    txt.innerHTML = '<span style="color:#34c759">✓ 水印字体已就绪</span> ' +
+      '<span style="color:#5b646d">' + ((fontInfo || {}).name || '') + ' · ' +
+      (Math.round(((fontInfo || {}).size || 0) / 1048576 * 10) / 10) + 'MB</span>';
+    if (btns) btns.style.display = 'none';
+  } else {
+    txt.innerHTML = '<span style="color:#ff453a">✕ 缺少中文字体, 水印烧不进去</span><br>' +
+      '<span style="color:#5b646d;font-size:11px">点「安装字体」自动下载 (约17MB), 也可上传本地 ttf/otf</span>';
+    if (btns) btns.style.display = 'flex';
+  }
+}
+function loadFontInfo(force) {
+  if (!force && fontInfo !== null) return Promise.resolve(fontInfo);
+  return new Promise(res => {
+    let done = false;
+    const fin = d => {
+      if (done) return;
+      done = true;
+      fontInfo = d && typeof d === 'object' ? d : null;
+      fontReady = fontInfo ? !!fontInfo.ok : null;
+      res(fontInfo);
+    };
+    const tm = setTimeout(() => fin(null), 3000);   // 连接被视频占满时别一直卡住
+    fetch('/api/font', { cache: 'no-store' }).then(r => r.json())
+      .then(d => { clearTimeout(tm); fin(d); })
+      .catch(() => { clearTimeout(tm); fin(null); });
+  });
+}
+function checkFont() {
+  paintFont();
+  if (fontInfo === null) loadFontInfo().then(paintFont);
+}
+function installFont() {
+  const b = document.getElementById('expfont-btn'), txt = document.getElementById('expfont-txt');
+  const old = b.textContent;
+  b.disabled = true; b.textContent = '下载中…';
+  txt.innerHTML = '<span style="color:#ffb340">正在从镜像下载字体 (约17MB, 可能 1~3 分钟)…</span>';
+  fetch('/api/font/dl', { method: 'POST' }).then(r => r.json()).then(d => {
+    toast(d.msg || (d.ok ? '字体已安装' : '安装失败'));
+  }).catch(() => toast('安装失败: 网络不通? 试试「上传」本地字体'))
+    .finally(() => { b.disabled = false; b.textContent = old; loadFontInfo(true).then(paintFont); });
+}
+function uploadFont(inp) {
+  const f = inp.files && inp.files[0];
+  if (!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  document.getElementById('expfont-txt').textContent = '正在上传字体…';
+  fetch('/api/font/upload', { method: 'POST', body: fd }).then(r => r.json()).then(d => {
+    toast(d.msg || (d.ok ? '字体已安装' : '上传失败'));
+  }).catch(() => toast('上传失败')).finally(() => { inp.value = ''; loadFontInfo(true).then(paintFont); });
+}
 function expChk(on) { [...document.querySelectorAll('#expchks input')].forEach(c => c.checked = on); }
 function doExport() {
   if (!cur) return;
   const sel = [...document.querySelectorAll('#expchks input:checked')].map(c => c.value);
   if (!sel.length) { toast('请至少选择一路'); return; }
   const wm = document.getElementById('expwm').checked;
+  // 设备端烧水印必须有中文字体, 缺了就明确拦住 (别静默给一段没有水印的视频)
+  if (wm && fontReady === false) {
+    toast('设备缺少中文字体, 水印烧不进去: 请先点「安装字体」');
+    return;
+  }
   closeExport();
   if (sel.length === 1 && !wm) {
     const v = curVids().find(x => x.cam === sel[0]);
@@ -3497,6 +3576,8 @@ document.getElementById('anyfile-file').onchange = async function () {
 injectSkin();
 applyLang();
 load();
+// 字体状态预热: 这时还没开播放器, 连接池是空的, 一定能拿到
+loadFontInfo().then(paintFont);
 </script></body></html>"""
 
 
@@ -4709,34 +4790,213 @@ def _feishu_upload(conf, jpg):
 VID_Q = {"720p": (720, 1500), "480p": (480, 800), "360p": (360, 500)}   # 输出高度, 目标码率 kbps
 
 FONT_DIR = os.environ.get("TSF_FONTS") or "/opt/tesla-sentry/fonts"
+FONT_EXTS = (".ttf", ".otf", ".ttc")
+# 字体兜底搜索: 有的盒子把中文字体装在系统目录里, 只要找得到就能烧水印,
+# 不必非得放在我们的 FONT_DIR (install.sh 那步失败过很多次, 用户直接覆盖 py 升级也不会带字体)
+FONT_ALTS = (
+    "/usr/share/fonts", "/usr/lib/fonts", "/usr/local/share/fonts",
+    "/opt/usr/share/fonts", "/system/fonts", "/opt/etc/fonts",
+)
+FONT_NAME = "NotoSansSC.ttf"
+FONT_SRC = (
+    "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+    "https://gcore.jsdelivr.net/gh/google/fonts@main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+    "https://fastly.jsdelivr.net/gh/google/fonts@main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+    "https://ghfast.top/https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+    "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+)
+FONT_MIN = 2 * 1024 * 1024          # 有效的中文字体至少几 MB, 小于这个说明下到的是错误页
+_FONT_CACHE = {"at": 0.0, "path": ""}
+FONT_LOCK = threading.Lock()
+
+
+def _font_cands(dirp, depth=1):
+    """列出目录里 (最多 depth 层) 所有可能是字体的文件"""
+    if not dirp or not os.path.isdir(dirp):
+        return
+    base = dirp.rstrip("/").count("/")
+    try:
+        for root, dirs, files in os.walk(dirp):
+            if root.rstrip("/").count("/") - base >= depth:
+                dirs[:] = []
+            for n in sorted(files):
+                if n.lower().endswith(FONT_EXTS):
+                    fp = os.path.join(root, n)
+                    try:
+                        if os.path.getsize(fp) >= 20000:
+                            yield fp
+                    except OSError:
+                        pass
+    except OSError:
+        return
+
+
+def _font_has_cjk(fp, chars=(0x4E2D, 0x8F66, 0x5239)):   # 中 / 车 / 刹
+    """查 cmap 里有没有这几个常用汉字。
+    系统字体目录里常有纯拉丁字体, 拿它烧中文只会得到一排方块, 比没有还难看。"""
+    try:
+        with open(fp, "rb") as f:
+            d = f.read(24 * 1024 * 1024)
+        if len(d) < 12:
+            return False
+        base = 0
+        if d[:4] == b"ttcf":                 # 字体集合 (.ttc): 表目录在第一个 face 的偏移处
+            if len(d) < 16:
+                return False
+            base = struct.unpack(">I", d[12:16])[0]
+            if base + 12 > len(d):
+                return False
+        numt = struct.unpack(">H", d[base + 4:base + 6])[0]
+        cmap = 0
+        for i in range(min(numt, 128)):
+            o = base + 12 + i * 16
+            if d[o:o + 4] == b"cmap":
+                cmap = struct.unpack(">I", d[o + 8:o + 12])[0]
+                break
+        if not cmap or cmap + 4 > len(d):
+            return False
+        nsub = struct.unpack(">H", d[cmap + 2:cmap + 4])[0]
+        best = 0
+        for i in range(min(nsub, 32)):
+            o = cmap + 4 + i * 8
+            plat, enc, off = struct.unpack(">HHI", d[o:o + 8])
+            if plat == 3 and enc in (1, 10):
+                best = cmap + off
+                break
+            if plat == 0 and not best:
+                best = cmap + off
+        if not best or best + 4 > len(d):
+            return False
+        fmt = struct.unpack(">H", d[best:best + 2])[0]
+
+        def has(cp):
+            try:
+                if fmt == 4:
+                    segx2 = struct.unpack(">H", d[best + 6:best + 8])[0]
+                    seg = segx2 // 2
+                    ends = struct.unpack(">%dH" % seg, d[best + 14:best + 14 + segx2])
+                    starts = struct.unpack(">%dH" % seg, d[best + 16 + segx2:best + 16 + segx2 * 2])
+                    for k in range(seg):
+                        if starts[k] <= cp <= ends[k]:
+                            return True
+                    return False
+                if fmt == 12:
+                    ng = struct.unpack(">I", d[best + 12:best + 16])[0]
+                    for k in range(min(ng, 20000)):
+                        o2 = best + 16 + k * 12
+                        s0, e0 = struct.unpack(">II", d[o2:o2 + 8])
+                        if s0 <= cp <= e0:
+                            return True
+                    return False
+            except (struct.error, IndexError):
+                return False
+            return False
+
+        return all(has(c) for c in chars)
+    except (OSError, struct.error):
+        return False
 
 
 def _wm_font():
-    """水印用的中文字体 (libass 经 fontsdir 加载); 没有则返回空"""
-    try:
-        for n in sorted(os.listdir(FONT_DIR)):
-            if n.lower().endswith((".ttf", ".otf", ".ttc")):
-                return os.path.join(FONT_DIR, n)
-    except OSError:
-        pass
-    return ""
+    """水印用的中文字体 (libass 经 fontsdir 加载); 没有则返回空。
+    先看 FONT_DIR, 再扫系统字体目录 —— 以前只认 FONT_DIR, 字体没装就等于静默不出水印。"""
+    now = time.time()
+    if _FONT_CACHE["path"] and now - _FONT_CACHE["at"] < 20:
+        if os.path.isfile(_FONT_CACHE["path"]):
+            return _FONT_CACHE["path"]
+    fp = ""
+    for cand in _font_cands(FONT_DIR, 1):
+        if _font_has_cjk(cand):
+            fp = cand
+            break
+    if not fp:
+        for d in FONT_ALTS:
+            for cand in _font_cands(d, 3):
+                if _font_has_cjk(cand):
+                    fp = cand
+                    break
+            if fp:
+                break
+    _FONT_CACHE.update({"at": now, "path": fp})
+    return fp
+
+
+def _font_dir():
+    """实际字体所在目录 (fontsdir 必须指向这里, 否则 libass 找不到)"""
+    fp = _wm_font()
+    return os.path.dirname(fp) if fp else FONT_DIR
+
+
+def _font_reset():
+    _FONT_CACHE.update({"at": 0.0, "path": ""})
 
 
 def _wm_fontconf():
     """给 ffmpeg 自带的 fontconfig 一个最小配置 (OpenWrt 上没有 /etc/fonts/fonts.conf,
-    会导致 libass 的字体选择整个失效, 连矢量图形都不画)。返回配置文件路径。"""
-    p = os.path.join(FONT_DIR, "fonts.conf")
-    try:
-        os.makedirs(FONT_DIR, exist_ok=True)
-        if not os.path.isfile(p):
+    会导致 libass 的字体选择整个失效, 连矢量图形都不画)。返回配置文件路径。
+    目录按实际字体位置写, FONT_DIR 不可写时退到 /tmp。"""
+    d = _font_dir()
+    for p in (os.path.join(FONT_DIR, "fonts.conf"), "/tmp/tsf-fonts.conf"):
+        try:
+            pd = os.path.dirname(p)
+            if pd:
+                os.makedirs(pd, exist_ok=True)
             with open(p, "w", encoding="utf-8") as f:
                 f.write('<?xml version="1.0"?>\n'
                         '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n'
                         '<fontconfig>\n  <dir>%s</dir>\n  <cachedir>/tmp/fccache</cachedir>\n'
-                        '</fontconfig>\n' % FONT_DIR)
+                        '</fontconfig>\n' % d)
+            return p
+        except OSError:
+            continue
+    return ""
+
+
+def _font_valid(fp, min_size=100 * 1024):
+    """粗校验: TTF/OTF/TTC 的文件头 + 体积"""
+    try:
+        if os.path.getsize(fp) < min_size:
+            return False
+        with open(fp, "rb") as f:
+            magic = f.read(4)
+        return magic in (b"\x00\x01\x00\x00", b"true", b"ttcf", b"OTTO")
     except OSError:
-        return ""
-    return p
+        return False
+
+
+def _font_download():
+    """从官方 google/fonts 仓下载中文字体 (17MB) 到 FONT_DIR; 多镜像串行重试。
+    返回 (ok, msg)。"""
+    os.makedirs(FONT_DIR, exist_ok=True)
+    dst = os.path.join(FONT_DIR, FONT_NAME)
+    tmp = dst + ".part"
+    errs = []
+    for u in FONT_SRC:
+        try:
+            req = urllib.request.Request(u, headers={"User-Agent": "tsf-font/" + APP_VERSION})
+            n = 0
+            with urllib.request.urlopen(req, timeout=45) as r, open(tmp, "wb") as fo:
+                while True:
+                    b = r.read(262144)
+                    if not b:
+                        break
+                    fo.write(b)
+                    n += len(b)
+                    if n > 40 * 1024 * 1024:
+                        raise IOError("文件异常大")
+            if not _font_valid(tmp, FONT_MIN) or not _font_has_cjk(tmp):
+                raise IOError("下载内容不是有效的中文字体 (%d 字节)" % n)
+            os.replace(tmp, dst)
+            _font_reset()
+            return True, "字体安装完成 (%.1fMB)" % (n / 1048576.0)
+        except Exception as ex:
+            errs.append("%s %s" % (u.split("/")[2], _err_kind(ex)))
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return False, "字体下载失败: " + "; ".join(errs[:3])
 
 
 def _wm_tw(text, fs):
@@ -4881,8 +5141,9 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
         return str(v).replace("\\", "").replace("{", "").replace("}", "").replace("\n", " ")
 
     def ts(n):
-        n = int(n)
-        return "%d:%02d:%02d.000" % (n // 3600, n % 3600 // 60, n % 60)
+        # 百分秒精度: 转向灯闪烁要切 0.4s 片段, 整秒精度会把整段闪成一片
+        n = max(0.0, float(n))
+        return "%d:%02d:%05.2f" % (int(n // 3600), int(n % 3600 // 60), n % 60)
 
     lines = [
         "[Script Info]", "ScriptType: v4.00+", "PlayResX: %d" % W, "PlayResY: %d" % H,
@@ -4940,6 +5201,18 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
             yield i, j + 1, k
             i = j + 1
 
+    def blink(a, b, period=0.4):
+        """打灯时真正的闪烁: 按绝对时间的 0.4s 网格交替亮/灭, 只产出"亮"的时间片。
+        相位按片段内秒数对齐, 和网页 HUD / canvas 水印用的是同一套节拍。"""
+        k = int(math.floor(a / period))
+        cur = float(a)
+        while cur < b - 1e-6:
+            nxt = min(float(b), (k + 1) * period)
+            if nxt > cur and k % 2 == 0:
+                yield cur, nxt
+            cur = nxt
+            k += 1
+
     # ---- 左: 日期时间 + 城市·街道 合成一行 (由 libass 顺序排版, 不依赖宽度估算) ----
     for n in range(dur):
         if t0 is not None:
@@ -4967,10 +5240,15 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
         shape(a, b, C_GEAR, _ass_circle(gear_cx, yc, gr, 28))
         txt(a, b, "WmP", 5, gear_cx, yc, f_gear, C_WHITE, gear)
         if not narrow:
-            shape(a, b, C_TRI_ON if turn == 2 else C_TRI_OFF,
-                  _ass_pts([(rtri_x, yc - tri * 0.62), (rtri_x, yc + tri * 0.62), (rtri_x + tri, yc)]))
-            shape(a, b, C_TRI_ON if turn == 1 else C_TRI_OFF,
-                  _ass_pts([(ltri_x + tri, yc - tri * 0.62), (ltri_x + tri, yc + tri * 0.62), (ltri_x, yc)]))
+            rt_path = _ass_pts([(rtri_x, yc - tri * 0.62), (rtri_x, yc + tri * 0.62), (rtri_x + tri, yc)])
+            lt_path = _ass_pts([(ltri_x + tri, yc - tri * 0.62), (ltri_x + tri, yc + tri * 0.62), (ltri_x, yc)])
+            # 底色常亮 (不打灯就是这颗暗灰三角), 亮色再按闪烁相位叠上去
+            shape(a, b, C_TRI_OFF, rt_path)
+            shape(a, b, C_TRI_OFF, lt_path)
+            if turn in (1, 2):
+                pth = rt_path if turn == 2 else lt_path
+                for ga, gb in blink(a, b):
+                    shape(ga, gb, C_TRI_ON, pth, layer=2)
 
     # ---- 右: AP 方向盘 + 车速 (按"车速 + AP 状态"分组; 数字变宽时方向盘跟着左移, 与网页一致) ----
     for a, b, k in (spans(lambda n: (max(0, int(round(fr[n][2]))), int(fr[n][7] or 0) in (1, 2, 3)))
@@ -5033,7 +5311,8 @@ def _make_push_video(fp, off, quality="480p", dur=30):
     tmp = out + ".%d.tmp" % os.getpid()
     vf = "scale=-2:%d" % h
     if ass:
-        vf += ",subtitles='%s':fontsdir='%s'" % (ass.replace(":", "\\:").replace("'", ""), FONT_DIR.replace("'", ""))
+        vf += ",subtitles='%s':fontsdir='%s'" % (ass.replace(":", "\\:").replace("'", ""),
+                                                 _font_dir().replace("'", ""))
     cmd = ["sh", "-c", 'echo 300 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
            FFMPEG_BIN, "-nostdin", "-hide_banner", "-loglevel", "error", "-threads", "4",
            "-ss", "%.2f" % ss, "-t", str(dur), "-i", fp,
@@ -5805,6 +6084,10 @@ def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
                               size=(OW, OH)) or ""
             except Exception:
                 ass = ""
+        if wm and not ass:
+            # 勾了水印却没生成字幕: 宁可报错, 也不要给用户一段没有水印的视频
+            fail("水印生成失败 (设备缺少中文字体?) — 请点「安装字体」后重试")
+            return
 
         cmd = [FFMPEG_BIN, "-hide_banner", "-loglevel", "error", "-y", "-filter_threads", "1"]
         for f in small:
@@ -5822,7 +6105,7 @@ def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
             last = "[vg]"
         if ass:
             sub = "subtitles='%s':fontsdir='%s'" % (ass.replace(":", "\\:").replace("'", ""),
-                                                    FONT_DIR.replace("'", ""))
+                                                    _font_dir().replace("'", ""))
             fc.append("%s%s[vout]" % (last, sub))
             last = "[vout]"
         cmd += ["-filter_complex", ";".join(fc), "-map", last, "-map", "0:a?",
@@ -5885,6 +6168,10 @@ def start_export(cat, name, cams, wm=True, q="720p", files=None):
            不传则退回"最新一组"的行为。"""
     if not os.path.isfile(FFMPEG_BIN):
         return None, "设备上没有 ffmpeg, 无法生成 mp4"
+    # 字体缺失时绝不静默出无水印视频 (2.8.18 之前就是这样: 用户勾了水印拿到一段干干净净的片子)
+    if wm and not _wm_font():
+        return None, ("设备缺少中文字体, 水印烧不进去: 请先点「安装字体」(约 17MB) 再导出, "
+                      "或取消勾选水印直接导出视频")
     evdir = safe_archive_dir(os.path.join(ARCHIVE, cat, name))
     if not evdir or not os.path.isdir(evdir):
         return None, "事件不存在"
@@ -6768,6 +7055,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             self._json({"ok": True, "auto_update": load_settings().get("auto_update", True),
                         "auto_checked": AUTO_UPD["last_check"], "auto_msg": AUTO_UPD["last_result"]})
+        elif path == "/api/font":
+            fp = _wm_font()
+            self._json({"ok": bool(fp), "path": fp, "name": os.path.basename(fp) if fp else "",
+                        "size": os.path.getsize(fp) if fp else 0,
+                        "dir": os.path.dirname(fp) if fp else FONT_DIR,
+                        "install_dir": FONT_DIR})
         elif path == "/api/skins":
             skins = sorted(f for f in os.listdir(SKIN_DIR)
                            if f != "active.json" and os.path.isfile(os.path.join(SKIN_DIR, f)))
@@ -7168,6 +7461,43 @@ class Handler(BaseHTTPRequestHandler):
             if on:
                 AUTO_UPD["next_try"] = 0        # 刚打开就尽快检查一次, 不用等下一轮
             self._json({"ok": True, "auto": on})
+            return
+        if path == "/api/font/dl":
+            # 一键从官方 google/fonts 装中文字体 (17MB, 多镜像串行重试)
+            if not FONT_LOCK.acquire(False):
+                self._json({"ok": False, "msg": "字体正在安装中, 请稍等"}, 409)
+                return
+            try:
+                ok, msg = _font_download()
+            finally:
+                FONT_LOCK.release()
+            self._json({"ok": ok, "msg": msg}, 200 if ok else 500)
+            return
+        if path == "/api/font/upload":
+            fn, data, _f = self._read_upload()
+            if fn == "TOOBIG":
+                self._json({"ok": False, "msg": "字体文件过大 (上限 100MB)"}, 413)
+                return
+            if not data or not fn or not str(fn).lower().endswith(FONT_EXTS):
+                self._json({"ok": False, "msg": "仅支持 ttf / otf / ttc 字体文件"}, 400)
+                return
+            try:
+                os.makedirs(FONT_DIR, exist_ok=True)
+                base = safe_name(os.path.basename(str(fn))) or FONT_NAME
+                if not base.lower().endswith(FONT_EXTS):
+                    base = FONT_NAME
+                dst = os.path.join(FONT_DIR, base)
+                with open(dst + ".part", "wb") as f:
+                    f.write(data)
+                os.replace(dst + ".part", dst)
+                if not _font_valid(dst):
+                    os.unlink(dst)
+                    self._json({"ok": False, "msg": "这不是有效的字体文件"}, 400)
+                    return
+                _font_reset()
+                self._json({"ok": True, "msg": "字体已安装 (%.1fMB)" % (len(data) / 1048576.0)})
+            except OSError as ex:
+                self._json({"ok": False, "msg": "写入失败: %s" % ex}, 500)
             return
         if path == "/api/export/burn":
             body = self._read_json()

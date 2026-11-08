@@ -150,6 +150,26 @@ python3 -m py_compile /tmp/sv.py && cp /tmp/sv.py /opt/tesla-sentry/sentry-viewe
   && chmod 755 /opt/tesla-sentry/sentry-viewer.py && /etc/init.d/tesla-viewer restart
 ```
 
+### 导出勾了水印，视频里却没有水印
+
+设备端烧水印（`ffmpeg` + libass）需要**中文字体**。2.8.18 及更早版本在字体缺失时会静默跳过整条字幕链 —— 视频照样导出成功，但一个字都没有。2.8.19 起：
+
+- 打开导出面板会显示「水印字体」状态；缺失时给出 **安装字体**（一键从官方 `google/fonts` 仓下载，约 17MB，多镜像重试）和 **上传**（本地 ttf/otf）两个按钮；
+- 缺字体时导出会被明确拦下并提示，不会再给你一段没水印的视频；
+- 字体探测会在 `/opt/tesla-sentry/fonts` 之外兜底扫描系统字体目录，已经装过字体的盒子升级后立刻可用。
+
+命令行手动补字体（无外网时从别处拷贝也行）：
+
+```bash
+mkdir -p /opt/tesla-sentry/fonts
+wget -O /opt/tesla-sentry/fonts/NotoSansSC.ttf \
+  "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf" \
+  || wget -O /opt/tesla-sentry/fonts/NotoSansSC.ttf \
+  "https://ghfast.top/https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf"
+ls -l /opt/tesla-sentry/fonts/     # 应约 17MB
+/etc/init.d/tesla-viewer restart
+```
+
 更多排障见 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)；实现原理（exFAT 只读解析、双链路互斥、SEI 解码、U 盘管理状态机）见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ---
