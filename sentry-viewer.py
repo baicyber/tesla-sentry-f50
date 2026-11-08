@@ -97,7 +97,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.22"
+APP_VERSION = "2.8.23"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -1478,14 +1478,16 @@ if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListen
   if ((localStorage.getItem('tsf_theme') || 'auto') === 'auto') applyTheme('auto');
 });
 /* ---------- 清晰度选择 ----------
-   内网(100.96.x/192.168.x)默认原画; 走公网/穿透访问时默认 360p 省 5G 上行带宽 */
+   默认 360p: 公网/5G 上行带宽有限, 原画一段 26MB 根本传不完; 内网也一样统一,
+   少一个分支少一份困惑 (想要原画点一下即可, 选过之后会记住)
+   记忆 key 从 tsfq 换成 tsfq2, 否则老设备里存的 orig 会盖掉新默认值 */
 const Q_LIST = [['orig', '原画'], ['720p', '720p'], ['480p', '480p'], ['360p', '360p']];
 const isLanNet = /^(100\.96\.|192\.168\.|10\.|127\.)/.test(location.hostname);
-let curQ = localStorage.getItem('tsfq') || (isLanNet ? 'orig' : '360p');
+let curQ = localStorage.getItem('tsfq2') || '360p';
 /* 苹果设备: 合成改走设备端 (Safari 的 MediaRecorder 只能出 webm, 微信不认) */
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-if (!Q_LIST.some(x => x[0] === curQ)) curQ = 'orig';
+if (!Q_LIST.some(x => x[0] === curQ)) curQ = '360p';
 function qUrl(u) { return curQ === 'orig' ? u : u + '?q=' + curQ; }
 function renderQSel() {
   const curLabel = (Q_LIST.find(x => x[0] === curQ) || Q_LIST[0])[1];
@@ -1505,7 +1507,7 @@ document.addEventListener('click', closeQ);
 function setQuality(q) {
   closeQ();
   if (q === curQ) return;
-  curQ = q; localStorage.setItem('tsfq', q);
+  curQ = q; localStorage.setItem('tsfq2', q);
   renderQSel();
   if (!cur) return;
   // 记住各路播放进度与播放状态, 换源后续播
@@ -1514,7 +1516,7 @@ function setQuality(q) {
   const times = [...document.querySelectorAll('#vgrid video')].map(v => v.currentTime || 0);
   const hint = document.getElementById('qhint');
   if (q !== 'orig') {
-    hint.textContent = '正在按 ' + q + ' 转码所选片段 (首次约需 20~60 秒/路, 转好一次后秒开)…';
+    hint.textContent = '正在按 ' + q + ' 转码所选片段 (首次约需 15 秒/路, 转好一次后秒开)…';
     hint.style.display = 'block';
     clearTimeout(setQuality._ht);
     setQuality._ht = setTimeout(() => { hint.style.display = 'none'; }, 90000);
@@ -4484,6 +4486,7 @@ try:
 except OSError:
     pass
 Q_SEM = threading.BoundedSemaphore(int(os.environ.get("TSF_TR_CODES", "2")))  # 并发转码上限: 8核允许2个×4线程, 多路点开排队时间减半
+USER_TRANS = [0]      # 正在排队/占用转码槽的用户请求数; 后台预热看到 >0 就让位
 RES_MAX = 2 * 1024 * 1024 * 1024  # 清晰度缓存总量上限 2GB, 超了从最旧开始删
 
 
@@ -5868,21 +5871,43 @@ def notify_status():
     }
 
 
-def get_variant(fp, qv):
-    """返回 qv 清晰度的缓存文件路径; 没有就排队转码一份 (最多2个并发), 失败回退原文件"""
+def _variant_path(fp, qv):
+    """清晰度缓存文件路径; 源文件一变 (size/mtime) 自然换 key, 不会拿旧缓存糊弄"""
     try:
         st = os.stat(fp)
     except OSError:
-        return fp
+        return ""
     key = hashlib.md5(("%s|%d|%d|%s" % (fp, st.st_size, st.st_mtime, qv)).encode()).hexdigest()
-    out = os.path.join(RES_DIR, key + ".mp4")
+    return os.path.join(RES_DIR, key + ".mp4")
+
+
+def _variant_ready(fp, qv):
+    p = _variant_path(fp, qv)
+    try:
+        return bool(p) and os.path.getsize(p) > 0
+    except OSError:
+        return False
+
+
+def get_variant(fp, qv, slot=True):
+    """返回 qv 清晰度的缓存文件路径; 没有就排队转码一份 (最多2个并发), 失败回退原文件。
+    slot=False 表示调用方自己已持有 Q_SEM 名额 (后台预热用, 免得跟用户请求抢两个槽)"""
+    out = _variant_path(fp, qv)
+    if not out:
+        return fp
     if os.path.isfile(out) and os.path.getsize(out) > 0:
         return out
     if not os.path.isfile(FFMPEG_BIN):
         return fp
-    # 排队等空闲转码槽 (最多 10 分钟, 超时回退原文件)
-    if not Q_SEM.acquire(timeout=600):
-        return fp
+    if slot:
+        # 排队等空闲转码槽 (最多 10 分钟, 超时回退原文件); 期间的等待要让预热线程看见
+        USER_TRANS[0] += 1
+        try:
+            got = Q_SEM.acquire(timeout=600)
+        finally:
+            USER_TRANS[0] = max(0, USER_TRANS[0] - 1)
+        if not got:
+            return fp
     try:
         if os.path.isfile(out) and os.path.getsize(out) > 0:  # 别人刚转完
             return out
@@ -5896,7 +5921,7 @@ def get_variant(fp, qv):
         except Exception:
             pass
         w, h, kbps = RES_SCALE[qv]
-        tmp = out + ".%d.tmp" % os.getpid()
+        tmp = out + ".%d_%d.tmp" % (os.getpid(), threading.get_ident())
         # 子进程把 oom_score_adj 调回正数 (父进程是 -300 会被继承), OOM 时优先杀转码而不是主服务
         cmd = ["sh", "-c",
                'echo 300 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
@@ -5922,7 +5947,8 @@ def get_variant(fp, qv):
                 pass
         return fp
     finally:
-        Q_SEM.release()
+        if slot:
+            Q_SEM.release()
 CAM_ORDER6 = ["left_pillar", "front", "right_pillar", "left_repeater", "back", "right_repeater"]
 CAM_ORDER4 = ["front", "back", "left_repeater", "right_repeater"]
 
@@ -5952,6 +5978,108 @@ def order_files(names):
     """按方位顺序排列 mp4: 6 路左右分列/前后居中, 4 路前后一排、左右B柱一排 (与前端 camSort 一致)"""
     order = CAM_ORDER6 if len(names) >= 6 else CAM_ORDER4
     return sorted(names, key=lambda f: (order.index(cam_of(f)) if cam_of(f) in order else 99, f))
+
+
+# ---------- 新事件 360p 预热: 点开秒开 ----------
+# 实测 (T760 / 8 核): 一段 60 秒的 1280x960 转 360p 要 13~16 秒, 4 路 2 并发要 56 秒 ——
+# 用户点开就是干等一分钟。这里在新事件落盘后, 后台把「默认打开的那一组」先转好。
+# 刻意保守:
+#   * 只转触发段那一组 (event.json 决定), 不转整个事件: 整事件 163MB/个, 27 个事件要 4.4GB,
+#     而缓存上限只有 2GB; 只转触发段约 15MB/事件, 全加起来 ~400MB
+#   * 单路串行, 且只借 Q_SEM 一个名额: 有人在看视频 / 有人在等转码就让位
+#     (实测 2 并发 56s 反而比串行 52s 慢, 8 核被 2x4 线程吃满, 给用户留余量更划算)
+#   * 最近 2 分钟还在写的事件跳过, 免得转半截文件
+PREWARM = {"on": os.environ.get("TSF_PREWARM", "1") != "0", "done": 0, "last": "", "skip": {}}
+PREWARM_CATS = ("SentryClips", "SavedClips")
+PREWARM_MAX_CAM = 6
+PREWARM_Q = "360p"
+
+
+def _prewarm_targets(cat, name):
+    """该事件默认打开的那一组 mp4: 触发摄像头所在片段组的全部方位 (最多 6 路)"""
+    fp, _off, _meta = _pick_clip(cat, name)
+    if not fp:
+        return []
+    d = os.path.dirname(fp)
+    k = clip_key(os.path.basename(fp))
+    try:
+        names = [f for f in os.listdir(d)
+                 if f.lower().endswith(".mp4") and clip_key(f) == k]
+    except OSError:
+        return []
+    if not names:
+        return []
+    return [os.path.join(d, f) for f in order_files(names)[:PREWARM_MAX_CAM]]
+
+
+def _prewarm_pick():
+    """挑一个还有 360p 没转的事件 (新的优先), 返回 (mtime, cat, name, [待转文件])"""
+    best = None
+    for cat in PREWARM_CATS:
+        base = os.path.join(ARCHIVE, cat)
+        try:
+            names = os.listdir(base)
+        except OSError:
+            continue
+        for name in names:
+            d = os.path.join(base, name)
+            if not os.path.isdir(d) or len(name) < 19:
+                continue
+            if PREWARM["skip"].get(cat + "/" + name, 0) >= 2:
+                continue                       # 连续转不出来的事件不再死磕
+            try:
+                mt = os.path.getmtime(d)
+            except OSError:
+                continue
+            if time.time() - mt < 120:         # 可能还在同步, 先别动
+                continue
+            if best is not None and mt <= best[0]:
+                continue                       # 已经有更新的事件排在前面
+            todo = [f for f in _prewarm_targets(cat, name) if not _variant_ready(f, PREWARM_Q)]
+            if todo:
+                best = (mt, cat, name, todo)
+    return best
+
+
+def prewarm_loop():
+    """后台把新事件的触发段转成 360p; 有人看视频/等转码时让位, 空闲了再接着做"""
+    time.sleep(150)                            # 开机先让同步和服务稳定
+    while True:
+        try:
+            if not PREWARM["on"]:
+                time.sleep(600)
+                continue
+            if MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0:
+                time.sleep(15)                 # 有人在用, 别抢
+                continue
+            job = _prewarm_pick()
+            if not job:
+                time.sleep(90)                 # 都转好了, 隔一会儿再扫新事件
+                continue
+            _mt, cat, name, todo = job
+            n = 0
+            for fp in todo:
+                if MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0:
+                    break                      # 用户来了, 剩下的下次再做
+                if not Q_SEM.acquire(blocking=False):
+                    break                      # 转码槽被用户占着, 让位
+                try:
+                    get_variant(fp, PREWARM_Q, slot=False)
+                    if _variant_ready(fp, PREWARM_Q):
+                        n += 1
+                finally:
+                    Q_SEM.release()
+                time.sleep(1)
+            if n:
+                PREWARM["done"] += n
+                PREWARM["last"] = "%s/%s · %d 路" % (cat, name, n)
+                PREWARM["skip"].pop(cat + "/" + name, None)
+            else:
+                key = cat + "/" + name
+                PREWARM["skip"][key] = PREWARM["skip"].get(key, 0) + 1
+                time.sleep(30)
+        except Exception:
+            time.sleep(60)
 
 
 def probe_duration(path):
@@ -7231,6 +7359,11 @@ class Handler(BaseHTTPRequestHandler):
                         "size": os.path.getsize(fp) if fp else 0,
                         "dir": os.path.dirname(fp) if fp else FONT_DIR,
                         "install_dir": FONT_DIR})
+        elif path == "/api/prewarm":
+            # 360p 预热进度 (调试/自检用): done=累计转好路数, last=最近做的事件
+            self._json({"on": PREWARM["on"], "done": PREWARM["done"], "last": PREWARM["last"],
+                        "q": PREWARM_Q, "busy_users": USER_TRANS[0],
+                        "media_active": MEDIA_ACTIVE[0]})
         elif path == "/api/skins":
             skins = sorted(f for f in os.listdir(SKIN_DIR)
                            if f != "active.json" and os.path.isfile(os.path.join(SKIN_DIR, f)))
@@ -7932,4 +8065,5 @@ if __name__ == "__main__":
     threading.Thread(target=health_logger, daemon=True).start()
     threading.Thread(target=notify_loop, daemon=True).start()
     threading.Thread(target=auto_update_loop, daemon=True).start()
+    threading.Thread(target=prewarm_loop, daemon=True).start()
     srv.serve_forever()
