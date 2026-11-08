@@ -97,7 +97,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.21"
+APP_VERSION = "2.8.22"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -1695,6 +1695,14 @@ function sigOf(d) {
   return Object.keys(d).map(c => c + ':' + d[c].map(e => e.name + '/' + e.videos.length).join(',')).join('|');
 }
 
+/* 容量条配色: <30% 绿 / 30%~85% 蓝 / >85% 红 (三行同规则) */
+function storColor(pct) {
+  if (!(pct > 0)) return '#4cc38a';
+  if (pct > 85) return '#e8443f';
+  if (pct < 30) return '#4cc38a';
+  return '#2f6ee0';
+}
+
 /* 实时同步状态 + 新片段自动出现 */
 async function refreshLive() {
   let live = null;
@@ -1717,28 +1725,27 @@ async function refreshLive() {
       if (!n || n < 0) return '0MB';
       return n >= GB ? (n / GB).toFixed(1) + 'GB' : Math.round(n / 1048576) + 'MB';
     };
-    const tset = (v, used, total, bar, color) => {
+    const tset = (v, used, total, bar) => {
       document.getElementById(v).textContent = total > 0 ? gb(used) + ' / ' + gb(total) : gb(used);
       const pct = total > 0 ? Math.min(100, used / total * 100) : 0;
       const el = document.getElementById(bar);
       el.style.width = pct.toFixed(1) + '%';
-      // 到 90% 一律转红, 三行同规则
-      el.style.background = pct >= 90 ? '#e8443f' : color;
+      el.style.background = storColor(pct);
     };
     sw.style.display = '';
     // 虚拟U盘: 卷内实际写入 / 镜像标称容量
     // (img_real 是镜像在宿主盘上的预分配占用, 几乎等于标称容量, 永远 100% 不直观)
     tset('storvusb', dk.img_used != null ? dk.img_used : dk.img_real, dk.img_nominal,
-         'storvusbbar', '#2f6ee0');
+         'storvusbbar');
     const vu = document.getElementById('storvusb');
     if (vu) vu.title = t('车机 U 盘里已写入的数据 / 车机看到的容量');
     // 归档区: 已归档 / 可用上限 (= 已归档 + 盘剩余)
     const arcTot = (dk.arc_used || 0) + (dk.arc_free || 0);
-    tset('storarc', dk.arc_used, arcTot, 'storarcbar', '#4cc38a');
+    tset('storarc', dk.arc_used, arcTot, 'storarcbar');
     const ia = document.getElementById('storarc');
     if (ia) ia.title = t('盒子上保存的历史副本 (车机 U 盘里只保留滚动缓冲)');
-    // 总占用: 整盘已用 / 整盘容量 (三行都在 tset 里按 90% 自动转红)
-    tset('stortot', dk.disk_used, dk.disk_total, 'stortotbar', '#2f6ee0');
+    // 总占用: 整盘已用 / 整盘容量 (三行统一按 storColor 的占用比例取色)
+    tset('stortot', dk.disk_used, dk.disk_total, 'stortotbar');
   } else {
     sw.style.display = 'none';
   }
