@@ -97,7 +97,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.15"
+APP_VERSION = "2.8.16"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -736,15 +736,24 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
   header .sub { display:none; }
   #live { order:3; margin-left:0; max-width:108px; padding:4px 8px; }
   #theme { order:4; margin-left:auto; } #gear { order:5; margin-left:0; } #out { order:6; margin-left:0; }
-  .tabs { order:10; width:100%; margin-left:0; gap:5px; overflow:visible; }
-  .tab { flex:1 1 0; min-width:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
-    gap:1px; padding:5px 3px; font-size:12px; line-height:1.25; border-radius:12px; }
-  .tab .tn { display:block; margin-left:0; font-size:10px; line-height:1.1; }
+  /* 页签: 单行「分段控件」—— 灰槽里浮起一块选中的, 比两行卡片矮一半;
+     计数收成右侧小徽章, 「实时预览」没有计数也不会跟旁边几个对不齐 */
+  .tabs { order:10; width:100%; margin-left:0; gap:2px; overflow:visible;
+    background:var(--panel2); border:1px solid var(--line); border-radius:13px; padding:3px; }
+  .tab { flex:1 1 0; min-width:0; display:flex; flex-direction:row; align-items:center;
+    justify-content:center; gap:4px; padding:7px 2px; font-size:12px; line-height:1.2;
+    border-radius:10px; background:transparent; border:none; overflow:hidden; }
+  .tab .tl { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tab .tn { flex:0 0 auto; display:inline-block; margin-left:0; padding:0 5px;
+    font-size:10.5px; line-height:1.4; font-weight:700; border-radius:7px;
+    background:#ffffff14; color:var(--muted); opacity:1; }
+  html[data-theme="light"] .tab .tn { background:#0f172a10; }
   .tab .tn::before, .tab .tn::after { content:none; }
+  .tab.active { box-shadow:0 1px 4px #0000004d; }
+  html[data-theme="light"] .tab.active { box-shadow:0 1px 4px #0f172a29; }
+  .tab.active .tn { background:#ffffff26; color:inherit; }
   .filters { padding-left:12px; padding-right:12px; }
   .chip { padding:8px 12px; }
-  .tab { overflow:hidden; }
-  .tab .tl { max-width:100%; overflow:hidden; text-overflow:ellipsis; }
   /* 播放器手机端紧凑化: 面板/卡片占高更小, 视频尽量多露 */
   .pscroll { padding:2px 8px 10px; gap:8px; }
   .tpanel { padding:10px 12px 8px; }
@@ -1605,7 +1614,7 @@ async function load() {
   const lv = document.createElement('button');
   lv.className = 'tab' + (liveOpen ? ' active' : '');
   lv.id = 'tab-live';
-  lv.textContent = t('实时预览');
+  lv.innerHTML = `<span class="tl">${t('实时预览')}</span>`;   // 与其它页签同结构 (单行分段控件里才不会错位)
   lv.onclick = () => { document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); lv.classList.add('active'); openLive(); };
   tabs.appendChild(lv);
   document.getElementById('stat').textContent = `${t('归档')} ${Object.values(data).reduce((a, v) => a + v.length, 0)} ${t('条')}`;
