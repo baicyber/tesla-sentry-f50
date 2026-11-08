@@ -93,7 +93,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # ---------------- 版本与在线升级 (OTA) ----------------
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 多数能通, 同时内置镜像源兜底, 依次尝试。
-APP_VERSION = "2.8.7"
+APP_VERSION = "2.8.8"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://raw.githubusercontent.com/%s/main" % OTA_REPO,
@@ -534,14 +534,17 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .chip:hover { color:var(--text); border-color:var(--muted2); }
 .chip.on { background:var(--blue); border-color:var(--blue); color:#fff; }
 .chip .n { opacity:.62; margin-left:4px; font-variant-numeric:tabular-nums; }
-/* 车载U盘存储条 (参照官方App车辆卡片) */
+/* 存储卡: 虚拟U盘 / 归档区 / 总占用 三行, 每行各自一条进度条 */
 .storwrap { padding:10px 16px 0; }
-.storcard { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px 14px; box-shadow:var(--shadow); }
-.storrow { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; }
-.storlab { font-size:13px; color:var(--text); font-weight:600; }
-.storval { font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
-.storbar { height:4px; border-radius:2px; background:var(--line2); overflow:hidden; }
-.storbar i { display:block; height:100%; width:0; background:var(--blue); border-radius:2px; transition:width .4s; }
+.storcard { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:11px 14px 12px; box-shadow:var(--shadow); }
+.storrow { display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:6px; }
+.storrow + .storbar { margin-bottom:10px; }
+.storbar:last-child { margin-bottom:0; }
+.storlab { font-size:12.5px; color:var(--text); font-weight:600; }
+.storlab i { font-style:normal; font-weight:500; font-size:11px; color:var(--muted2); margin-left:5px; }
+.storval { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.storbar { height:5px; border-radius:3px; background:var(--line2); overflow:hidden; }
+.storbar i { display:block; height:100%; width:0; background:var(--blue); border-radius:3px; transition:width .4s; }
 /* 主题切换按钮: 自动/浅色/深色 循环 */
 #theme { background:var(--panel2); border:none; color:var(--muted); font-size:15px; cursor:pointer; border-radius:10px; width:36px; height:32px; }
 #theme:hover { color:var(--text); }
@@ -862,8 +865,12 @@ select.ninput { cursor:pointer; }
 <nav class="tabs" id="tabs"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()">🌗</button><button id="gear" title="设置">⚙</button></header>
 <nav class="storwrap" id="storwrap" style="display:none">
   <div class="storcard">
-    <div class="storrow"><span class="storlab" id="storlab">车载U盘存储</span><span class="storval" id="storval"></span></div>
-    <div class="storbar"><i id="storfill"></i></div>
+<div class="storrow"><span class="storlab">虚拟U盘 <i id="stornom">—</i></span><span class="storval" id="storvusb"></span></div>
+<div class="storbar"><i id="storvusbbar"></i></div>
+<div class="storrow"><span class="storlab">归档区</span><span class="storval" id="storarc"></span></div>
+<div class="storbar"><i id="storarcbar"></i></div>
+<div class="storrow"><span class="storlab">总占用</span><span class="storval" id="stortot"></span></div>
+<div class="storbar"><i id="stortotbar"></i></div>
   </div>
 </nav>
 <nav class="filters" id="filters"></nav>
@@ -1453,18 +1460,30 @@ async function refreshLive() {
     dot.style.background = '#e8443f';
     txt.textContent = t('同步服务未运行');
   }
-  // 车载U盘存储条 (镜像未挂载时回落显示归档盘)
+  // 存储卡: 虚拟U盘 / 归档区 / 总占用, 三行都用「整盘容量」当分母, 便于横向对比
   const sw = document.getElementById('storwrap');
-  if (live.disk && live.disk.total > 0) {
-    const GB = 1073741824, d = live.disk;
+  const dk = live.disk;
+  if (dk && dk.disk_total > 0) {
+    const GB = 1073741824;
+    const gb = n => {
+      if (!n || n < 0) return '0MB';
+      return n >= GB ? (n / GB).toFixed(1) + 'GB' : Math.round(n / 1048576) + 'MB';
+    };
+    const tset = (v, used, total, bar, color) => {
+      document.getElementById(v).textContent = gb(used) + ' / ' + gb(total);
+      const pct = total > 0 ? Math.min(100, used / total * 100) : 0;
+      const el = document.getElementById(bar);
+      el.style.width = pct.toFixed(1) + '%';
+      el.style.background = color;
+    };
     sw.style.display = '';
-    document.getElementById('storlab').textContent = t(d.src === 'usb' ? '车载U盘存储' : '盒子归档存储');
-    document.getElementById('storval').textContent =
-      (d.used / GB).toFixed(1) + 'GB / ' + (d.total / GB).toFixed(1) + 'GB';
-    const pct = Math.min(100, d.used / d.total * 100);
-    const fill = document.getElementById('storfill');
-    fill.style.width = pct.toFixed(1) + '%';
-    fill.style.background = pct >= 90 ? '#e8443f' : '#2f6ee0';
+    const tot = dk.disk_total;
+    document.getElementById('stornom').textContent =
+      dk.img_nominal ? '标称 ' + gb(dk.img_nominal) : '';
+    tset('storvusb', dk.img_real, tot, 'storvusbbar', '#2f6ee0');
+    tset('storarc', dk.arc_used, tot, 'storarcbar', '#4cc38a');
+    const pct = dk.disk_used / tot * 100;
+    tset('stortot', dk.disk_used, tot, 'stortotbar', pct >= 90 ? '#e8443f' : '#2f6ee0');
   } else {
     sw.style.display = 'none';
   }
@@ -3622,23 +3641,71 @@ def _proc_running(needle):
     return False
 
 
+_ARC_SIZE_CACHE = {"t": 0.0, "v": 0}
+
+
+def archive_size():
+    """归档区实际占用。os.walk 在文件多的时候要几十~几百毫秒, 而存储卡每 10 秒轮询一次,
+    所以做 60 秒缓存, 别让面板把设备拖慢。"""
+    now = time.time()
+    if _ARC_SIZE_CACHE["t"] and now - _ARC_SIZE_CACHE["t"] < 60:
+        return _ARC_SIZE_CACHE["v"]
+    sz = _dir_size(ARCHIVE) if os.path.isdir(ARCHIVE) else 0
+    _ARC_SIZE_CACHE.update(t=now, v=sz)
+    return sz
+
+
 def disk_usage():
-    """存储条数据: 优先取车载U盘 (镜像内部 exFAT, 挂载时); 未挂载回落到归档盘 (loop 镜像所在)"""
+    """存储卡三行数据: 虚拟U盘(镜像实占) / 归档区 / 整盘总占用
+
+    三行统一用「整盘容量」当分母, 所以三条进度条可以直接对比, 前两条加起来
+    约等于第三条 (差的几百 MB 是系统/日志等其它占用)。"""
+    d = {}
+    # 虚拟U盘: 稀疏镜像文件在宿主盘上的真实占用; 标称容量另给 (两者通常不等)
+    try:
+        im = os.stat(IMG)
+        d["img_nominal"] = im.st_size
+        d["img_real"] = getattr(im, "st_blocks", 0) * 512
+    except OSError:
+        d["img_nominal"] = d["img_real"] = 0
+    d["arc_used"] = archive_size()
+    # 整盘 = 镜像文件所在分区 (镜像和归档同一块盘)
+    d["disk_total"] = d["disk_used"] = d["disk_free"] = 0
+    for p in (os.path.dirname(IMG) or "/", ARCHIVE):
+        try:
+            hf = os.statvfs(p)
+        except OSError:
+            continue
+        if hf.f_blocks <= 0:
+            continue
+        fr = hf.f_frsize
+        d["disk_total"] = hf.f_blocks * fr
+        d["disk_free"] = hf.f_bavail * fr
+        d["disk_used"] = (hf.f_blocks - hf.f_bavail) * fr
+        break
+    # 归档区剩余空间 = 整盘剩余 (同分区)
+    d["arc_free"] = d["disk_free"]
+    # 兼容旧字段: 挂载时 = 车载U盘 (exFAT) 内部用量, 否则 = 整盘
+    d["src"], d["used"], d["total"] = "loop", d["disk_used"], d["disk_total"]
     for p, usb in ((MNT, True), (ARCHIVE, False)):
         if usb and not os.path.ismount(MNT):
             # MNT 目录本身常驻 (tmpfs), 未挂载镜像时 statvfs 会读到 tmpfs 的
-            # 小容量 (如 0.7G), 必须跳过回落到归档盘
+            # 小容量 (如 0.7G), 必须跳过
             continue
         try:
             st = os.statvfs(p)
-            if st.f_blocks <= 0:
-                continue
-            fr = st.f_frsize
-            return {"src": "usb" if usb else "loop",
-                    "used": (st.f_blocks - st.f_bavail) * fr, "total": st.f_blocks * fr}
         except OSError:
             continue
-    return None
+        if st.f_blocks <= 0:
+            continue
+        fr = st.f_frsize
+        d["src"] = "usb" if usb else "loop"
+        d["used"] = (st.f_blocks - st.f_bavail) * fr
+        d["total"] = st.f_blocks * fr
+        break
+    if d["disk_total"] <= 0 and d["arc_used"] <= 0:
+        return None
+    return d
 
 
 def live_status():
