@@ -97,7 +97,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.19"
+APP_VERSION = "2.8.20"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -889,6 +889,10 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .clipbar button { background:var(--panel2); color:var(--muted); border:1px solid var(--line2); border-radius:8px;
   font-size:12px; padding:9px 11px; cursor:pointer; font-variant-numeric:tabular-nums; }
 .clipbar button.on { background:var(--blue); border-color:var(--blue); color:#fff; }
+/* 含触发时刻的那一段: 前面点个小圆点, 窄屏也不额外占宽度 */
+.clipbar button.trig::before { content:''; display:inline-block; width:5px; height:5px; border-radius:50%;
+  background:#ff453a; margin-right:5px; vertical-align:1px; }
+.clipbar button.trig.on::before { background:#fff; }
 .ic-rows { display:none; font-size:12.5px; line-height:1.9; color:var(--muted); word-break:break-all; border-top:1px solid var(--line); margin-top:8px; padding-top:8px; }
 .ic-rows.open { display:block; }
 .ick { display:inline-block; min-width:64px; color:var(--muted); }
@@ -1566,6 +1570,14 @@ function fmtFull(n) {
   const m = (n || '').match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})/);
   return m ? `${m[1]}/${m[2]}/${m[3]} ${m[4]}:${m[5]}:00` : n;
 }
+/* 事件展示时间: 有 event.json 就用触发时刻, 否则退回目录名
+   (目录名是录制收尾时间, 常在触发之后几十秒, 直接显示会让人以为定位错了) */
+function evTime(ev) {
+  const m = String((ev && ev.meta && ev.meta.timestamp) || '')
+    .match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  if (m) return `${m[1]}/${m[2]}/${m[3]} ${m[4]}:${m[5]}:${m[6]}`;
+  return fmtFull(ev && ev.name);
+}
 function camShort(c) {
   const m = {front:'前',back:'后',left_repeater:'左',right_repeater:'右',left_pillar:'左',right_pillar:'右'};
   return m[c] || (camLabel(c) || '画').slice(0, 1);
@@ -1605,6 +1617,7 @@ function curVids() { return (curClips[curClipIx] || { vids: [] }).vids; }
 function switchClip(i) {
   if (!curClips[i]) return;
   curClipIx = i;
+  pendSeek = 0;          // 手动切段就从头播, 不要沿用触发点定位
   renderClip();
 }
 function gridDims(n) {
@@ -1927,7 +1940,11 @@ function render(cat) {
         if (ck) title += ' · ' + camLabel(ck);
       }
     }
-    const tm = (ev.name.match(/_(\d{2}-\d{2})/) || [,''])[1].replace('-', ':');
+    /* 列表时间优先用 event.json 的触发时刻, 与点进去后播放器标题一致
+       (目录名是录制收尾时间, 常比触发晚几十秒) */
+    const tsM = String(mm.timestamp || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    const tm = tsM ? tsM[4] + ':' + tsM[5]
+                   : (ev.name.match(/_(\d{2}-\d{2})/) || [,''])[1].replace('-', ':');
     const tmTxt = tm ? tm : fmtName(ev.name);
     const extra = (mm.city ? ' · ' + mm.city : '') + (mm.street ? ' ' + mm.street : '');
     const dayTxt = dateFilter === 'all' && day ? day.slice(5).replace('-', '/') + ' · ' : '';
@@ -1967,14 +1984,39 @@ function focusCell(cell) {
   vg.style.gridTemplateColumns = '1fr';
   vg.style.gridTemplateRows = '1fr';
 }
+/* 本次渲染要定位到的秒数 (触发时刻), 0 = 从头播 */
+let pendSeek = 0;
+/* 找出 event.json 触发时刻落在哪一段, 返回 {ix, off}; 对不上返回 null。
+   一组哨兵片段通常是「触发前 1 分钟 + 触发 + 后续几分钟」, 触发点在中间某段,
+   取 start <= 触发时刻 且最接近的那段 (片段实长约 60 秒, 上限放宽到 70 秒)。*/
+function triggerClip(ev, clips) {
+  const m = String((ev.meta || {}).timestamp || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const tg = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+  if (!tg) return null;
+  let best = null;
+  (clips || []).forEach((c, i) => {
+    const s = clipEpoch(c.key);
+    if (!s || s > tg) return;
+    const off = (tg - s) / 1000;
+    if (off <= 70 && (!best || s > best.s)) best = { ix: i, off: off, s: s };
+  });
+  return best;
+}
 function openPlayer(ev) {
   cur = ev;
   curClips = groupVideos(ev.videos);
-  curClipIx = curClips.length ? curClips.length - 1 : 0;
+  /* 默认定位到触发时刻所在那一段, 并停在触发前 5 秒 —— 以前固定取最后一段,
+     所以多段事件点进去常常是「人已经走了」的那一分钟 */
+  const hit = triggerClip(ev, curClips);
+  curClipIx = hit ? hit.ix : (curClips.length ? curClips.length - 1 : 0);
+  pendSeek = hit ? Math.max(0, hit.off - 5) : 0;
   renderClip();
 }
 function renderClip() {
   const ev = cur;
+  const seekTo = pendSeek;   // 本次渲染消费掉定位点, 之后换语言等重渲染不会又跳一次
+  pendSeek = 0;
   const clip = curClips[curClipIx] || { key: '', vids: [] };
   const vg = document.getElementById('vgrid'); vg.innerHTML = '';
   camSort(clip.vids).forEach(v => {
@@ -2004,14 +2046,23 @@ function renderClip() {
     vid.addEventListener('canplay', () => { document.getElementById('qhint').style.display = 'none'; });
     vid.setAttribute('muted', ''); vid.setAttribute('playsinline', '');
     vid.setAttribute('webkit-playsinline', ''); vid.setAttribute('x5-playsinline', '');
+    /* 触发段: metadata 一到就跳到触发前几秒, 不然会先从片段开头播一遍 */
+    if (seekTo > 0) {
+      const ap = () => {
+        const d0 = isFinite(vid.duration) ? vid.duration : 0;
+        try { vid.currentTime = d0 ? Math.min(seekTo, Math.max(0, d0 - 0.4)) : seekTo; } catch (e) {}
+      };
+      vid.addEventListener('loadedmetadata', ap);
+      if (vid.readyState >= 1) ap();
+    }
     const lb = document.createElement('span'); lb.className = 'clabel'; lb.textContent = camShort(v.cam);
     cell.appendChild(vid); cell.appendChild(cl); cell.appendChild(lb);
     cell.onclick = () => focusCell(cell);
     vg.appendChild(cell);
   });
-  document.getElementById('ic-time').textContent = fmtFull(ev.name);
+  document.getElementById('ic-time').textContent = evTime(ev);
   const pt = document.getElementById('ptitle');
-  if (pt) pt.textContent = t(CATS_NAME[currentCat] || currentCat) + ' · ' + fmtFull(ev.name);
+  if (pt) pt.textContent = t(CATS_NAME[currentCat] || currentCat) + ' · ' + evTime(ev);
   document.getElementById('ic-cat').textContent = t(CATS_NAME[currentCat] || currentCat);
   const md0 = ev.meta || {};
   document.getElementById('ic-big').textContent =
@@ -2020,11 +2071,15 @@ function renderClip() {
   document.getElementById('ic-sub').innerHTML = clip.vids.length + ' 路画面 · <span id="ic-dur">--:--</span>' + (mb >= 0.05 ? ' · ' + (mb >= 1 ? mb.toFixed(1) + ' MB' : Math.round(mb * 1024) + ' KB') : '');
   const cb = document.getElementById('clipbar');
   if (curClips.length > 1) {
+    const hitClip = triggerClip(ev, curClips);
     cb.classList.add('show');
     cb.innerHTML = '<span class="ick" style="min-width:auto;align-self:center">片段</span>' +
       curClips.map((c, i) => {
         const t = (c.key.split('_')[1] || c.key).replace(/-/g, ':');
-        return `<button class="${i === curClipIx ? 'on' : ''}" onclick="switchClip(${i})">${t}</button>`;
+        const isTrig = hitClip && hitClip.ix === i;
+        return `<button class="${i === curClipIx ? 'on' : ''}${isTrig ? ' trig' : ''}"` +
+          (isTrig ? ' title="触发时刻在这段"' : '') +
+          ` onclick="switchClip(${i})">${t}</button>`;
       }).join('');
   } else {
     cb.classList.remove('show');
