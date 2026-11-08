@@ -93,7 +93,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # ---------------- 版本与在线升级 (OTA) ----------------
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 多数能通, 同时内置镜像源兜底, 依次尝试。
-APP_VERSION = "2.8.5"
+APP_VERSION = "2.8.6"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://raw.githubusercontent.com/%s/main" % OTA_REPO,
@@ -637,8 +637,13 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .tp-tag.show { display:inline-flex; }
 .tp-tag b { color:var(--amberb); font-weight:800; font-variant-numeric:tabular-nums; }
 .tp-tr { display:flex; align-items:center; gap:9px; }
-.tp-sig { font-size:16px; color:var(--muted2); line-height:1; }
-.tp-sig.on { color:#f59e0b; }
+/* 转向灯: 用矢量三角而不是 ⬅➡ emoji —— emoji 是彩色字形, 不认 CSS color,
+   点亮时颜色不会变, 在任何平台看起来都像"静止的图标" */
+.tp-sig { display:inline-flex; align-items:center; color:var(--muted2); line-height:1; opacity:.45; }
+.tp-sig svg { width:13px; height:16px; display:block; }
+.tp-sig.on { color:#f59e0b; opacity:1; animation:tpBlink 1.15s steps(1,end) infinite; }
+@keyframes tpBlink { 0%, 52% { opacity:1 } 53%, 100% { opacity:.18 } }
+@media (prefers-reduced-motion: reduce) { .tp-sig.on { animation:none } }
 .tp-gear { background:#34c759; color:#fff; font-weight:800; font-size:14px; width:26px; height:26px;
   border-radius:50%; display:inline-flex; align-items:center; justify-content:center; }
 .tp-mid { display:flex; align-items:center; margin-top:8px; }
@@ -854,7 +859,7 @@ select.ninput { cursor:pointer; }
     <div class="tpanel" id="tpanel">
         <div class="tp-top">
           <span class="tp-l"><span class="tp-date" id="tp-date">—</span><span class="tp-loc" id="tp-loc"></span><span class="tp-tag" id="tp-tag"></span></span>
-          <span class="tp-tr"><span class="tp-sig" id="tp-bl">⬅</span><span class="tp-sig" id="tp-br">➡</span><span class="tp-gear" id="tp-gear">D</span></span>
+          <span class="tp-tr"><span class="tp-sig" id="tp-bl" title="左转向灯"><svg viewBox="0 0 14 18" aria-hidden="true"><path d="M2 9 12 1.6v14.8z" fill="currentColor"/></svg></span><span class="tp-sig" id="tp-br" title="右转向灯"><svg viewBox="0 0 14 18" aria-hidden="true"><path d="M12 9 2 1.6v14.8z" fill="currentColor"/></svg></span><span class="tp-gear" id="tp-gear">D</span></span>
         </div>
         <div class="tp-mid">
           <span class="tp-spd" id="tp-spd">0</span><span class="tp-unit">km/h</span>
