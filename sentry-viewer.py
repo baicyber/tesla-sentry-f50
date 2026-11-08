@@ -93,7 +93,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # ---------------- 版本与在线升级 (OTA) ----------------
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 多数能通, 同时内置镜像源兜底, 依次尝试。
-APP_VERSION = "2.8.6"
+APP_VERSION = "2.8.7"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://raw.githubusercontent.com/%s/main" % OTA_REPO,
@@ -568,6 +568,7 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
   .tp-date { font-size:12px; } .tp-loc { font-size:11.5px; }
   .tp-tag { height:20px; font-size:11px; padding:0 8px; }
   .tp-gear { width:22px; height:22px; font-size:12px; }
+  .tp-sig svg { width:20px; height:20px; }
   .tp-c { width:28px; height:28px; } .tp-c.st svg { width:16px; height:16px; }
   .tp-badge { height:25px; font-size:11px; padding:0 8px 0 6px; } .tp-badge svg { width:13px; height:13px; }
   .infocard { padding:10px 12px 8px; }
@@ -636,11 +637,11 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
   border:1px solid var(--amberline); white-space:nowrap; align-self:center; }
 .tp-tag.show { display:inline-flex; }
 .tp-tag b { color:var(--amberb); font-weight:800; font-variant-numeric:tabular-nums; }
-.tp-tr { display:flex; align-items:center; gap:9px; }
-/* 转向灯: 用矢量三角而不是 ⬅➡ emoji —— emoji 是彩色字形, 不认 CSS color,
-   点亮时颜色不会变, 在任何平台看起来都像"静止的图标" */
-.tp-sig { display:inline-flex; align-items:center; color:var(--muted2); line-height:1; opacity:.45; }
-.tp-sig svg { width:13px; height:16px; display:block; }
+.tp-tr { display:flex; align-items:center; gap:6px; }
+/* 转向灯: 矢量箭头(圆角方块底 + 白色箭头), 不用 ⬅➡ emoji —— emoji 是彩色字形,
+   不认 CSS color, 点亮时颜色不会变, 看起来永远像"静止的图标" */
+.tp-sig { display:inline-flex; align-items:center; color:var(--muted2); line-height:1; opacity:.5; }
+.tp-sig svg { width:23px; height:23px; display:block; }
 .tp-sig.on { color:#f59e0b; opacity:1; animation:tpBlink 1.15s steps(1,end) infinite; }
 @keyframes tpBlink { 0%, 52% { opacity:1 } 53%, 100% { opacity:.18 } }
 @media (prefers-reduced-motion: reduce) { .tp-sig.on { animation:none } }
@@ -832,7 +833,30 @@ select.ninput { cursor:pointer; }
 .lvrow select { padding:9px 10px; border-radius:9px; border:1px solid var(--line2); background:var(--panel2); color:var(--text); font-size:13px; }
 .lvbody > .hint { margin-top:2px; margin-bottom:0; }
 @media (max-width:640px){ .expp { left:50%; right:auto; transform:translateX(-50%); bottom:78px; } }
-</style></head><body>
+</style><script>
+/* 版本自检: 服务端升级后, 若当前页面仍是旧版本就自动重载 (看片时不打断, 最多 2 次防死循环) */
+(function () {
+  var MY = "__APP_VER__";
+  function chk() {
+    if (document.querySelector('.player.open')) return;
+    var k = 'tsf_ver_chk', o = {};
+    try { o = JSON.parse(sessionStorage.getItem(k) || '{}') || {}; } catch (e) { o = {}; }
+    if (!o.t || Date.now() - o.t > 600000) o = { t: Date.now(), n: 0 };
+    if ((o.n || 0) >= 2) return;
+    fetch('/api/ver?t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.v && j.v !== MY) {
+          o.n = (o.n || 0) + 1;
+          try { sessionStorage.setItem(k, JSON.stringify(o)); } catch (e) {}
+          location.reload();
+        }
+      }).catch(function () {});
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) setTimeout(chk, 300); });
+  window.addEventListener('load', function () { setTimeout(chk, 1200); });
+})();
+</script></head><body>
 <header><h1>🚗 特斯拉哨兵查看器</h1><span class="sub" id="stat"></span>
 <span id="live" title="车机在线只读同步状态" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:4px 10px;white-space:nowrap"><span id="livedot" style="width:7px;height:7px;border-radius:50%;background:#5f6b76"></span><span id="livetxt">同步状态</span></span>
 <nav class="tabs" id="tabs"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()">🌗</button><button id="gear" title="设置">⚙</button></header>
@@ -859,7 +883,7 @@ select.ninput { cursor:pointer; }
     <div class="tpanel" id="tpanel">
         <div class="tp-top">
           <span class="tp-l"><span class="tp-date" id="tp-date">—</span><span class="tp-loc" id="tp-loc"></span><span class="tp-tag" id="tp-tag"></span></span>
-          <span class="tp-tr"><span class="tp-sig" id="tp-bl" title="左转向灯"><svg viewBox="0 0 14 18" aria-hidden="true"><path d="M2 9 12 1.6v14.8z" fill="currentColor"/></svg></span><span class="tp-sig" id="tp-br" title="右转向灯"><svg viewBox="0 0 14 18" aria-hidden="true"><path d="M12 9 2 1.6v14.8z" fill="currentColor"/></svg></span><span class="tp-gear" id="tp-gear">D</span></span>
+          <span class="tp-tr"><span class="tp-sig" id="tp-bl" title="左转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M17 12H8.2M12.2 7.3 7.5 12l4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="tp-sig" id="tp-br" title="右转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M7 12h8.8M11.8 7.3 16.5 12l-4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="tp-gear" id="tp-gear">D</span></span>
         </div>
         <div class="tp-mid">
           <span class="tp-spd" id="tp-spd">0</span><span class="tp-unit">km/h</span>
@@ -5536,6 +5560,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # 页面/接口一律禁止缓存: 之前 HTML 没有任何缓存头, iOS Safari 会把旧页面留在内存里,
+        # 升级后手机上仍然显示旧界面 (典型症状: 已经改了样式, 手机上还是老样子)
+        if "text/html" in ctype or "application/json" in ctype:
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(body)
 
@@ -5608,6 +5638,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/api/ver":
+            # 版本探针: 前端刷新时对比, 服务端升级了就自动重载, 不用手动清缓存
+            body = json.dumps({"v": APP_VERSION}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if not self._gate():
             return
         if path in ("/", "/index.html"):
@@ -5615,6 +5655,7 @@ class Handler(BaseHTTPRequestHandler):
             sponsor_ver = hashlib.md5(b"".join(SPONSOR_BYTES[k] for k in sorted(SPONSOR_BYTES))).hexdigest()[:10]
             html = (HTML.replace("__CAT_NAMES__", json.dumps(CAT_NAMES, ensure_ascii=False))
                     .replace("__I18N__", I18N_JS).replace("__LANGS__", LANG_JS)
+                    .replace("__APP_VER__", APP_VERSION)
                     .replace("__SPONSOR_VER__", sponsor_ver))
             self._send(200, html.encode())
         elif path.startswith("/sponsor/"):
