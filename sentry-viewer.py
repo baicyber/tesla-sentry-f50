@@ -97,7 +97,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.17"
+APP_VERSION = "2.8.18"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -1012,13 +1012,16 @@ select.ninput { cursor:pointer; }
 .stfill { height:100%; width:0; background:linear-gradient(90deg,#3b82f6,#60a5fa); border-radius:5px; transition:width .4s; }
 .stpct { font-size:13px; color:var(--muted); margin-top:8px; }
 .sthint { font-size:11.5px; color:var(--muted2); margin-top:4px; line-height:1.5; }
-.livep { display:none; position:fixed; inset:0; background:var(--bg, #10151c); z-index:240; flex-direction:column; }
-.livep.open { display:flex; }
-.lvtop { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line); flex:0 0 auto; }
-.lvtitle { font-weight:600; font-size:15px; flex:1; min-width:0; line-height:1.35; }
-.lvtitle small { display:block; font-size:12px; font-weight:400; }
+/* 实时预览: 与其它三个分类页签同级, 内容直接排在页签下方 (不再是全屏浮层 + 返回按钮) */
+.livep { display:none; max-width:1180px; margin:0 auto; padding:12px 16px 24px; }
+.livep.open { display:block; }
+body.livemode #filters, body.livemode #dfilters, body.livemode #dpick,
+body.livemode #grid, body.livemode #empty { display:none !important; }
+.lvtop { display:flex; align-items:center; gap:10px; padding:0 0 10px; border-bottom:1px solid var(--line); }
+.lvtitle { font-weight:600; font-size:14.5px; flex:1; min-width:0; line-height:1.35; }
+.lvtitle small { display:inline; font-size:12px; font-weight:400; margin-left:6px; }
 .lvstatus { font-size:12px; color:var(--muted); text-align:right; max-width:42%; line-height:1.4; word-break:break-all; }
-.lvbody { flex:1; overflow:auto; padding:12px 14px 20px; display:flex; flex-direction:column; gap:10px; }
+.lvbody { padding:12px 0 0; display:flex; flex-direction:column; gap:10px; }
 .lvmeta { font-size:13px; color:var(--muted); }
 #lv-video { width:100%; max-height:58vh; background:#000; border-radius:12px; }
 /* 全览: 4 路同屏 */
@@ -1151,7 +1154,6 @@ select.ninput { cursor:pointer; }
 
 <div class="livep" id="livep">
   <div class="lvtop">
-    <button class="pback" onclick="closeLive()">‹ 返回</button>
     <span class="lvtitle">📡 准实时预览 <small style="color:#7d8894;font-weight:400">延时约 1~2 分钟</small></span>
     <span class="lvstatus" id="lv-status"></span>
   </div>
@@ -1160,6 +1162,15 @@ select.ninput { cursor:pointer; }
     <video id="lv-video" controls playsinline muted></video>
     <div class="lvgrid" id="lv-grid"></div>
     <div class="lvrow" id="lv-cams"></div>
+    <div class="lvrow">
+      <span style="font-size:13px;color:var(--muted)">画质</span>
+      <select id="lv-q" onchange="setLiveQ(this.value)" title="与回放相同的几档画质; 选非原画时由设备按需转码, 第一次打开要等几秒 (转好一次后秒开)">
+        <option value="orig">原画</option>
+        <option value="720p">720p</option>
+        <option value="480p">480p</option>
+        <option value="360p">360p</option>
+      </select>
+    </div>
     <div class="lvrow">
       <span style="font-size:13px;color:var(--muted)">刷新检查</span>
       <select id="lv-iv" onchange="liveRestart()">
@@ -1170,7 +1181,7 @@ select.ninput { cursor:pointer; }
       </select>
       <button class="lvbtn" onclick="liveTick()">检查更新</button>
     </div>
-    <div class="hint">「全览」同时播放全部摄像头原画, 数据量较大 (4 路每分钟约 100MB), 建议流量充足时使用; 点任一格可切到单路。原理: 车机循环录制 1 分钟一段; 后台的只读同步 (不打断车机) 把刚写完的片段持续收进归档, 这里自动发现并播放最新片段, 即约 1 分钟延时的"直播"。刚停车/刚触发录像的片段要等写完才会出现。</div>
+    <div class="hint">「全览」同时播放全部摄像头, 数据量较大 (4 路每分钟约 100MB), 建议流量充足时使用; 点任一格可切到单路。画质可选 原画 / 720p / 480p / 360p: 非原画由设备按需转码, 第一次打开要等几秒, 转好一次后秒开 (全览建议 480p 及以下)。原理: 车机循环录制 1 分钟一段; 后台的只读同步 (不打断车机) 把刚写完的片段持续收进归档, 这里自动发现并播放最新片段, 即约 1 分钟延时的"直播"。刚停车/刚触发录像的片段要等写完才会出现。</div>
   </div>
 </div>
 <div class="panel" id="panel">
@@ -2279,17 +2290,37 @@ window.addEventListener('resize', () => { if (document.getElementById('player').
 
 /* ---------- 准实时预览 ---------- */
 let liveCam = localStorage.getItem('tsflivecam') || 'front';
+/* 画质: 记住上次选择, 没选过就跟随播放器当前画质 (与回放同一套 原画/720p/480p/360p) */
+let liveQ = localStorage.getItem('tsfliveq') || '';
 let liveFolder = '', liveTimer = null, liveBusy = false, liveLoading = false, liveSyncTimer = null, liveEv = null;
+function liveQv() { return liveQ || curQ || 'orig'; }
+function lvUrl(u) {
+  const q = liveQv();
+  if (q === 'orig') return u;
+  return u + (u.indexOf('?') < 0 ? '?' : '&') + 'q=' + q;
+}
+function setLiveQ(v) {
+  liveQ = v;
+  localStorage.setItem('tsfliveq', v);
+  if (liveEv) renderLive(liveEv);
+}
 function latestLiveEv() { const arr = (data && data.RecentClips) || []; return arr[0] || null; }
 function openLive() {
   document.getElementById('livep').classList.add('open');
+  document.body.classList.add('livemode');       /* 隐藏分类/日期筛选与归档列表 */
+  const qs = document.getElementById('lv-q');
+  if (qs) qs.value = liveQv();
+  /* 从播放器切过来时把播放器收起, 免得浮层盖在实时预览上 */
+  if (document.getElementById('player').classList.contains('open')) closePlayer();
   const ev = latestLiveEv();
   if (ev) { liveFolder = ev.name; renderLive(ev); }
+  try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, 0); }
   liveTick();
   liveRestart();
 }
 function closeLive() {
   document.getElementById('livep').classList.remove('open');
+  document.body.classList.remove('livemode');
   if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
   clearLiveGrid();
   const v = document.getElementById('lv-video');
@@ -2332,7 +2363,8 @@ function renderLive(ev) {
     clearLiveGrid();
     vid.style.display = '';
     const v = vids.find(x => x.cam === liveCam) || vids[0];
-    if (v && vid.src.indexOf(v.url) === -1) { vid.src = v.url; vid.play().catch(() => {}); }
+    const want = lvUrl(v.url);
+    if (v && vid.getAttribute('src') !== want) { vid.src = want; vid.play().catch(() => {}); }
   }
 }
 /* 全览: 每路一个 video, 同屏播放并互相对齐进度 */
@@ -2363,7 +2395,7 @@ function buildLiveGrid(vids) {
     g.appendChild(cell);
     /* 逐路上屏: 每路错开 350ms, 避免 4 路同时抢占上行 */
     el.oncanplay = null;
-    setTimeout(() => { if (!el.getAttribute('src')) el.src = v.url; }, ix * 350);
+    setTimeout(() => { if (!el.getAttribute('src')) el.src = lvUrl(v.url); }, ix * 350);
   });
   /* 每秒对齐一次进度, 任一路拖进度条/暂停 → 其余跟随 */
   if (liveSyncTimer) clearInterval(liveSyncTimer);
