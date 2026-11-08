@@ -98,7 +98,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.26"
+APP_VERSION = "2.8.30"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -2029,12 +2029,27 @@ function triggerClip(ev, clips) {
 function openPlayer(ev) {
   cur = ev;
   curClips = groupVideos(ev.videos);
+  kicked = new Set();      // 新事件重新计算预转范围
   /* 默认定位到触发时刻所在那一段, 并停在触发前 5 秒 —— 以前固定取最后一段,
      所以多段事件点进去常常是「人已经走了」的那一分钟 */
   const hit = triggerClip(ev, curClips);
   curClipIx = hit ? hit.ix : (curClips.length ? curClips.length - 1 : 0);
   pendSeek = hit ? Math.max(0, hit.off - 5) : 0;
   renderClip();
+}
+/* 播放器打开/切段时, 把相邻段的当前清晰度让服务端提前转好。
+   预热只覆盖触发段±1 组, 但用户会点任意片段芯片 —— 现看现转要每路十几秒,
+   提前一分钟踢一脚, 切过去基本就是秒开。 */
+let kicked = new Set();
+function kickGroup(ix) {
+  const c = curClips[ix];
+  if (!c || curQ === 'orig') return;
+  const tag = curQ + ' ' + c.key;
+  if (kicked.has(tag)) return;
+  kicked.add(tag);
+  const paths = camSort(c.vids).map(v => v.url);
+  try { fetch('/api/kick', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({paths: paths, q: curQ})}).catch(() => {}); } catch (e) {}
 }
 function renderClip() {
   const ev = cur;
@@ -2131,6 +2146,8 @@ function renderClip() {
   const sm = document.getElementById('startmask');
   if ('ontouchstart' in window) { sm.classList.add('show'); }
   playAll();
+  kickGroup(curClipIx + 1);   // 前后相邻组提前转码, 切段不再等十几秒
+  kickGroup(curClipIx - 1);
   if (syncTimer) clearInterval(syncTimer);
   syncTimer = setInterval(tick, 250);
   const sortedVids = camSort(clip.vids);
@@ -2853,6 +2870,32 @@ function pauseAll() {
   const pp = document.getElementById('ppbtn'); if (pp) pp.textContent = '▶';
 }
 let baseRate = 1;
+/* 单格自救: 四格同播时偶尔有一格的连接在 frp 隧道里卡死 (readyState 长期为 1/0,
+   其余几格正常播放)。7 秒还拿不到数据就给这一格重发请求 —— 浏览器会换一条新连接,
+   卡死的旧连接由服务端的断开感知回收。每格每次渲染最多自救一次, 防止死循环。 */
+function kickStalled() {
+  const vs = [...document.querySelectorAll('#vgrid video')];
+  if (vs.length < 2) return;
+  if (!vs.some(v => v.readyState >= 3 && !v.paused)) {
+    vs.forEach(v => { v._st = 0; });      // 全体都没在播 (刚打开/暂停), 不算卡死
+    return;
+  }
+  const now = Date.now();
+  vs.forEach(v => {
+    if (v.readyState >= 2 || v.ended) { v._st = 0; return; }
+    if (!v._st) { v._st = now; return; }
+    if (now - v._st > 7000 && !v._re) {
+      v._re = 1;
+      const ct = vs[0].currentTime || v.currentTime || 0;
+      v.src = v.src;
+      v.addEventListener('loadedmetadata', () => {
+        try { if (ct) v.currentTime = Math.min(ct, Math.max(0, (v.duration || 0) - 0.4)); } catch (e) {}
+        tryPlay(v);
+      }, { once: true });
+      tryPlay(v);
+    }
+  });
+}
 function setSpeed(s) {
   const r = parseFloat(s);
   baseRate = r;
@@ -2870,6 +2913,7 @@ function togglePlay() {
   if (vs.some(v => v.paused)) playAll(); else pauseAll();
 }
 function tick() {
+  kickStalled();
   const vs = [...document.querySelectorAll('#vgrid video')];
   if (!vs.length || !vs[0].duration) return;
   const t = vs[0].currentTime;
@@ -4487,7 +4531,9 @@ def thumb_file(fp, ss_t=1.0):
 # ---------- 在线清晰度: 按需转码 + eMMC 缓存 (设备端单任务串行, 防止重转码打崩内核) ----------
 # 源 1280x960 (4:3); 用固定目标码率: 公网 5G 上行只有 ~120KB/s, CRF 模式码率不可控会传不完
 # 8 核 T760 实测: -threads 8 + superfast 比 2 线程快一倍 (20s->10s/分钟片段), 内存峰值充足 (720p 后仍余 ~980MB)
-RES_SCALE = {"360p": (480, 360, 500), "480p": (640, 480, 800), "720p": (960, 720, 1500)}  # 宽,高,kbps
+RES_SCALE = {"360p": (480, 360, 320), "480p": (640, 480, 500), "720p": (960, 720, 900)}  # 宽,高,kbps
+# 编码参数版本号: 参与缓存 key。改码率/帧率等参数时 +1, 旧缓存自动失效重新生成。
+RES_ENC_VER = "2"   # v2: 统一 24fps, 码率 500->320/800->500/1500->900 (4G+frp 链路 4 路同播实测扛不住旧码率)
 RES_DIR = os.environ.get("TSF_CACHE", "/opt/mu300") + "/res-cache"
 try:
     os.makedirs(RES_DIR, exist_ok=True)
@@ -5885,7 +5931,7 @@ def _variant_path(fp, qv):
         st = os.stat(fp)
     except OSError:
         return ""
-    key = hashlib.md5(("%s|%d|%d|%s" % (fp, st.st_size, st.st_mtime, qv)).encode()).hexdigest()
+    key = hashlib.md5(("%s|%d|%d|%s|%s" % (fp, st.st_size, st.st_mtime, qv, RES_ENC_VER)).encode()).hexdigest()
     return os.path.join(RES_DIR, key + ".mp4")
 
 
@@ -5935,7 +5981,7 @@ def get_variant(fp, qv, slot=True):
                'echo 300 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
                FFMPEG_BIN, "-nostdin", "-hide_banner", "-loglevel", "error",
                "-threads", "4", "-i", fp,
-               "-vf", "scale=%d:%d" % (w, h),
+               "-vf", "scale=%d:%d,fps=24" % (w, h),
                "-c:v", "libx264", "-preset", "superfast",
                "-b:v", "%dk" % kbps, "-maxrate", "%dk" % (kbps * 3 // 2),
                "-bufsize", "%dk" % (kbps * 3),
@@ -6004,20 +6050,32 @@ PREWARM_Q = "360p"
 
 
 def _prewarm_targets(cat, name):
-    """该事件默认打开的那一组 mp4: 触发摄像头所在片段组的全部方位 (最多 6 路)"""
+    """该事件默认打开的那一组 mp4 及前后相邻组 (每组最多 6 路)。
+    只预热触发组的话, 用户播到段尾跨进下一组、或点开前一段, 全是 MISS,
+    四路一起阻塞在按需转码上 —— 这就是「播着播着全体缓冲中」。"""
     fp, _off, _meta = _pick_clip(cat, name)
     if not fp:
         return []
     d = os.path.dirname(fp)
-    k = clip_key(os.path.basename(fp))
     try:
-        names = [f for f in os.listdir(d)
-                 if f.lower().endswith(".mp4") and clip_key(f) == k]
+        names = [f for f in os.listdir(d) if f.lower().endswith(".mp4")]
     except OSError:
         return []
     if not names:
         return []
-    return [os.path.join(d, f) for f in order_files(names)[:PREWARM_MAX_CAM]]
+    by_group = {}
+    for f in names:
+        by_group.setdefault(clip_key(f), []).append(f)
+    k = clip_key(os.path.basename(fp))
+    if k not in by_group:
+        return []
+    gkeys = sorted(by_group)
+    gi = gkeys.index(k)
+    # 转码顺序 = 观看概率: 触发组 → 下一组 (播放向前推进) → 上一组
+    out = []
+    for g in [k] + gkeys[gi + 1:gi + 2] + (gkeys[gi - 1:gi] if gi > 0 else []):
+        out += [os.path.join(d, f) for f in order_files(by_group[g])[:PREWARM_MAX_CAM]]
+    return out
 
 
 def _prewarm_pick():
@@ -7572,6 +7630,15 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError:
                     pass
                 peer_dead = False
+                # 单路限速 ~3x 实时码率: 公网入口走 frp 隧道, 四路同时拉流时,
+                # 先起跑的那一路能冲到 6MB/s 把整段缓存满, 其余几路被挤到 15KB/s
+                # (低于 360p 实时所需的 ~63KB/s) —— 表现就是有的格子秒开、有的永远缓冲中。
+                # 限速后谁也不能独占隧道, TCP 剩余容量留给慢流, 四路基本同速起播。
+                kbps = RES_SCALE.get(qv, (0, 0, 8000))[2]
+                pace = kbps * 1000 / 8 * 3        # bytes/s, 允许 3 倍实时灌入缓冲
+                bucket = min(512 * 1024 / pace, 3.0)   # 允许 ~512KB 的突发(首帧/moov 快速到位)
+                w_start = time.time()
+                w_bytes = 0
                 with open(fp, "rb") as f:
                     f.seek(start)
                     remain = length
@@ -7595,6 +7662,11 @@ class Handler(BaseHTTPRequestHandler):
                             peer_dead = True
                             break
                         remain -= len(chunk)
+                        w_bytes += len(chunk)
+                        if pace:
+                            ahead = w_bytes / pace - (time.time() - w_start)
+                            if ahead > bucket:
+                                time.sleep(min(ahead - bucket, 0.4))
                         if time.time() > deadline:
                             break     # 链路太慢, 交还线程给别的请求
             except (BrokenPipeError, ConnectionResetError):
@@ -7674,6 +7746,42 @@ class Handler(BaseHTTPRequestHandler):
             j = {"ok": ok, "msg": msg, "done": done, "failed": failed}
             j.update(extra)
             self._json(j)
+            return
+        if path == "/api/kick":
+            # 前端播到当前段一半/打开事件时, 让服务端把相邻段的当前清晰度先转好。
+            # 走 get_variant(slot=True) → 计入 USER_TRANS, 预热线程自动让位;
+            # Q_SEM(并发2)串住所有转码, 不会把设备打死。已转好的直接跳过。
+            body = self._read_json()
+            if body == "TOOBIG":
+                self._json({"ok": False, "msg": "请求体过大"}, 413)
+                return
+            if not isinstance(body, dict):
+                body = {}
+            qv = str(body.get("q") or "")
+            paths = body.get("paths") if isinstance(body.get("paths"), list) else []
+            started, skipped = 0, 0
+            if qv in RES_SCALE:
+                for p in paths[:10]:
+                    if not isinstance(p, str):
+                        skipped += 1
+                        continue
+                    # 前端发来的是媒体 URL /media/{cat}/{name}/{file}, 归一映射回归档路径
+                    fp = urllib.parse.unquote(p).split("?")[0]
+                    if fp.startswith("/media/"):
+                        fp = fp[len("/media"):]          # -> /SentryClips/...
+                    fp = os.path.normpath(fp)
+                    if not fp.startswith(ARCHIVE + os.sep):
+                        fp = os.path.normpath(os.path.join(ARCHIVE, fp.lstrip("/")))
+                    if not fp.startswith(ARCHIVE + os.sep) or not fp.endswith(".mp4") \
+                            or not os.path.isfile(fp):
+                        skipped += 1
+                        continue
+                    if _variant_ready(fp, qv):
+                        skipped += 1
+                        continue
+                    threading.Thread(target=get_variant, args=(fp, qv), daemon=True).start()
+                    started += 1
+            self._json({"ok": True, "started": started, "skipped": skipped})
             return
         if path == "/api/auth/pass":
             body = self._read_json()
