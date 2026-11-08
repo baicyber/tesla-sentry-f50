@@ -98,7 +98,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.32"
+APP_VERSION = "2.8.33"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -1495,16 +1495,18 @@ if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListen
   if ((localStorage.getItem('tsf_theme') || 'auto') === 'auto') applyTheme('auto');
 });
 /* ---------- 清晰度选择 ----------
-   默认 360p: 公网/5G 上行带宽有限, 原画一段 26MB 根本传不完; 内网也一样统一,
-   少一个分支少一份困惑 (想要原画点一下即可, 选过之后会记住)
-   记忆 key 从 tsfq 换成 tsfq2, 否则老设备里存的 orig 会盖掉新默认值 */
+   默认 480p: 播放器已改单路, 480p 单路只占 ~60KB/s (公网实测首帧 0.08s), 带宽不再是瓶颈;
+   与飞书推送/导出的默认档位一致, 看着的和推出去的同一分辨率。原画一段 26MB 仍传不完,
+   想省流量可手选 360p, 选过之后会记住
+   记忆 key 从 tsfq 换成 tsfq2/tsfq3: 每次改默认档位都换一个, 否则老设备里存的旧选择
+   (orig / 360p) 会盖掉新默认值 */
 const Q_LIST = [['orig', '原画'], ['720p', '720p'], ['480p', '480p'], ['360p', '360p']];
 const isLanNet = /^(100\.96\.|192\.168\.|10\.|127\.)/.test(location.hostname);
-let curQ = localStorage.getItem('tsfq2') || '360p';
+let curQ = localStorage.getItem('tsfq3') || '480p';
 /* 苹果设备: 合成改走设备端 (Safari 的 MediaRecorder 只能出 webm, 微信不认) */
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-if (!Q_LIST.some(x => x[0] === curQ)) curQ = '360p';
+if (!Q_LIST.some(x => x[0] === curQ)) curQ = '480p';
 function qUrl(u) { return curQ === 'orig' ? u : u + '?q=' + curQ; }
 function renderQSel() {
   const curLabel = (Q_LIST.find(x => x[0] === curQ) || Q_LIST[0])[1];
@@ -1524,7 +1526,7 @@ document.addEventListener('click', closeQ);
 function setQuality(q) {
   closeQ();
   if (q === curQ) return;
-  curQ = q; localStorage.setItem('tsfq2', q);
+  curQ = q; localStorage.setItem('tsfq3', q);
   renderQSel();
   if (!cur) return;
   // 记住各路播放进度与播放状态, 换源后续播
@@ -6114,15 +6116,15 @@ def order_files(names):
     return sorted(names, key=lambda f: (order.index(cam_of(f)) if cam_of(f) in order else 99, f))
 
 
-# ---------- 新事件 360p 预热: 点开秒开 ----------
-# 实测 (T760 / 8 核): 一段 60 秒的 1280x960 转 360p 要 13~16 秒。
-# 播放器默认单路 (触发摄像头), 所以只转那一路:
-#   * 触发段 + 前后各一段, 每事件 3 个文件 (~4MB), 不再是 12 个 (整组 4~6 路 x 3 段)
+# ---------- 新事件 480p 预热: 点开秒开 ----------
+# 实测 (T760 / 8 核): 一段 60 秒的 1280x960 转 480p 要 17~18 秒 (360p 约 16 秒)。
+# 播放器默认单路 480p (与飞书推送/导出的默认档位一致), 所以只转那一路:
+#   * 触发段 + 前后各一段, 每事件 3 个文件 (~10MB), 不再是 12 个 (整组 4~6 路 x 3 段)
 #   * 单路串行, 且只借 Q_SEM 一个名额: 有人在看视频 / 有人在等转码就让位
 #   * 最近 2 分钟还在写的事件跳过, 免得转半截文件
 PREWARM = {"on": os.environ.get("TSF_PREWARM", "1") != "0", "done": 0, "last": "", "skip": {}}
 PREWARM_CATS = ("SentryClips", "SavedClips")
-PREWARM_Q = "360p"
+PREWARM_Q = "480p"
 
 
 def _cam_of(f):
@@ -6158,7 +6160,7 @@ def _prewarm_targets(cat, name):
 
 
 def _prewarm_pick():
-    """挑一个还有 360p 没转的事件 (新的优先), 返回 (mtime, cat, name, [待转文件])"""
+    """挑一个还有 480p 没转的事件 (新的优先), 返回 (mtime, cat, name, [待转文件])"""
     best = None
     for cat in PREWARM_CATS:
         base = os.path.join(ARCHIVE, cat)
@@ -6187,7 +6189,7 @@ def _prewarm_pick():
 
 
 def prewarm_loop():
-    """后台把新事件的触发段转成 360p; 有人看视频/等转码时让位, 空闲了再接着做"""
+    """后台把新事件的触发段转成 480p; 有人看视频/等转码时让位, 空闲了再接着做"""
     time.sleep(150)                            # 开机先让同步和服务稳定
     while True:
         try:
@@ -7505,7 +7507,7 @@ class Handler(BaseHTTPRequestHandler):
                         "dir": os.path.dirname(fp) if fp else FONT_DIR,
                         "install_dir": FONT_DIR})
         elif path == "/api/prewarm":
-            # 360p 预热进度 (调试/自检用): done=累计转好路数, last=最近做的事件
+            # 480p 预热进度 (调试/自检用): done=累计转好路数, last=最近做的事件
             self._json({"on": PREWARM["on"], "done": PREWARM["done"], "last": PREWARM["last"],
                         "q": PREWARM_Q, "busy_users": USER_TRANS[0],
                         "media_active": MEDIA_ACTIVE[0]})
