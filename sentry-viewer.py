@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import socket
+import select
 import http.client
 import ssl
 import zipfile
@@ -97,7 +98,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.23"
+APP_VERSION = "2.8.26"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -897,7 +898,7 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .ic-rows.open { display:block; }
 .ick { display:inline-block; min-width:64px; color:var(--muted); }
 .ic-fold { background:none; border:none; color:var(--muted); font-size:12px; cursor:pointer; padding:10px 2px 6px; margin-left:auto; display:block; }
-.pbar { display:flex; align-items:center; gap:12px; padding:10px 16px calc(12px + env(safe-area-inset-bottom,0px)); max-width:1008px; margin:0 auto; width:100%; box-sizing:border-box; }
+.pbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:10px 16px calc(12px + env(safe-area-inset-bottom,0px)); max-width:1008px; margin:0 auto; width:100%; box-sizing:border-box; }
 .pp { width:44px; height:44px; border-radius:50%; background:var(--text); color:var(--panel); border:none; font-size:16px; cursor:pointer; flex:0 0 auto; }
 .pbar input[type=range] { flex:1; accent-color:#3b82f6; min-width:80px; }
 .pbar .t { font-size:13.5px; color:var(--text); min-width:44px; text-align:center; }
@@ -909,7 +910,10 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .qsel.open .qmenu { display:block; }
 .qmenu button { display:block; width:100%; text-align:left; background:none; border:none; color:var(--text); font-size:13px; padding:9px 12px; border-radius:7px; cursor:pointer; white-space:nowrap; }
 .qmenu button.on { background:#10b981; color:#fff; }
-.qhint { font-size:12px; color:var(--amber); flex:0 0 100%; text-align:left; display:none; }
+/* 转码/加载提示: 单独占一整行 (以前是 pbar 里的 flex:0 0 100%, 而 pbar 不换行,
+   结果被挤到屏幕右侧外面, 手机上只露出「正在…」半个字) */
+.qhint { font-size:12px; color:var(--amber); flex:1 0 100%; min-width:0; text-align:center;
+  line-height:1.5; display:none; word-break:break-word; }
 .empty { text-align:center; padding:80px 20px; color:var(--muted2); }
 .empty .big { font-size:44px; margin-bottom:14px; }
 /* 设置面板 */
@@ -1515,13 +1519,16 @@ function setQuality(q) {
   const wasPlaying = v0el ? !v0el.paused : false;
   const times = [...document.querySelectorAll('#vgrid video')].map(v => v.currentTime || 0);
   const hint = document.getElementById('qhint');
+  /* 延迟 1.2 秒再提示「正在转码」: 命中预热缓存时 first frame 通常 <1 秒就到了,
+     提示一闪而过反而让人以为在等转码。真的要转 (十几秒/路) 才让它出现。 */
+  clearTimeout(setQuality._ht); clearTimeout(setQuality._show);
+  hint.style.display = 'none';
   if (q !== 'orig') {
-    hint.textContent = '正在按 ' + q + ' 转码所选片段 (首次约需 15 秒/路, 转好一次后秒开)…';
-    hint.style.display = 'block';
-    clearTimeout(setQuality._ht);
-    setQuality._ht = setTimeout(() => { hint.style.display = 'none'; }, 90000);
-  } else {
-    hint.style.display = 'none';
+    setQuality._show = setTimeout(() => {
+      hint.textContent = '正在切换到 ' + q + '…(这段还没切到该清晰度时需后台转码, 约 15 秒/路)';
+      hint.style.display = 'block';
+      setQuality._ht = setTimeout(() => { hint.style.display = 'none'; }, 25000);
+    }, 1200);
   }
   renderClip();
   const vids = [...document.querySelectorAll('#vgrid video')];
@@ -1530,7 +1537,9 @@ function setQuality(q) {
     if (v.readyState >= 1) seek();
     else v.addEventListener('loadedmetadata', seek, { once: true });
   });
-  if (wasPlaying) tryPlay();
+  /* tryPlay 需要传 video 参数: 以前这里 tryPlay() 无参调用会抛 TypeError,
+     表现为切清晰度后视频停在暂停态、还得再手动点一下播放 */
+  if (wasPlaying) playAll();
   // 第一路能播就撤提示
   const v0 = vids[0];
   if (v0) v0.addEventListener('canplay', () => { hint.style.display = 'none'; }, { once: true });
@@ -2037,7 +2046,10 @@ function renderClip() {
     const cell = document.createElement('div'); cell.className = 'vcell';
     cell.dataset.cam = v.cam || '';
     const vid = document.createElement('video');
-    vid.src = qUrl(v.url); vid.muted = true; vid.defaultMuted = true; vid.preload = 'auto';
+    /* preload 用 metadata 而不是 auto: 4 路同时 auto 会各拉整段 3.7MB (合计 15MB),
+       在盒子 4G 上行这种窄链路上互相抢, 反而谁都要缓冲半天。
+       只要元数据就能定位到触发时刻, 点播放时再按需拉那一小段。*/
+    vid.src = qUrl(v.url); vid.muted = true; vid.defaultMuted = true; vid.preload = 'metadata';
     /* 每格加载状态: 转码/缓冲时显示提示, 避免黑屏让人以为坏了 */
     const cl = document.createElement('div'); cl.className = 'cload';
     cl.innerHTML = '<span class="spin"></span><span>缓冲中…</span>';
@@ -2049,14 +2061,10 @@ function renderClip() {
       cl.innerHTML = '<span>' + t('加载失败, 点其他片段再试') + '</span>';
     });
     vid.addEventListener('waiting', () => { cl.style.display = ''; });
-    /* 低清晰度首次播放需要后台转码, 缓冲时给出提示 */
-    vid.addEventListener('waiting', () => {
-      if (curQ !== 'orig') {
-        const h = document.getElementById('qhint');
-        h.textContent = t('正在缓冲 (首次播放新片段需后台转码十几秒, 转好一次后秒开)…');
-        h.style.display = 'block';
-      }
-    });
+    /* 注意: 这里不再往 #qhint 塞「正在转码」的提示 —— 那段文案是 2.8.x 早期「点开才转码」的残留,
+       现在新事件触发段已经预热好了, 中途一次带宽抖动也会触发 waiting, 提示纯属误导。
+       每格自己有「缓冲中…」遮罩, 足够表达状态; #qhint 只留给手动切清晰度时用。
+       后台确实在转码时, 首帧要多等十几秒, 由下面的延迟提示兜住 (见 setQuality)。*/
     vid.addEventListener('canplay', () => { document.getElementById('qhint').style.display = 'none'; });
     vid.setAttribute('muted', ''); vid.setAttribute('playsinline', '');
     vid.setAttribute('webkit-playsinline', ''); vid.setAttribute('x5-playsinline', '');
@@ -4421,7 +4429,7 @@ STITCH_DIR = os.environ.get("TSF_CACHE", "/opt/mu300") + "/stitch-tmp"  # 不用
 STITCH_JOBS = {}
 STITCH_LOCK = threading.Lock()
 # 视频流并发上限: 事件多的时候浏览器会一口气请求上百个预览, 不限流会拖死设备
-MEDIA_SEM = threading.BoundedSemaphore(int(os.environ.get("TSF_MEDIA_CONN", "8")))
+MEDIA_SEM = threading.BoundedSemaphore(int(os.environ.get("TSF_MEDIA_CONN", "16")))  # 媒体流并发上限: 4路视频+封面+接口要同时走, 太小会让新请求排队
 MEDIA_ACTIVE = [0]        # 正在推送的视频流数量: 自动升级要等它归零, 别打断正在看的人
 THUMB_DIR = os.environ.get("TSF_CACHE", "/opt/mu300") + "/thumbs"
 THUMB_SEM = threading.BoundedSemaphore(2)
@@ -7553,15 +7561,42 @@ class Handler(BaseHTTPRequestHandler):
                 if rng:
                     self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
                 self.end_headers()
+                # 写循环必须能感知「客户端已经不要这份数据了」:
+                # 浏览器 preload=metadata 只读完 moov 就中止请求 (ERR_ABORTED), 而我们这边
+                # 还在傻写剩下的几 MB —— 线程挂死、MEDIA_SEM 名额被占光, 后面用户点播放的
+                # seek 请求全部排队等 20 秒超时 503, 四格画面就永远停在「缓冲中…」。
+                # select 探到对端 EOF/RST 立刻收摊; 15s socket 超时兜底 (公网 64KB 正常
+                # 几百毫秒就写完, 15s 都写不完说明客户端已经不读了)。
+                try:
+                    self.connection.settimeout(15)
+                except OSError:
+                    pass
+                peer_dead = False
                 with open(fp, "rb") as f:
                     f.seek(start)
                     remain = length
+                    deadline = time.time() + 60
                     while remain > 0:
+                        try:
+                            r, _, _ = select.select([self.connection], [], [], 0)
+                            if r:
+                                if not self.connection.recv(1, socket.MSG_PEEK):
+                                    peer_dead = True     # 对端 FIN
+                                    break
+                        except (ConnectionResetError, OSError):
+                            peer_dead = True
+                            break
                         chunk = f.read(min(65536, remain))
                         if not chunk:
                             break
-                        self.wfile.write(chunk)
+                        try:
+                            self.wfile.write(chunk)
+                        except (BrokenPipeError, ConnectionResetError, socket.timeout, TimeoutError, OSError):
+                            peer_dead = True
+                            break
                         remain -= len(chunk)
+                        if time.time() > deadline:
+                            break     # 链路太慢, 交还线程给别的请求
             except (BrokenPipeError, ConnectionResetError):
                 pass
             finally:
@@ -7993,6 +8028,10 @@ class BoundedServer(ThreadingHTTPServer):
     """限并发的线程式服务: 设备只有 1.4G 内存, 无限开线程会被慢连接拖垮。"""
     daemon_threads = True
     max_workers = 48
+    # TCP accept 队列。socketserver 默认只有 5 —— 手机打开播放页会瞬间连上来
+    # 4 路视频 + 封面 + 接口, 超过 5 的连接会被内核直接丢掉, 客户端要等 1s/2s/4s 重传,
+    # 表现就是「有时秒开, 有时卡两三秒才出画面」。放宽到 128 让内核替我们排队。
+    request_queue_size = 128
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
