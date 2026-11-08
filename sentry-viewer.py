@@ -97,7 +97,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.14"
+APP_VERSION = "2.8.15"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -4784,7 +4784,9 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
         return None
     W, H = size if size else (1280, 720)
     W, H = max(320, int(W)), max(240, int(H))
-    s = W / 1280.0
+    # 水印大小跟画面高度走 (同样高度下观感一致, 4:3 的 960x720 也不会显得过小);
+    # 极窄画面再用宽度兜底, 免得右侧元素挤出画外
+    s = min(H / 720.0, W / 900.0)
 
     pad = int(round(14 * s))
     bh = int(round(46 * s))                  # 顶部窄条高度
@@ -4814,10 +4816,9 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
     x = rtri_x - int(round(7 * s))
     ltri_x = x - tri                         # 左转向灯 (尖朝左)
     x = ltri_x - gap12
-    unit_w = int(round(_wm_tw("km/h", f_unit)))
-    unit_cx = x - unit_w / 2.0
+    unit_w = int(round(_wm_tw("km/h", f_unit) * 1.06)) + 2   # 略放大: km/h 用左锚, 尾部留白更安全
     x -= unit_w + int(round(6 * s))
-    num_right = x                            # 车速右对齐线
+    num_right = x                            # 车速右对齐线 = km/h 左锚基准
     R = int(round(11 * s))                   # AP 方向盘半径
     wheel_gap = int(round(9 * s))            # 方向盘与车速之间的间距
     x -= int(round(_wm_tw("000", f_num))) + wheel_gap + R * 2
@@ -4857,6 +4858,11 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
         lines.append("Dialogue: 2,%s,%s,%s,,0,0,0,,{\\an%d\\pos(%d,%d)\\fs%d\\1c%s}%s"
                      % (ts(a), ts(b), style, an, int(px), int(py), fs, color, esc(s_text)))
 
+    def txt_raw(a, b, an, px, py, fs, body):
+        """body 里允许内联标签 (一行里混字号/颜色), 交给 libass 自己排版"""
+        lines.append("Dialogue: 2,%s,%s,Wm,,0,0,0,,{\\an%d\\pos(%d,%d)\\fs%d}%s"
+                     % (ts(a), ts(b), an, int(px), int(py), fs, body))
+
     # 顶部窄条: 与原版一致的 rgba(13,18,26,.15)
     lines.append("Dialogue: 0,0:00:00.00,%s,,WmV,0,0,0,,{\\an7\\pos(0,0)\\bord0\\shad0"
                  "\\1c&H1A120D&\\alpha&HD9&\\p1}%s{\\p0}"
@@ -4885,17 +4891,19 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
             yield i, j + 1, k
             i = j + 1
 
-    # ---- 左: 日期时间 + 城市·街道 (每秒) ----
+    # ---- 左: 日期时间 + 城市·街道 合成一行 (由 libass 顺序排版, 不依赖宽度估算) ----
     for n in range(dur):
         if t0 is not None:
             date_s = (t0 + datetime.timedelta(seconds=ss + n)).strftime("%Y/%m/%d %H:%M:%S")
         else:
             date_s = ""
+        seg = []
         if date_s:
-            txt(n, n + 1, "Wm", 4, pad, yc, f_date, C_WHITE, date_s)
+            seg.append("{\\1c%s}%s" % (C_WHITE, esc(date_s)))
         if loc:
-            txt(n, n + 1, "Wm", 4, pad + _wm_tw(date_s, f_date) + int(round(10 * s)), yc,
-                f_loc, C_SOFT, loc)
+            seg.append("{\\fs%d\\1c%s}%s" % (f_loc, C_SOFT, esc(loc)))
+        if seg:
+            txt_raw(n, n + 1, 4, pad, yc, f_date, "  ".join(seg))
 
     # ---- 右: 油门 / 刹车 / 挡位 / 转向灯 (状态相同的连续秒合并, 减小字幕体积) ----
     for a, b, k in spans(lambda n: (int(round(fr[n][3])), bool(fr[n][5]), fr[n][1], fr[n][6])):
@@ -4915,15 +4923,16 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
     # ---- 右: AP 方向盘 + 车速 (按"车速 + AP 状态"分组; 数字变宽时方向盘跟着左移, 与网页一致) ----
     for a, b, k in spans(lambda n: (max(0, int(round(fr[n][2]))), int(fr[n][7] or 0) in (1, 2, 3))):
         sp, on = k
-        nw = _wm_tw(str(sp), f_num)
+        nw = _wm_tw(str(sp), f_num) * 1.04 + 1          # 宁大勿小: 估大只会让方向盘偏左一点
         disc, glyph = _ass_wheel(num_right - nw - wheel_gap - R, yc, R)
         shape(a, b, C_AP_ON if on else C_AP_OFF, disc, "&H00&" if on else "&H61&")
         shape(a, b, C_WHITE if on else C_AP_GLY, glyph, layer=2)
-        txt(a, b, "Wm", 5, num_right - nw / 2.0, yc, f_num, C_WHITE, str(sp))
-        txt(a, b, "Wm", 5, unit_cx, yc, f_unit, C_SOFT, "km/h")
+        # 数字右锚(6) / km/h 左锚(4): 位数变化只往左长, 两个元素永远不会互相压叠
+        txt(a, b, "Wm", 6, num_right, yc, f_num, C_WHITE, str(sp))
+        txt(a, b, "Wm", 4, num_right + int(round(6 * s)), yc, f_unit, C_SOFT, "km/h")
 
     p = os.path.join(RES_DIR, "wm-%s.ass" % hashlib.md5(
-        ("%s|%d|%d|%dx%d|ap6" % (fp, int(ss), dur, W, H)).encode()).hexdigest()[:16])
+        ("%s|%d|%d|%dx%d|ap7" % (fp, int(ss), dur, W, H)).encode()).hexdigest()[:16])
     with open(p, "w", encoding="utf-8") as fo:
         fo.write("\n".join(lines) + "\n")
     return p
@@ -4954,10 +4963,14 @@ def _make_push_video(fp, off, quality="480p", dur=30):
                     meta = json.load(f) or {}
             except Exception:
                 meta = {}
-            ass = _wm_ass(fp, ss, dur, meta) or ""
+            # 单路是 scale=-2:h, 真实宽度由源宽高比决定 (特斯拉原片 4:3 → 720p 只有 960 宽)。
+            # ASS 的 PlayRes 必须等于真实输出尺寸, 否则 x 坐标会被按比例压缩而字号不变。
+            sw, sh = probe_size(fp) or (1280, 960)
+            ow = max(2, int(round(sw * float(h) / max(1, sh) / 2.0)) * 2)
+            ass = _wm_ass(fp, ss, dur, meta, size=(ow, h)) or ""
     except Exception:
         ass = ""
-    key = hashlib.md5(("%s|%d|%.2f|%s|%d|%s" % (fp, int(off), ss, quality, dur, "wm2" if ass else "-")).encode()).hexdigest()[:16]
+    key = hashlib.md5(("%s|%d|%.2f|%s|%d|%s" % (fp, int(off), ss, quality, dur, "wm3" if ass else "-")).encode()).hexdigest()[:16]
     out = os.path.join(RES_DIR, "push-%s.mp4" % key)
     if os.path.isfile(out) and os.path.getsize(out) > 0:
         return out
@@ -5448,6 +5461,20 @@ def probe_duration(path):
         return 0.0
 
 
+def probe_size(path):
+    """返回视频 (宽, 高); 失败返回 None。水印 ASS 的 PlayResX/PlayResY 必须等于输出尺寸,
+    否则 libass 会按 帧宽/PlayResX 压缩 x 坐标而字号不变, 元素之间会互相压叠。"""
+    try:
+        out = subprocess.run([FFPROBE_BIN, "-v", "error", "-select_streams", "v:0",
+                              "-show_entries", "stream=width,height",
+                              "-of", "csv=s=x:p=0", path],
+                             capture_output=True, timeout=20).stdout.decode().strip()
+        w, h = out.replace("\r", "").splitlines()[0].split("x")[:2]
+        return int(w), int(h)
+    except Exception:
+        return None
+
+
 def mem_available_mb():
     """读取 MemAvailable, 用于合成前的内存兜底检查"""
     try:
@@ -5643,7 +5670,11 @@ def _export_worker(job_id, paths, out_path, total, wm, height):
     try:
         # 画面尺寸: 单路保持原比例; 多路统一 2 列网格, 输出仍是 16:9 便于水印排版
         if n == 1:
-            OW, OH = -2, height
+            OH = height
+            # 单路宽度由源宽高比决定 (特斯拉原片是 1280x960 的 4:3, 720p 下实际输出 960x720)。
+            # 水印 ASS 的 PlayRes 必须用这个真实宽度, 不能写死 1280, 否则 x 坐标被压 0.75 倍。
+            sw, sh = probe_size(paths[0]) or (1280, 960)
+            OW = max(2, int(round(sw * float(OH) / max(1, sh) / 2.0)) * 2)
         else:
             cols, rows = 2, (n + 1) // 2
             OW, OH = 1280, 720
@@ -5679,7 +5710,7 @@ def _export_worker(job_id, paths, out_path, total, wm, height):
                 except Exception:
                     meta = {}
                 ass = _wm_ass(paths[0], 0, probe_duration(paths[0]) or 0, meta,
-                              size=(OW if OW > 0 else 1280, OH)) or ""
+                              size=(OW, OH)) or ""
             except Exception:
                 ass = ""
 
