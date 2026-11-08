@@ -93,7 +93,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # ---------------- 版本与在线升级 (OTA) ----------------
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 多数能通, 同时内置镜像源兜底, 依次尝试。
-APP_VERSION = "2.8.9"
+APP_VERSION = "2.8.10"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://raw.githubusercontent.com/%s/main" % OTA_REPO,
@@ -542,7 +542,6 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .storrow + .storbar { margin-bottom:7px; }
 .storbar:last-child { margin-bottom:0; }
 .storlab { font-size:12px; color:var(--text); font-weight:600; }
-.storlab i { font-style:normal; font-weight:500; font-size:10.5px; color:var(--muted2); margin-left:4px; }
 .storval { font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .storbar { height:4px; border-radius:2px; background:var(--line2); overflow:hidden; }
 .storbar i { display:block; height:100%; width:0; background:var(--blue); border-radius:2px; transition:width .4s; }
@@ -866,9 +865,9 @@ select.ninput { cursor:pointer; }
 <nav class="tabs" id="tabs"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()">🌗</button><button id="gear" title="设置">⚙</button></header>
 <nav class="storwrap" id="storwrap" style="display:none">
   <div class="storcard">
-<div class="storrow"><span class="storlab">虚拟U盘 <i id="stornom">—</i></span><span class="storval" id="storvusb"></span></div>
+<div class="storrow"><span class="storlab">虚拟U盘</span><span class="storval" id="storvusb"></span></div>
 <div class="storbar"><i id="storvusbbar"></i></div>
-<div class="storrow"><span class="storlab">归档区 <i id="storarcnote"></i></span><span class="storval" id="storarc"></span></div>
+<div class="storrow"><span class="storlab">归档区</span><span class="storval" id="storarc"></span></div>
 <div class="storbar"><i id="storarcbar"></i></div>
 <div class="storrow"><span class="storlab">总占用</span><span class="storval" id="stortot"></span></div>
 <div class="storbar"><i id="stortotbar"></i></div>
@@ -1481,13 +1480,9 @@ async function refreshLive() {
     sw.style.display = '';
     // 前两行各按自己的容量算, 第三行才是整盘
     // 虚拟U盘: 镜像文件实占 / 镜像标称容量
-    document.getElementById('stornom').textContent =
-      dk.img_nominal ? '标称 ' + gb(dk.img_nominal) : '';
     tset('storvusb', dk.img_real, dk.img_nominal, 'storvusbbar', '#2f6ee0');
-    // 归档区: 已归档 / 可用上限 (= 已归档 + 盘剩余), 两者之差就是还能长多大
+    // 归档区: 已归档 / 可用上限 (= 已归档 + 盘剩余)
     const arcTot = (dk.arc_used || 0) + (dk.arc_free || 0);
-    document.getElementById('storarcnote').textContent =
-      dk.arc_free ? '剩余 ' + gb(dk.arc_free) : '';
     tset('storarc', dk.arc_used, arcTot, 'storarcbar', '#4cc38a');
     // 总占用: 整盘已用 / 整盘容量 (三行都在 tset 里按 90% 自动转红)
     tset('stortot', dk.disk_used, dk.disk_total, 'stortotbar', '#2f6ee0');
