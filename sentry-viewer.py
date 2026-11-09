@@ -98,7 +98,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.35"
+APP_VERSION = "2.8.36"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -1055,13 +1055,18 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
 .lvstatus { font-size:12px; color:var(--muted); text-align:right; max-width:42%; line-height:1.4; word-break:break-all; }
 .lvbody { padding:12px 0 0; display:flex; flex-direction:column; gap:10px; }
 .lvmeta { font-size:13px; color:var(--muted); }
-#lv-video { width:100%; max-height:58vh; background:#000; border-radius:12px; }
-/* 全览: 4 路同屏 */
+/* 单路: 宽高由 JS 按片源真实比例定 (Tesla 多为 4:3), 上限 58vh 且居中,
+   不写死 16/9, 也不靠 max-height 把画面压扁 */
+#lv-video { display:block; width:100%; height:auto; max-height:58vh; margin:0 auto;
+  background:#000; border-radius:12px; object-fit:contain; }
+/* 全览: 4 路同屏。拿不到片源比例前先用 16/9 撑住格子, JS 算好真实行高后
+   加 .ready 去掉这个约束, 避免 CSS aspect-ratio 压过 grid 行高把 4:3 裁掉 */
 .lvgrid { display:none; gap:3px; background:#000; border-radius:12px; overflow:hidden; grid-template-columns:1fr 1fr; }
 .lvgrid.on { display:grid; }
 .lvgrid.n1 { grid-template-columns:1fr; }
 .lvgrid .lvcell { position:relative; overflow:hidden; background:#000; aspect-ratio:16/9; cursor:zoom-in; }
-.lvgrid .lvcell video { width:100%; height:100%; object-fit:cover; display:block; background:#000; }
+.lvgrid.ready .lvcell { aspect-ratio:auto; }
+.lvgrid .lvcell video { width:100%; height:100%; object-fit:contain; display:block; background:#000; }
 .lvgrid .lvcell .clabel { position:absolute; right:6px; bottom:6px; font-size:11px; color:#e8eef4; background:rgba(20,24,29,.72); border-radius:6px; padding:2px 7px; pointer-events:none; }
 .lvrow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .lvbtn { padding:9px 14px; border-radius:9px; border:1px solid var(--line2); background:var(--panel2); color:var(--text); font-size:13px; cursor:pointer; }
@@ -1206,7 +1211,7 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
     <div class="lvrow" id="lv-cams"></div>
     <div class="lvrow">
       <span style="font-size:13px;color:var(--muted)">画质</span>
-      <select id="lv-q" onchange="setLiveQ(this.value)" title="与回放相同的几档画质; 选非原画时由设备按需转码, 第一次打开要等几秒 (转好一次后秒开)">
+      <select id="lv-q" onchange="setLiveQ(this.value)" title="与回放相同的几档画质; 非原画由设备后台转码, 首次先用已有档位立即开播, 转好后下次生效">
         <option value="orig">原画</option>
         <option value="720p">720p</option>
         <option value="480p">480p</option>
@@ -1223,7 +1228,7 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
       </select>
       <button class="lvbtn" onclick="liveTick()">检查更新</button>
     </div>
-    <div class="hint">「全览」同时播放全部摄像头, 数据量较大 (4 路每分钟约 100MB), 建议流量充足时使用; 点任一格可切到单路。画质可选 原画 / 720p / 480p / 360p: 非原画由设备按需转码, 第一次打开要等几秒, 转好一次后秒开 (全览建议 480p 及以下)。原理: 车机循环录制 1 分钟一段; 后台的只读同步 (不打断车机) 把刚写完的片段持续收进归档, 这里自动发现并播放最新片段, 即约 1 分钟延时的"直播"。刚停车/刚触发录像的片段要等写完才会出现。</div>
+    <div class="hint">「全览」同时播放全部摄像头, 数据量较大 (4 路每分钟约 100MB), 建议流量充足时使用; 点任一格可切到单路。画质可选 原画 / 720p / 480p / 360p: 非原画由设备后台转码, 首次先用已有档位立即开播, 转好后下次打开即生效 (全览建议 480p 及以下)。原理: 车机循环录制 1 分钟一段; 后台的只读同步 (不打断车机) 把刚写完的片段持续收进归档, 这里自动发现并播放最新片段, 即约 1 分钟延时的"直播"。刚停车/刚触发录像的片段要等写完才会出现。</div>
   </div>
 </div>
 <div class="panel" id="panel">
@@ -1516,6 +1521,8 @@ if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListen
 const Q_LIST = [['orig', '原画'], ['720p', '720p'], ['480p', '480p'], ['360p', '360p']];
 const isLanNet = /^(100\.96\.|192\.168\.|10\.|127\.)/.test(location.hostname);
 let curQ = localStorage.getItem('tsfq3') || '480p';
+/* 已提前提交过后台转码的 (分类+画质+事件列表) 组合, 避免 10 秒轮询重复 POST */
+let prekicked = new Set();
 /* 苹果设备: 合成改走设备端 (Safari 的 MediaRecorder 只能出 webm, 微信不认) */
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -1547,17 +1554,16 @@ function setQuality(q) {
   const wasPlaying = v0el ? !v0el.paused : false;
   const times = [...document.querySelectorAll('#vgrid video')].map(v => v.currentTime || 0);
   const hint = document.getElementById('qhint');
-  /* 延迟 1.2 秒再提示「正在转码」: 命中预热缓存时 first frame 通常 <1 秒就到了,
-     提示一闪而过反而让人以为在等转码。真的要转 (十几秒/路) 才让它出现。 */
+  /* 延迟提示取消: 现在 /media 未命中画质缓存时先给原画 + 后台转码, 首帧不再干等
+     十几秒, 只需说明「本次是原画、转好后下次生效」即可 */
   clearTimeout(setQuality._ht); clearTimeout(setQuality._show);
   hint.style.display = 'none';
   if (q !== 'orig') {
-    setQuality._show = setTimeout(() => {
-      hint.textContent = '正在切换到 ' + q + '…(这段还没切到该清晰度时需后台转码, 约 15 秒/路)';
-      hint.style.display = 'block';
-      setQuality._ht = setTimeout(() => { hint.style.display = 'none'; }, 25000);
-    }, 1200);
+    hint.textContent = '正在后台生成 ' + q + ' 画质, 本次先用现有档位播放 (切段或下次打开即生效)';
+    hint.style.display = 'block';
+    setQuality._ht = setTimeout(() => { hint.style.display = 'none'; }, 6000);
   }
+  { prekicked.clear(); prekickList(); }
   renderClip();
   const vids = [...document.querySelectorAll('#vgrid video')];
   vids.forEach((v, i) => {
@@ -1668,6 +1674,40 @@ function gridDims(n) {
   return [c, Math.ceil(n / c)];
 }
 
+/* 页面一打开就把「最可能点开的几路」按当前画质提交后台转码。
+   服务端转一段要 9~20 秒, 以前是点进去才开始转、还得干等; 现在提前一脚,
+   等用户真的点开时通常缓存已就绪 (就算没好也只是先播原画, 不阻塞)。 */
+function prekickList() {
+  const q = curQ;
+  if (!data || !q || q === 'orig' || !Q_LIST.some(x => x[0] === q)) return;
+  const evs = (data[currentCat] || []).slice(0, 2);
+  const rc = (data.RecentClips || [])[0];
+  if (!evs.length && !rc) return;
+  const tag = q + '|' + currentCat + '|' + evs.map(e => e.name).join(',') + '|rc:' + (rc ? rc.name : '');
+  if (prekicked.has(tag)) return;
+  prekicked.add(tag);
+  const paths = [];
+  evs.forEach(ev => {
+    const clips = groupVideos(ev.videos || []);
+    if (!clips.length) return;
+    const hit = triggerClip(ev, clips);
+    const c = clips[hit ? hit.ix : clips.length - 1];
+    if (!c) return;
+    const tc = triggerCam(ev);
+    const pick = (tc && (c.vids || []).find(v => v.cam === tc)) || camSort(c.vids || [])[0];
+    if (pick) paths.push(pick.url);
+  });
+  // 实时预览随时可能被点开, 顺带把最新行车记录片段的默认路也提一脚
+  if (rc) {
+    const cam = localStorage.getItem('tsflivecam') || 'front';
+    const rv = (rc.videos || []).find(v => v.cam === cam) || camSort(rc.videos || [])[0];
+    if (rv) paths.push(rv.url);
+  }
+  if (!paths.length) return;
+  try { fetch('/api/kick', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({paths: paths, q: q})}).catch(() => {}); } catch (e) {}
+}
+
 async function load() {
   data = await (await fetch('/api/events')).json();
   const tabs = document.getElementById('tabs');
@@ -1677,7 +1717,7 @@ async function load() {
     const b = document.createElement('button');
     b.className = 'tab' + (!liveOpen && c === currentCat ? ' active' : '');
     b.innerHTML = `<span class="tl">${t(CATS_NAME[c] || c)}</span><span class="tn">${data[c].length}</span>`;
-    b.onclick = () => { document.querySelectorAll('.tab').forEach(t => t.classList.remove('active')); b.classList.add('active'); currentCat = c; reasonFilter = 'all'; dateFilter = 'all'; closeLive(); render(c); };
+    b.onclick = () => { document.querySelectorAll('.tab').forEach(t => t.classList.remove('active')); b.classList.add('active'); currentCat = c; reasonFilter = 'all'; dateFilter = 'all'; closeLive(); render(c); prekickList(); };
     tabs.appendChild(b);
   }
   /* 第 4 个页签: 实时预览 (与分类页签同级) */
@@ -1692,6 +1732,7 @@ async function load() {
   renderQSel();
   render(currentCat);
   openDeepLink();
+  prekickList();
 }
 
 /* 支持 ?ev=SentryClips/2026-11-04_12-30-00 直接打开某个事件 */
@@ -1813,6 +1854,7 @@ async function refreshLive() {
       });
       document.getElementById('stat').textContent = `${t('归档')} ${Object.values(d).reduce((a, v) => a + v.length, 0)} ${t('条')}`;
       if (!document.getElementById('player').classList.contains('open')) render(currentCat);
+      prekickList();   // 新片段刚同步过来时, 立刻按当前画质提交后台转码
     }
   } catch (e) {}
 }
@@ -2180,7 +2222,7 @@ function renderClip() {
     /* 注意: 这里不再往 #qhint 塞「正在转码」的提示 —— 那段文案是 2.8.x 早期「点开才转码」的残留,
        现在新事件触发段已经预热好了, 中途一次带宽抖动也会触发 waiting, 提示纯属误导。
        每格自己有「缓冲中…」遮罩, 足够表达状态; #qhint 只留给手动切清晰度时用。
-       后台确实在转码时, 首帧要多等十几秒, 由下面的延迟提示兜住 (见 setQuality)。*/
+       现在 /media 未命中画质缓存会先给原画 + 后台转码, 首帧不再干等十几秒。*/
     vid.addEventListener('canplay', () => { document.getElementById('qhint').style.display = 'none'; });
     vid.setAttribute('muted', ''); vid.setAttribute('playsinline', '');
     vid.setAttribute('webkit-playsinline', ''); vid.setAttribute('x5-playsinline', '');
@@ -2503,6 +2545,34 @@ function updateHud(t) {
 window.addEventListener('resize', () => { if (document.getElementById('player').classList.contains('open')) layoutPlayer(); });
 
 /* ---------- 准实时预览 ---------- */
+/* 画面框跟片源尺寸匹配 (与哨兵/记录仪播放器同一套思路):
+   单路按 videoWidth/Height 定宽高, 最高 58vh 并居中; 全览按第一路比例算
+   像素行高。Tesla 片源多为 4:3, 固定 16/9 + cover 会把上下裁掉一截。 */
+function layoutLive() {
+  const v = document.getElementById('lv-video');
+  if (!v || !v.videoWidth || !v.videoHeight || v.style.display === 'none') return;
+  const ar = v.videoWidth / v.videoHeight;
+  const boxW = (v.parentElement && v.parentElement.clientWidth) || window.innerWidth;
+  const w = Math.max(1, Math.min(boxW, window.innerHeight * 0.58 * ar));
+  v.style.width = Math.round(w) + 'px';
+  v.style.height = Math.round(w / ar) + 'px';
+}
+function layoutLiveGrid() {
+  const g = document.getElementById('lv-grid');
+  if (!g || !g.classList.contains('on')) return;
+  const v0 = g.querySelector('video');
+  if (!v0 || !v0.videoWidth || !v0.videoHeight) return;
+  const cols = (g.children.length === 1 || g.classList.contains('n1')) ? 1 : 2;
+  const w = g.clientWidth || 0;
+  if (!w) return;
+  const cw = (w - 3 * (cols - 1)) / cols;
+  g.style.gridAutoRows = Math.round(cw * v0.videoHeight / v0.videoWidth) + 'px';
+  g.classList.add('ready');
+}
+window.addEventListener('resize', () => { layoutLive(); layoutLiveGrid(); });
+const _lvSingle = document.getElementById('lv-video');
+if (_lvSingle) _lvSingle.addEventListener('loadedmetadata', layoutLive);
+
 let liveCam = localStorage.getItem('tsflivecam') || 'front';
 /* 画质: 记住上次选择, 没选过就跟随播放器当前画质 (与回放同一套 原画/720p/480p/360p) */
 let liveQ = localStorage.getItem('tsfliveq') || '';
@@ -2579,13 +2649,27 @@ function renderLive(ev) {
     const v = vids.find(x => x.cam === liveCam) || vids[0];
     const want = lvUrl(v.url);
     if (v && vid.getAttribute('src') !== want) { vid.src = want; vid.play().catch(() => {}); }
+    layoutLive();
   }
+  prekickLive(vids);
+}
+/* 打开实时预览时就把当前片段按所选画质后台转好: 最新片段刚同步过来,
+   画质缓存必然没有。后台转码不挡首帧 (服务端先给原画), 下一分钟的新片段
+   或下次打开就能直接命中压缩档, 不用再走高码率原画。 */
+function prekickLive(vids) {
+  const q = liveQv();
+  if (!q || q === 'orig') return;
+  const paths = vids.slice(0, 4).map(v => v.url);
+  if (!paths.length) return;
+  try { fetch('/api/kick', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({paths: paths, q: q})}).catch(() => {}); } catch (e) {}
 }
 /* 全览: 每路一个 video, 同屏播放并互相对齐进度 */
 function clearLiveGrid() {
   if (liveSyncTimer) { clearInterval(liveSyncTimer); liveSyncTimer = null; }
   const g = document.getElementById('lv-grid');
-  g.classList.remove('on', 'n1');
+  g.classList.remove('on', 'n1', 'ready');
+  g.style.gridAutoRows = '';
   [...g.querySelectorAll('video')].forEach(v => { try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {} });
   g.innerHTML = '';
 }
@@ -2601,6 +2685,7 @@ function buildLiveGrid(vids) {
     const el = document.createElement('video');
     el.playsInline = true; el.muted = true; el.preload = 'auto';
     el.onloadedmetadata = () => { el.currentTime = 0.05; el.play().catch(() => {}); };
+    el.addEventListener('loadedmetadata', layoutLiveGrid);
     const lb = document.createElement('div');
     lb.className = 'clabel';
     lb.textContent = camLabel(v.cam);
@@ -6460,6 +6545,46 @@ def get_variant(fp, qv, slot=True):
     finally:
         if slot:
             Q_SEM.release()
+
+# 后台转码作业去重: 同一个 (源片, 画质) 只排一次队。
+# 媒体播放请求不再同步等 ffmpeg —— 首帧先用原画顶上, 缓存转好后下一次请求
+# 自动命中压缩档。以前 /media 里直接 get_variant() 会把响应头压到转码结束才发,
+# 浏览器连 moov 都拿不到, 未预热的文件要点开后干等 10~25 秒。
+_VARIANT_JOBS = set()
+_VARIANT_JOBS_LOCK = threading.Lock()
+
+
+def spawn_variant(fp, qv):
+    """后台生成 qv 缓存 (同一文件同一档位只起一个作业); 无需等待。"""
+    if qv not in RES_SCALE or qv == "orig":
+        return False
+    if _variant_ready(fp, qv):
+        return False
+    key = (fp, qv)
+    with _VARIANT_JOBS_LOCK:
+        if key in _VARIANT_JOBS:
+            return False
+        _VARIANT_JOBS.add(key)
+
+    def run():
+        try:
+            # 稍等一下再开工: 首帧刚发出去时别立刻起 ffmpeg 抢本地磁盘 IO,
+            # 否则回退原画那一帧反而会被拖慢
+            time.sleep(1.5)
+            # 自己排队拿转码槽, 不计入 USER_TRANS —— 否则后台作业排队期间
+            # prewarm_loop 会一直误判「用户正在等转码」而无限让位
+            if Q_SEM.acquire(timeout=600):
+                try:
+                    get_variant(fp, qv, slot=False)
+                finally:
+                    Q_SEM.release()
+        finally:
+            with _VARIANT_JOBS_LOCK:
+                _VARIANT_JOBS.discard(key)
+
+    threading.Thread(target=run, daemon=True).start()
+    return True
+
 CAM_ORDER6 = ["left_pillar", "front", "right_pillar", "left_repeater", "back", "right_repeater"]
 CAM_ORDER4 = ["front", "back", "left_repeater", "right_repeater"]
 
@@ -6511,6 +6636,18 @@ def _prewarm_targets(cat, name):
     """只预热「触发摄像头」那一路 (触发段 + 前后各一段)。
     默认播放器就是单路, 其他方位等用户点按钮时再按需转 —— 以前每段转满 6 路、
     三段共 12 个文件, 现在只要 3 个, 同一个事件省 3/4 的 CPU 和缓存。"""
+    if cat == "RecentClips":
+        # 行车记录 / 准实时预览: 没有 event.json, 每分钟一个新目录, 4 路同组。
+        # 只转默认那一路 (front), 其余等用户点; 全览由前端 /api/kick 补。
+        d = os.path.join(ARCHIVE, cat, name)
+        try:
+            fs = sorted(f for f in os.listdir(d) if f.lower().endswith(".mp4"))
+        except OSError:
+            return []
+        if not fs:
+            return []
+        pick = next((f for f in fs if _cam_of(f) == "front"), fs[0])
+        return [os.path.join(d, pick)]
     fp, _off, _meta = _pick_clip(cat, name)
     if not fp:
         return []
@@ -6563,9 +6700,37 @@ def _prewarm_pick():
     return best
 
 
+def _live_prewarm_pick():
+    """行车记录/准实时预览专用: 只照顾最近 15 分钟里最新的 2 个片段目录。
+    这类片段每分钟新增一个, 用户点开时画质缓存必定还没有, 所以单独高频照顾。"""
+    base = os.path.join(ARCHIVE, "RecentClips")
+    try:
+        names = sorted(os.listdir(base), reverse=True)[:2]
+    except OSError:
+        return None
+    for name in names:
+        d = os.path.join(base, name)
+        if not os.path.isdir(d) or PREWARM["skip"].get("RecentClips/" + name, 0) >= 2:
+            continue
+        try:
+            mt = os.path.getmtime(d)
+        except OSError:
+            continue
+        age = time.time() - mt
+        if age < 15 or age > 900:              # 刚写完/太老都不碰
+            continue
+        todo = [f for f in _prewarm_targets("RecentClips", name) if not _variant_ready(f, PREWARM_Q)]
+        if todo:
+            return (mt, "RecentClips", name, todo)
+    return None
+
+
+PREWARM_ALT = [0]
+
+
 def prewarm_loop():
     """后台把新事件的触发段转成 480p; 有人看视频/等转码时让位, 空闲了再接着做"""
-    time.sleep(150)                            # 开机先让同步和服务稳定
+    time.sleep(45)                             # 开机先让同步和服务稳定
     while True:
         try:
             if not PREWARM["on"]:
@@ -6574,9 +6739,15 @@ def prewarm_loop():
             if MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0:
                 time.sleep(15)                 # 有人在用, 别抢
                 continue
-            job = _prewarm_pick()
+            # 哨兵/手动保存优先, 但隔一轮就让行车记录插一次队 —— 否则哨兵事件
+            # 一直有未转片段时, 每分钟新增的 RecentClips 会被永远饿死
+            PREWARM_ALT[0] += 1
+            if PREWARM_ALT[0] % 2 == 0:
+                job = _live_prewarm_pick() or _prewarm_pick()
+            else:
+                job = _prewarm_pick() or _live_prewarm_pick()
             if not job:
-                time.sleep(90)                 # 都转好了, 隔一会儿再扫新事件
+                time.sleep(12)                 # 都转好了, 短轮询以便接住新片段
                 continue
             _mt, cat, name, todo = job
             n = 0
@@ -8031,8 +8202,25 @@ class Handler(BaseHTTPRequestHandler):
                 return
             # 清晰度: ?q=360p/480p/720p 时返回按需转码的缓存副本 (失败回退原文件)
             qv = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("q", ["orig"])[0]
+            variant_note = ""
             if qv in RES_SCALE and qv != "orig":
-                fp = get_variant(fp, qv)
+                if _variant_ready(fp, qv):
+                    fp = _variant_path(fp, qv)
+                else:
+                    # 缓存还没生成: 立即发首帧, 转码交给后台。
+                    # 不能在这里 get_variant() —— 那会同步等 ffmpeg 转完(10~25s)
+                    # 才发响应头, 浏览器一直停在「缓冲中」, 这正是首次点开慢的根因。
+                    spawn_variant(fp, qv)
+                    # 优先拿任意已转好的压缩档顶上: 转码产物都是 faststart
+                    # (moov 在文件头), 首帧 ~0.3s; Tesla 原片 moov 在文件尾,
+                    # 浏览器要再绕一趟读尾部索引, 首帧要 3~6 秒。
+                    alt = next((a for a in ("480p", "360p", "720p")
+                                if a != qv and _variant_ready(fp, a)), None)
+                    if alt:
+                        fp = _variant_path(fp, alt)
+                        variant_note = "alt:" + alt
+                    else:
+                        variant_note = "orig"      # 一档都没有, 才回退原画
             size = os.path.getsize(fp)
             rng = self.headers.get("Range")
             if rng:
@@ -8072,6 +8260,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "video/mp4")
                 self.send_header("Content-Length", str(length))
                 self.send_header("Accept-Ranges", "bytes")
+                if variant_note:
+                    self.send_header("X-TSF-Variant", variant_note)   # 本次暂用替代档/原画, 后台正在转目标档
                 if rng:
                     self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
                 self.end_headers()
@@ -8079,10 +8269,12 @@ class Handler(BaseHTTPRequestHandler):
                 # 浏览器 preload=metadata 只读完 moov 就中止请求 (ERR_ABORTED), 而我们这边
                 # 还在傻写剩下的几 MB —— 线程挂死、MEDIA_SEM 名额被占光, 后面用户点播放的
                 # seek 请求全部排队等 20 秒超时 503, 四格画面就永远停在「缓冲中…」。
-                # select 探到对端 EOF/RST 立刻收摊; 15s socket 超时兜底 (公网 64KB 正常
-                # 几百毫秒就写完, 15s 都写不完说明客户端已经不读了)。
+                # select 探到对端 EOF/RST 立刻收摊; 5s socket 超时兜底 (公网 64KB 正常
+                # 几百毫秒就写完; 某些中转链路不转发 RST, 客户端 abort 后服务端
+                # 会一直往黑洞里写满 15 秒, 把上行占死, 后面 seek 的请求就饿着)。
+                # 超时只作用于「单次 write 卡住」, 正常下载大文件每块都很快, 不受影响。
                 try:
-                    self.connection.settimeout(15)
+                    self.connection.settimeout(5)
                 except OSError:
                     pass
                 peer_dead = False
@@ -8221,8 +8413,11 @@ class Handler(BaseHTTPRequestHandler):
                     if _variant_ready(fp, qv):
                         skipped += 1
                         continue
-                    threading.Thread(target=get_variant, args=(fp, qv), daemon=True).start()
-                    started += 1
+                    # 后台排队生成, 同一个文件只排一次; 请求立刻返回, 不占用连接
+                    if spawn_variant(fp, qv):
+                        started += 1
+                    else:
+                        skipped += 1
             self._json({"ok": True, "started": started, "skipped": skipped})
             return
         if path == "/api/auth/pass":
