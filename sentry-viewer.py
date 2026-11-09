@@ -98,7 +98,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.33"
+APP_VERSION = "2.8.34"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -721,6 +721,8 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .storbar i { display:block; height:100%; width:0; background:var(--blue); border-radius:2px; transition:width .4s; }
 .storextra { display:none; }
 .storcard.open .storextra { display:block; }
+/* 展开时右下角小箭头会压住最后一行的数值, 给数值留出箭头的位置 */
+.storextra .storrow:last-child .storval { padding-right: 26px; }
 .stortog { position:absolute; right:4px; bottom:3px; width:22px; height:20px; padding:0; border:0; border-radius:6px;
   background:transparent; color:var(--muted2); cursor:pointer; display:flex; align-items:center; justify-content:center;
   -webkit-tap-highlight-color:transparent; }
@@ -1093,8 +1095,9 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
 <div class="storbar"><i id="storarcbar"></i></div>
 <div class="storrow"><span class="storlab">总占用</span><span class="storval" id="stortot"></span></div>
 <div class="storbar"><i id="stortotbar"></i></div>
+<div class="storrow"><span class="storlab">系统状态</span><span class="storval" id="storsys">—</span></div>
 </div>
-<button class="stortog" id="stortog" onclick="toggleStor()" title="展开归档区和总占用" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+<button class="stortog" id="stortog" onclick="toggleStor()" title="展开归档区、总占用与系统状态" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
 </nav>
 <nav class="filters" id="filters"></nav>
@@ -1488,7 +1491,7 @@ function toggleStor() {
   const c = document.getElementById('storcard'), b = document.getElementById('stortog');
   if (!c || !b) return;
   const open = c.classList.toggle('open');
-  b.title = open ? '收起归档区和总占用' : '展开归档区和总占用';
+  b.title = open ? '收起归档区、总占用与系统状态' : '展开归档区、总占用与系统状态';
   b.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -1769,6 +1772,20 @@ async function refreshLive() {
     if (ia) ia.title = t('盒子上保存的历史副本 (车机 U 盘里只保留滚动缓冲)');
     // 总占用: 整盘已用 / 整盘容量 (三行统一按 storColor 的占用比例取色)
     tset('stortot', dk.disk_used, dk.disk_total, 'stortotbar');
+    // 系统状态一行 (同一折叠区): CPU 温度 · CPU 占用 · 内存, 不带进度条;
+    // 温度超 70°C 染红 / 低于 40°C 染绿提一眼前状态, 其余保持 muted 色
+    const sy = live.sys, syEl = document.getElementById('storsys');
+    if (sy && syEl) {
+      const tp = (sy.cpu_temp != null) ? sy.cpu_temp : null;
+      let tspan = '—';
+      if (tp != null) {
+        const tc = tp > 70 ? '#e8443f' : tp < 40 ? '#4cc38a' : '';
+        tspan = '<span' + (tc ? ' style="color:' + tc + ';font-weight:600"' : '') + '>' + tp + '°C</span>';
+      }
+      syEl.innerHTML = tspan +
+        ' · CPU ' + (sy.cpu_pct != null ? sy.cpu_pct + '%' : '—') +
+        ' · 内存 ' + (sy.mem_total > 0 ? gb(sy.mem_used) + '/' + gb(sy.mem_total) : '—');
+    }
   } else {
     sw.style.display = 'none';
   }
@@ -4442,6 +4459,61 @@ def archive_size():
     return sz
 
 
+_SYS_CACHE = {"t": 0.0, "v": {}}
+
+
+def sys_status():
+    """系统状态一行: CPU 温度 / CPU 占用 / 内存占用 (给存储卡折叠区显示)。
+
+    存储卡每 10 秒轮询一次, 可能多个端同时打开 —— 结果缓存 3 秒;
+    CPU 占用必须两次采样 /proc/stat 求差, 睡 150ms 就当是采样窗口。"""
+    now = time.time()
+    if _SYS_CACHE["t"] and now - _SYS_CACHE["t"] < 3:
+        return _SYS_CACHE["v"]
+    d = {"cpu_temp": None, "cpu_pct": None, "mem_total": 0, "mem_used": 0}
+    # CPU 温度: thermal_zone 里取读数合理的热区最大值 (SoC 通常只有一两个)
+    temps = []
+    for i in range(8):
+        try:
+            with open("/sys/class/thermal/thermal_zone%d/temp" % i) as f:
+                v = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        if 20000 < v < 150000:            # 20~150°C 之外当它是坏传感器
+            temps.append(v / 1000.0)
+    if temps:
+        d["cpu_temp"] = round(max(temps), 1)
+    # CPU 占用: /proc/stat 两次采样求差 (user+nice+system+idle+... 与 idle+ iowait)
+    def _cpu_pair():
+        with open("/proc/stat") as f:
+            vals = [int(x) for x in f.readline().split()[1:] if x.isdigit()]
+        idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+        return sum(vals), idle
+    try:
+        t1, i1 = _cpu_pair()
+        time.sleep(0.15)
+        t2, i2 = _cpu_pair()
+        dt = t2 - t1
+        if dt > 0:
+            d["cpu_pct"] = round(max(0.0, min(100.0, (dt - (i2 - i1)) / dt * 100)), 1)
+    except Exception:
+        pass
+    # 内存: MemTotal - MemAvailable (MemAvailable 才是内核估计的真正可用量)
+    try:
+        mi = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                mi[k] = int(v.strip().split()[0]) * 1024
+        d["mem_total"] = mi.get("MemTotal", 0)
+        avail = mi.get("MemAvailable", mi.get("MemFree", 0))
+        d["mem_used"] = max(0, mi.get("MemTotal", 0) - avail)
+    except Exception:
+        pass
+    _SYS_CACHE.update(t=now, v=d)
+    return d
+
+
 def disk_usage():
     """存储卡三行数据: 虚拟U盘(卷内已写入) / 归档区 / 整盘总占用
 
@@ -4534,7 +4606,8 @@ def live_status():
             last = lines[-1].split("] ", 1)[-1]
     except Exception:
         pass
-    return {"running": running, "pending": pending, "ago": ago, "last": last, "disk": disk_usage()}
+    return {"running": running, "pending": pending, "ago": ago, "last": last,
+            "disk": disk_usage(), "sys": sys_status()}
 
 
 def active_skin():
