@@ -98,7 +98,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.36"
+APP_VERSION = "2.8.37"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -1674,16 +1674,16 @@ function gridDims(n) {
   return [c, Math.ceil(n / c)];
 }
 
-/* 页面一打开就把「最可能点开的几路」按当前画质提交后台转码。
-   服务端转一段要 9~20 秒, 以前是点进去才开始转、还得干等; 现在提前一脚,
-   等用户真的点开时通常缓存已就绪 (就算没好也只是先播原画, 不阻塞)。 */
+/* 页面一打开就把「最可能点开的几路」按当前画质提交后台转码, 只对哨兵/手动保存。
+   行车记录不预热: 片段每分钟新增、很快滚动删除, 预转的缓存立刻作废, 还会让
+   SoC 长期满载高温。真点开时由 /media 按需后台转码, 先发首帧不阻塞。 */
 function prekickList() {
   const q = curQ;
   if (!data || !q || q === 'orig' || !Q_LIST.some(x => x[0] === q)) return;
+  if (currentCat !== 'SentryClips' && currentCat !== 'SavedClips') return;
   const evs = (data[currentCat] || []).slice(0, 2);
-  const rc = (data.RecentClips || [])[0];
-  if (!evs.length && !rc) return;
-  const tag = q + '|' + currentCat + '|' + evs.map(e => e.name).join(',') + '|rc:' + (rc ? rc.name : '');
+  if (!evs.length) return;
+  const tag = q + '|' + currentCat + '|' + evs.map(e => e.name).join(',');
   if (prekicked.has(tag)) return;
   prekicked.add(tag);
   const paths = [];
@@ -1697,12 +1697,6 @@ function prekickList() {
     const pick = (tc && (c.vids || []).find(v => v.cam === tc)) || camSort(c.vids || [])[0];
     if (pick) paths.push(pick.url);
   });
-  // 实时预览随时可能被点开, 顺带把最新行车记录片段的默认路也提一脚
-  if (rc) {
-    const cam = localStorage.getItem('tsflivecam') || 'front';
-    const rv = (rc.videos || []).find(v => v.cam === cam) || camSort(rc.videos || [])[0];
-    if (rv) paths.push(rv.url);
-  }
   if (!paths.length) return;
   try { fetch('/api/kick', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({paths: paths, q: q})}).catch(() => {}); } catch (e) {}
@@ -1854,7 +1848,7 @@ async function refreshLive() {
       });
       document.getElementById('stat').textContent = `${t('归档')} ${Object.values(d).reduce((a, v) => a + v.length, 0)} ${t('条')}`;
       if (!document.getElementById('player').classList.contains('open')) render(currentCat);
-      prekickList();   // 新片段刚同步过来时, 立刻按当前画质提交后台转码
+      prekickList();   // 新的哨兵/保存事件刚同步过来时, 按当前画质提交后台预转
     }
   } catch (e) {}
 }
@@ -2651,18 +2645,6 @@ function renderLive(ev) {
     if (v && vid.getAttribute('src') !== want) { vid.src = want; vid.play().catch(() => {}); }
     layoutLive();
   }
-  prekickLive(vids);
-}
-/* 打开实时预览时就把当前片段按所选画质后台转好: 最新片段刚同步过来,
-   画质缓存必然没有。后台转码不挡首帧 (服务端先给原画), 下一分钟的新片段
-   或下次打开就能直接命中压缩档, 不用再走高码率原画。 */
-function prekickLive(vids) {
-  const q = liveQv();
-  if (!q || q === 'orig') return;
-  const paths = vids.slice(0, 4).map(v => v.url);
-  if (!paths.length) return;
-  try { fetch('/api/kick', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({paths: paths, q: q})}).catch(() => {}); } catch (e) {}
 }
 /* 全览: 每路一个 video, 同屏播放并互相对齐进度 */
 function clearLiveGrid() {
@@ -6700,36 +6682,11 @@ def _prewarm_pick():
     return best
 
 
-def _live_prewarm_pick():
-    """行车记录/准实时预览专用: 只照顾最近 15 分钟里最新的 2 个片段目录。
-    这类片段每分钟新增一个, 用户点开时画质缓存必定还没有, 所以单独高频照顾。"""
-    base = os.path.join(ARCHIVE, "RecentClips")
-    try:
-        names = sorted(os.listdir(base), reverse=True)[:2]
-    except OSError:
-        return None
-    for name in names:
-        d = os.path.join(base, name)
-        if not os.path.isdir(d) or PREWARM["skip"].get("RecentClips/" + name, 0) >= 2:
-            continue
-        try:
-            mt = os.path.getmtime(d)
-        except OSError:
-            continue
-        age = time.time() - mt
-        if age < 15 or age > 900:              # 刚写完/太老都不碰
-            continue
-        todo = [f for f in _prewarm_targets("RecentClips", name) if not _variant_ready(f, PREWARM_Q)]
-        if todo:
-            return (mt, "RecentClips", name, todo)
-    return None
-
-
-PREWARM_ALT = [0]
-
-
+# 预热白名单: 只有哨兵 + 手动保存。行车记录 (RecentClips) 每分钟新增一段、很快滚动删除,
+# 预转出来的缓存几乎立刻作废, 只会让设备一直满载转码、SoC 长期高温, 所以不预热。
+# 用户真的点开行车记录/实时预览时, /media 仍会按需后台转码 (不挡首帧)。
 def prewarm_loop():
-    """后台把新事件的触发段转成 480p; 有人看视频/等转码时让位, 空闲了再接着做"""
+    """后台把新哨兵/手动保存事件的触发段转成 480p; 有人看视频时让位"""
     time.sleep(45)                             # 开机先让同步和服务稳定
     while True:
         try:
@@ -6739,15 +6696,9 @@ def prewarm_loop():
             if MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0:
                 time.sleep(15)                 # 有人在用, 别抢
                 continue
-            # 哨兵/手动保存优先, 但隔一轮就让行车记录插一次队 —— 否则哨兵事件
-            # 一直有未转片段时, 每分钟新增的 RecentClips 会被永远饿死
-            PREWARM_ALT[0] += 1
-            if PREWARM_ALT[0] % 2 == 0:
-                job = _live_prewarm_pick() or _prewarm_pick()
-            else:
-                job = _prewarm_pick() or _live_prewarm_pick()
+            job = _prewarm_pick()
             if not job:
-                time.sleep(12)                 # 都转好了, 短轮询以便接住新片段
+                time.sleep(12)                 # 都转好了, 短轮询以便接住新的哨兵/保存事件
                 continue
             _mt, cat, name, todo = job
             n = 0
@@ -8408,6 +8359,13 @@ class Handler(BaseHTTPRequestHandler):
                         fp = os.path.normpath(os.path.join(ARCHIVE, fp.lstrip("/")))
                     if not fp.startswith(ARCHIVE + os.sep) or not fp.endswith(".mp4") \
                             or not os.path.isfile(fp):
+                        skipped += 1
+                        continue
+                    # 预转白名单: 只有哨兵 / 手动保存。行车记录片段滚动淘汰, 预转的缓存
+                    # 马上作废, 只会让设备持续满载转码; 在服务端兜住, 旧版页面缓存也拦得住。
+                    # 注意: 只管「提前预转」, 用户真点开时 /media 的按需转码不受影响。
+                    rel = os.path.relpath(fp, ARCHIVE).replace(os.sep, "/")
+                    if not rel.startswith(("SentryClips/", "SavedClips/")):
                         skipped += 1
                         continue
                     if _variant_ready(fp, qv):
