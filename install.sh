@@ -60,15 +60,15 @@ FREE_MB=$(df -Pm "$(dirname "$TSF_DIR")" 2>/dev/null | awk 'NR==2{print $4}')
 [ -z "$FREE_MB" ] && FREE_MB="?"
 say "存储空闲: ${FREE_MB}MB, 计划镜像 ${SIZE_GB}G (稀疏文件, 按实际写入占用)"
 
-# 兼容性保护: 车机首次使用会格式化整个虚拟U盘, 稀疏文件会被写成实占
-# (镜像标称多大就实占多大)。镜像 + 归档 + 系统必须留出余量, 否则磁盘写满后
-# 块设备返回 I/O 错误, 车机会把 U 盘判为"读不出/需要格式化"。
+# 容量余量: 镜像是稀疏文件, 预置文件系统后初始只占几十 KB; 但车机持续录像会
+# 逐步把它写满, 镜像 + 归档 + 系统必须留出余量, 否则磁盘写满后块设备返回
+# I/O 错误, 车机会把 U 盘判为「读不出/需要格式化」。
 # 经验值: 64G 镜像在哨兵 4 路约 8.4G/小时下可滚动录制 7 小时以上, 足够日常使用。
 if [ "$FREE_MB" != "?" ]; then
     NEED_MB=$((SIZE_GB * 1024 + 20480))    # 镜像满容量 + 至少 20G 归档/系统余量
     if [ "$FREE_MB" -lt "$NEED_MB" ]; then
         echo "  [警告] 空闲 ${FREE_MB}MB 可能放不下 ${SIZE_GB}G 镜像+归档余量(约 ${NEED_MB}MB)"
-        echo "         车机格式化后镜像会按容量实占; 空间紧张请降低容量, 例如:"
+        echo "         车机录像会逐步写满镜像; 空间紧张请降低容量, 例如:"
         echo "           sudo ./install.sh --size 32"
     fi
 fi
@@ -93,6 +93,7 @@ cp "$SRC_DIR/scripts/tesla-sync.sh"   "$TSF_DIR/tesla-sync.sh"
 cp "$SRC_DIR/scripts/usb-selfheal.sh" "$TSF_DIR/usb-selfheal.sh"
 cp "$SRC_DIR/scripts/tesla-img.sh"    "$TSF_DIR/tesla-img.sh"
 cp "$SRC_DIR/scripts/tsf-check.sh"    "$TSF_DIR/tsf-check.sh"
+cp "$SRC_DIR/scripts/mkexfat.py"     "$TSF_DIR/mkexfat.py"
 chmod +x "$TSF_DIR"/*.sh "$TSF_DIR"/*.py
 
 mkdir -p "$ARCHIVE"/SentryClips "$ARCHIVE"/SavedClips "$ARCHIVE"/RecentClips \
@@ -111,11 +112,22 @@ if [ -n "$CUR_EXPORT" ] && [ -f "$CUR_EXPORT" ]; then
     say "检测到已在导出的镜像, 沿用它: $IMG"
 fi
 
+# 新部署: 直接生成完整的 exFAT 文件系统 + TeslaCam 目录, 车机插上就能
+# 识别容量并开始录制, 不再弹「格式化 USB 设备」。
+# 旧版只建了全零空盘, 这里检测到没有 exFAT 签名也会补写一次 (安全: 镜像里
+# 已有任何数据时 mkexfat.py 会拒绝覆盖)。
 if [ -f "$IMG" ]; then
-    say "镜像已存在, 跳过创建: $IMG"
+    MAGIC=$(dd if="$IMG" bs=1 skip=3 count=5 2>/dev/null)
+    if [ "$MAGIC" = "EXFAT" ]; then
+        say "镜像已存在且有 exFAT, 跳过: $IMG"
+    else
+        say "镜像没有文件系统 (旧版空盘), 补写 exFAT + TeslaCam: $IMG"
+        "$PYTHON" "$SRC_DIR/scripts/mkexfat.py" "$IMG" "$SIZE_GB"
+        sync
+    fi
 else
-    say "创建 ${SIZE_GB}G 稀疏镜像 ..."
-    dd if=/dev/zero of="$IMG" bs=1M count=1 seek=$((SIZE_GB * 1024 - 1)) conv=notrunc 2>/dev/null
+    say "创建 ${SIZE_GB}G 稀疏镜像并预置 exFAT + TeslaCam 目录 ..."
+    "$PYTHON" "$SRC_DIR/scripts/mkexfat.py" "$IMG" "$SIZE_GB"
     sync
 fi
 ls -lh "$IMG"

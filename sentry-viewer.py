@@ -98,7 +98,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.34"
+APP_VERSION = "2.8.35"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -721,8 +721,18 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .storbar i { display:block; height:100%; width:0; background:var(--blue); border-radius:2px; transition:width .4s; }
 .storextra { display:none; }
 .storcard.open .storextra { display:block; }
-/* 展开时右下角小箭头会压住最后一行的数值, 给数值留出箭头的位置 */
-.storextra .storrow:last-child .storval { padding-right: 26px; }
+/* 系统状态: 与三条占用行分层 —— 细分隔线 + 三等分指标格 (标签在上/数值在下),
+   不再把三个值挤成一串灰字; 右侧同样留 24px 给折叠箭头, 与进度条右边缘对齐 */
+.storsys { margin-top:9px; padding-top:8px; border-top:1px solid var(--line2); }
+.storsys .storlab { display:block; margin-bottom:6px; }
+.sysgrid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin-right:24px; }
+.syscell { min-width:0; background:var(--panel2); border:1px solid var(--line);
+  border-radius:8px; padding:5px 7px 6px; }
+.syscell .k { display:block; font-size:10px; line-height:1.3; color:var(--muted2); }
+.syscell .v { display:block; margin-top:2px; font-size:12.5px; line-height:1.35; font-weight:600;
+  color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.syscell .v .u { font-size:10px; font-weight:400; color:var(--muted2); margin-left:1px; }
 .stortog { position:absolute; right:4px; bottom:3px; width:22px; height:20px; padding:0; border:0; border-radius:6px;
   background:transparent; color:var(--muted2); cursor:pointer; display:flex; align-items:center; justify-content:center;
   -webkit-tap-highlight-color:transparent; }
@@ -1095,7 +1105,7 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
 <div class="storbar"><i id="storarcbar"></i></div>
 <div class="storrow"><span class="storlab">总占用</span><span class="storval" id="stortot"></span></div>
 <div class="storbar"><i id="stortotbar"></i></div>
-<div class="storrow"><span class="storlab">系统状态</span><span class="storval" id="storsys">—</span></div>
+<div class="storsys"><span class="storlab">系统状态</span><div class="sysgrid" id="storsys"></div></div>
 </div>
 <button class="stortog" id="stortog" onclick="toggleStor()" title="展开归档区、总占用与系统状态" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
@@ -1772,19 +1782,20 @@ async function refreshLive() {
     if (ia) ia.title = t('盒子上保存的历史副本 (车机 U 盘里只保留滚动缓冲)');
     // 总占用: 整盘已用 / 整盘容量 (三行统一按 storColor 的占用比例取色)
     tset('stortot', dk.disk_used, dk.disk_total, 'stortotbar');
-    // 系统状态一行 (同一折叠区): CPU 温度 · CPU 占用 · 内存, 不带进度条;
-    // 温度超 70°C 染红 / 低于 40°C 染绿提一眼前状态, 其余保持 muted 色
+    // 系统状态 (同一折叠区): 三等分指标格, 标签在上/数值在下; 温度异常时染色
     const sy = live.sys, syEl = document.getElementById('storsys');
-    if (sy && syEl) {
-      const tp = (sy.cpu_temp != null) ? sy.cpu_temp : null;
-      let tspan = '—';
-      if (tp != null) {
-        const tc = tp > 70 ? '#e8443f' : tp < 40 ? '#4cc38a' : '';
-        tspan = '<span' + (tc ? ' style="color:' + tc + ';font-weight:600"' : '') + '>' + tp + '°C</span>';
-      }
-      syEl.innerHTML = tspan +
-        ' · CPU ' + (sy.cpu_pct != null ? sy.cpu_pct + '%' : '—') +
-        ' · 内存 ' + (sy.mem_total > 0 ? gb(sy.mem_used) + '/' + gb(sy.mem_total) : '—');
+    if (syEl) {
+      const cell = (k, v, color) =>
+        '<div class="syscell"><span class="k">' + k + '</span>' +
+        '<span class="v"' + (color ? ' style="color:' + color + '"' : '') + '>' + v + '</span></div>';
+      const tp = (sy && sy.cpu_temp != null) ? sy.cpu_temp : null;
+      const tc = tp == null ? '' : tp > 70 ? '#e8443f' : tp < 40 ? '#4cc38a' : '';
+      const mem = (sy && sy.mem_total > 0)
+        ? gb(sy.mem_used) + '<span class="u">/' + gb(sy.mem_total) + '</span>' : '—';
+      syEl.innerHTML =
+        cell('温度', tp != null ? tp + '°C' : '—', tc) +
+        cell('CPU', (sy && sy.cpu_pct != null) ? sy.cpu_pct + '%' : '—') +
+        cell('内存', mem);
     }
   } else {
     sw.style.display = 'none';
@@ -4033,6 +4044,293 @@ def usb_img_age():
         return -1
 
 
+# ---------- 车机U盘「幽灵占用」回收 (位图自愈) ----------
+# 深检发现: exFAT 分配位图里会积累「已标记占用、但没有任何目录项引用」的簇 ——
+# 缩容/中断写入时代的残留 + 偶发的删除残留。车机和网页据此把死数据当真实占用,
+# 容量被幽灵数据慢慢吃掉 (实测曾达 4.5GB), 却没有任何入口能清掉。
+# 修法与 Windows chkdsk 同款: 空闲窗口内按规范重走目录树, 收集全部被引用的簇,
+# 把位图里未被引用的簇清零 (同簇的 FAT 陈旧项一并归零)。目录项一个不碰。
+# 安全窗口与归档同步同款: 车机 10 分钟没写 + 跨进程排他锁 + 短暂停止 USB 导出。
+# 默认关闭: 该逻辑尚未完成离线回归, 不该在自动维护循环里改写车机镜像。
+# 需要在已有设备上手动启用时, 在启动环境里显式设 TSF_RECLAIM_MIN_MB=1024 等正值。
+RECLAIM_MIN_MB = int(os.environ.get("TSF_RECLAIM_MIN_MB", "0"))       # 0=关闭; >0 时才动手
+RECLAIM_IDLE_S = int(os.environ.get("TSF_RECLAIM_IDLE_S", "600"))    # 与 tesla-sync.sh 的空闲门槛一致
+RECLAIM_EVERY_S = 4 * 3600                                            # 两次回收至少间隔 4 小时
+_reclaim_ts = [0.0]
+
+
+def _exf_collect_refs(fd):
+    """只读按 exFAT 规范走一遍目录树。
+    返回 (引用簇集合, 位图簇链, FAT 数组, 几何 dict)。
+    任何结构异常直接抛出 —— 调用方放弃本次操作, 绝不带着疑问写盘。"""
+    vbr = os.pread(fd, 512, 0)
+    if len(vbr) < 512 or vbr[3:11] != b"EXFAT   ":
+        raise ValueError("bad VBR")
+    g = {
+        "bps": 1 << vbr[108],
+        "spc": 1 << vbr[109],
+        "fat_off": struct.unpack_from("<I", vbr, 80)[0],
+        "fat_len": struct.unpack_from("<I", vbr, 84)[0],
+        "heap_off": struct.unpack_from("<I", vbr, 88)[0],
+        "cl_cnt": struct.unpack_from("<I", vbr, 92)[0],
+        "root_cl": struct.unpack_from("<I", vbr, 96)[0],
+    }
+    g["csz"] = g["bps"] * g["spc"]
+    g["cl_max"] = g["cl_cnt"] + 2
+    fat_raw = os.pread(fd, g["fat_len"] * g["bps"], g["fat_off"] * g["bps"])
+    if len(fat_raw) < g["fat_len"] * g["bps"]:
+        raise ValueError("short FAT")
+    fat = struct.unpack("<%dI" % (len(fat_raw) // 4), fat_raw)
+
+    def rd_cl(c):
+        if c < 2 or c >= g["cl_max"]:
+            raise ValueError("cluster out of range: %d" % c)
+        d = os.pread(fd, g["csz"], (g["heap_off"] + (c - 2) * g["spc"]) * g["bps"])
+        if len(d) < g["csz"]:
+            raise ValueError("short cluster read")
+        return d
+
+    def chain(c):
+        out, seen = [], set()
+        while 2 <= c < g["cl_max"]:
+            if c in seen:
+                raise ValueError("FAT loop at %d" % c)
+            seen.add(c)
+            out.append(c)
+            nxt = fat[c]
+            if nxt >= 0xFFFFFFF7:
+                return out
+            if nxt < 2:
+                raise ValueError("broken chain at %d" % c)
+            c = nxt
+        raise ValueError("chain out of range")
+
+    refs = set()
+
+    def add_entry(clusters):
+        for c in clusters:
+            if not (2 <= c < g["cl_max"]):
+                raise ValueError("ref cluster out of range: %d" % c)
+        refs.update(clusters)
+
+    def walk_dir(cl, nochain, size, depth):
+        """遍历一个目录: 记录自身占用 + 解析里面的文件/子目录"""
+        if depth > 8:
+            raise ValueError("dir nesting too deep")
+        if nochain:
+            n = max(1, (size + g["csz"] - 1) // g["csz"])
+            if cl + n > g["cl_max"]:
+                raise ValueError("no-chain dir beyond volume")
+            cls = list(range(cl, cl + n))
+        else:
+            cls = chain(cl)
+        add_entry(cls)
+        data = b"".join(rd_cl(c) for c in cls)
+        i = 0
+        while i + 32 <= len(data):
+            t = data[i]
+            if t == 0:
+                break
+            if t in (0x81, 0x82, 0x83):     # 位图/大小写表/卷标只在根目录出现, 单项即完
+                i += 32
+                continue
+            if t == 0x85:                    # 活着的文件/目录项集
+                nsec = data[i + 1]
+                end = i + 32 * (1 + nsec)
+                if nsec < 2 or end > len(data):
+                    raise ValueError("bad entry set")
+                raw = data[i:end]
+                attrs = struct.unpack_from("<H", raw, 4)[0]
+                fc, dl, noch = 0, 0, False
+                for j in range(nsec):
+                    sec = raw[32 * (1 + j):32 * (2 + j)]
+                    st = sec[0]
+                    if st == 0xC0:
+                        noch = bool(sec[1] & 0x02)
+                        fc = struct.unpack_from("<I", sec, 20)[0]
+                        dl = struct.unpack_from("<Q", sec, 24)[0]
+                    elif st == 0xC1:
+                        pass                # 名字内容不影响簇引用
+                if attrs & 0x10:            # 子目录
+                    walk_dir(fc, noch, dl, depth + 1)
+                else:                       # 文件
+                    n = (dl + g["csz"] - 1) // g["csz"]
+                    if fc and n:
+                        if noch:
+                            if fc + n > g["cl_max"]:
+                                raise ValueError("no-chain file beyond volume")
+                            add_entry(range(fc, fc + n))
+                        else:
+                            add_entry(chain(fc))
+                i = end
+            else:
+                i += 32                     # 死项/未知项: 车机自己的删除标记, 不碰
+    # 根目录单独走一遍: 先抽出位图/大小写表两个元数据文件的簇链
+    root_cls = chain(g["root_cl"])
+    add_entry(root_cls)
+    root_data = b"".join(rd_cl(c) for c in root_cls)
+    bm_cls = up_cls = None
+    i = 0
+    while i + 32 <= len(root_data):
+        t = root_data[i]
+        if t == 0:
+            break
+        if t in (0x81, 0x82):
+            cl = struct.unpack_from("<I", root_data, i + 20)[0]
+            if t == 0x81:
+                bm_cls = cl
+            else:
+                up_cls = cl
+            i += 32
+            continue
+        if t == 0x83:
+            i += 32
+            continue
+        if t == 0x85:
+            nsec = root_data[i + 1]
+            end = i + 32 * (1 + nsec)
+            if nsec < 2 or end > len(root_data):
+                raise ValueError("bad root entry set")
+            raw = root_data[i:end]
+            attrs = struct.unpack_from("<H", raw, 4)[0]
+            fc, dl, noch = 0, 0, False
+            for j in range(nsec):
+                sec = raw[32 * (1 + j):32 * (2 + j)]
+                st = sec[0]
+                if st == 0xC0:
+                    noch = bool(sec[1] & 0x02)
+                    fc = struct.unpack_from("<I", sec, 20)[0]
+                    dl = struct.unpack_from("<Q", sec, 24)[0]
+            if attrs & 0x10:
+                walk_dir(fc, noch, dl, 1)
+            else:
+                n = (dl + g["csz"] - 1) // g["csz"]
+                if fc and n:
+                    if noch:
+                        if fc + n > g["cl_max"]:
+                            raise ValueError("no-chain file beyond volume")
+                        add_entry(range(fc, fc + n))
+                    else:
+                        add_entry(chain(fc))
+            i = end
+        else:
+            i += 32
+    if bm_cls is None or up_cls is None:
+        raise ValueError("root missing bitmap/upcase entry")
+    bm_chain = chain(bm_cls)
+    up_chain = chain(up_cls)
+    refs.update(bm_chain)
+    refs.update(up_chain)
+    return refs, bm_chain, fat, g
+
+
+def _exf_bitmap_bytes(fd, bm_chain, g):
+    data = b"".join(os.pread(fd, g["csz"], (g["heap_off"] + (c - 2) * g["spc"]) * g["bps"])
+                    for c in bm_chain)
+    if len(data) < len(bm_chain) * g["csz"]:
+        raise ValueError("short bitmap read")
+    return data
+
+
+def _exf_orphan_count(bm_data, refs, g):
+    """位图标记了、但目录树没引用的簇数"""
+    n = 0
+    cl_max = g["cl_max"]
+    for c in range(2, cl_max):
+        if (bm_data[(c - 2) >> 3] >> ((c - 2) & 7)) & 1 and c not in refs:
+            n += 1
+    return n
+
+
+def reclaim_ghost_allocations():
+    """回收位图里的幽灵占用。返回释放的字节数 (0 = 本次没动手)。"""
+    if RECLAIM_MIN_MB <= 0 or not os.path.exists(IMG):
+        return 0
+    now = time.time()
+    if now - _reclaim_ts[0] < RECLAIM_EVERY_S:
+        return 0
+    # 网页正在管理U盘(镜像已挂载)时不掺和; 车机最近还在写时不动刀
+    if os.path.ismount(MNT):
+        return 0
+    if usb_img_age() < RECLAIM_IDLE_S:
+        return 0
+    # 第一遍: 不打扰车机的只读探查, 先量出幽灵量够不够门槛
+    try:
+        fd = os.open(IMG, os.O_RDONLY)
+        try:
+            refs, bm_chain, fat, g = _exf_collect_refs(fd)
+            bm_data = _exf_bitmap_bytes(fd, bm_chain, g)
+            ghosts = _exf_orphan_count(bm_data, refs, g)
+        finally:
+            os.close(fd)
+    except Exception as e:
+        print("reclaim probe skip:", e)
+        return 0
+    if ghosts * g["csz"] < RECLAIM_MIN_MB * 1048576:
+        return 0
+    # 够门槛: 走与归档同步同款的安全窗口 (进程内互斥 + 跨进程排他锁 + 停止导出)
+    _reclaim_ts[0] = now
+    with usb_lock:
+        if os.path.ismount(MNT):
+            return 0
+        for _ in range(6):
+            if _acquire_usb_flock():
+                break
+            time.sleep(0.4)
+        else:
+            print("reclaim skip: usb busy (web/archive/selfheal)")
+            return 0
+        try:
+            _gadget_rebind(False)           # 停止导出, 车机几秒内看不到U盘
+            time.sleep(1)
+            fd = os.open(IMG, os.O_RDWR)
+            try:
+                # 停止导出后状态已稳定: 以这一遍的结果为准 (避免用探查时的旧账)
+                refs, bm_chain, fat, g = _exf_collect_refs(fd)
+                bm_data = _exf_bitmap_bytes(fd, bm_chain, g)
+                ghosts = _exf_orphan_count(bm_data, refs, g)
+                if ghosts * g["csz"] < RECLAIM_MIN_MB * 1048576:
+                    return 0
+                # 1) 重写分配位图: 引用簇置位, 其余清零
+                nbytes = (g["cl_cnt"] + 7) // 8
+                if nbytes > len(bm_chain) * g["csz"]:
+                    raise ValueError("bitmap region too small")
+                new_bm = bytearray(nbytes)
+                for c in refs:
+                    new_bm[(c - 2) >> 3] |= 1 << ((c - 2) & 7)
+                # 2) 清掉被释放簇上的 FAT 陈旧项, 让 FAT 与位图一致
+                cl_max = g["cl_max"]
+                dirty = [c for c in range(2, cl_max)
+                         if fat[c] != 0 and c not in refs]
+                fat_out = None
+                if dirty:
+                    for c in dirty:
+                        fat[c] = 0
+                    fat_out = struct.pack("<%dI" % len(fat), *fat)
+                # 内容全部在内存备好后再落盘 (避免写一半失败留下半新半旧的位图)
+                off = 0
+                for c in bm_chain:
+                    os.pwrite(fd, bytes(new_bm[off:off + g["csz"]]),
+                              (g["heap_off"] + (c - 2) * g["spc"]) * g["bps"])
+                    off += g["csz"]
+                if fat_out:
+                    os.pwrite(fd, fat_out, g["fat_off"] * g["bps"])
+                os.fsync(fd)
+                print("reclaim: freed %d clusters (%.2f GB), fat cleaned %d"
+                      % (ghosts, ghosts * g["csz"] / 1073741824, len(dirty)))
+                return ghosts * g["csz"]
+            finally:
+                os.close(fd)
+        except Exception as e:
+            print("reclaim error (no write?):", e)
+            return 0
+        finally:
+            _gadget_rebind(True)            # 无论成败都恢复导出
+            time.sleep(1)
+            _release_usb_flock()
+
+
+
 def live_latest():
     """归档里最新的 RecentClips 片段组与其入库时间 (秒); 没有返回 ("", 0)。
     片段由 tesla-live-sync.py 在后台持续只读同步进归档 (不打断车机), 延时约 1~2 分钟。"""
@@ -4914,6 +5212,10 @@ def disk_guard():
             pass
         try:   # 盒子侧哨兵/手动保存归档定期清理 (方案B)
             roll_box()
+        except Exception:
+            pass
+        try:   # 车机U盘幽灵占用回收 (位图自愈, 空闲窗口内才动手)
+            reclaim_ghost_allocations()
         except Exception:
             pass
         try:   # 兜底: 万一别的数据把盘吃满, 再按空间淘汰最旧的

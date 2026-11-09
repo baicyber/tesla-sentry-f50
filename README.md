@@ -18,7 +18,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| 🗂 虚拟 U 盘 | 默认 64G 稀疏 exFAT 镜像，通过 USB Gadget `mass_storage` 导出；车机提示「格式化 USB 设备」点确认即可，网卡 / 串口共存 |
+| 🗂 虚拟 U 盘 | 默认 64G 稀疏 exFAT 镜像，通过 USB Gadget `mass_storage` 导出；**部署时已预置完整 exFAT 文件系统 + `TeslaCam` 目录**，插车直接显示容量并开始录制，不用再点「格式化 USB 设备」，网卡 / 串口共存 |
 | ⚡ 实时查看 | `tesla-live-sync.py` 每 15 秒**只读解析 exFAT**（不挂载、不断 USB），车机边写网页边看，新片段通常 15–30 秒出现；cron `*/10` 只负责写 Boombox 音频 |
 | 📦 归档与滚动窗口 | 视频落到独立 ext4 归档区，不与车机同时读写镜像；`RecentClips` 跟随车机滚动缓冲只留最近 60 分钟，`SentryClips` / `SavedClips` 的**盒子副本**默认按 14 天 / 12GB 清理（车机 U 盘那份只读不动），`.pruned` 墓碑避免「删除→重抄」死循环 |
 | 🎬 播放 | **默认单路**: 点开事件直接播触发摄像头那一路 (画面下方切换条可选 前视/后视/左B柱/右B柱/全览, 点哪个才加载哪个, 切换保留播放进度)；全览 4 路 2×2 / 6 路 3×2 自适应，250ms 同步校正、统一进度条、0.5–4x；**自动落在触发时刻所在的那一分钟、从触发前 5 秒起播**（片段栏红点标记） |
@@ -66,12 +66,12 @@ sh scripts/tsf-check.sh --json   # 供脚本判定
 git clone https://github.com/baicyber/tesla-sentry-f50.git
 cd tesla-sentry-f50
 sudo ./install.sh                                             # 默认 64G 镜像 + /archive + 端口 8080
-sudo ./install.sh --size 200 --port 8080 --archive /archive    # 自定义参数
+sudo ./install.sh --size 120 --port 8080 --archive /archive    # 自定义参数 (镜像 ≤128G)
 ```
 
-安装会：检查内核 gadget / exFAT / Python → 建稀疏镜像 → 装到 `/opt/tesla-sentry/`、写 `/etc/tesla-sentry.conf` → 注册 `tesla-gadget` / `tesla-viewer` / `tesla-live` 三个服务（OpenWrt procd、systemd 或 rc.local）与两条 cron → 生成随机登录密码 → 启动并打印状态。ffmpeg、字体、部分内核项缺失只警告不中止。
+安装会：检查内核 gadget / exFAT / Python → 建稀疏镜像并**预置 exFAT + `TeslaCam` 目录** → 装到 `/opt/tesla-sentry/`、写 `/etc/tesla-sentry.conf` → 注册 `tesla-gadget` / `tesla-viewer` / `tesla-live` 三个服务（OpenWrt procd、systemd 或 rc.local）与两条 cron → 生成随机登录密码 → 启动并打印状态。ffmpeg、字体、部分内核项缺失只警告不中止。
 
-**2. 插到车上**：插进手套箱 USB 口 → 车机提示「**格式化 USB 设备**」→ 点确认，车机会自建 `TeslaCam/{SentryClips,SavedClips,RecentClips}`。
+**2. 插到车上**：插进手套箱 USB 口 → 车机直接识别、显示容量并开始录制。镜像里已预建 `TeslaCam/{RecentClips,SavedClips,SentryClips,EncryptedClips}`，**不再需要点「格式化 USB 设备」**；若车机仍弹出该提示，点确认也无害，只是把同样的结构重建一遍。
 
 **3. 打开网页**：`http://<设备IP>:8080`（手机连设备热点、USB 网卡直连，或自行加 Tailscale / frp）。首次登录账号 `admin`，密码见安装输出或 `/opt/tesla-sentry/auth.conf`。视频由 15 秒在线同步落地，不用等定时归档。
 
@@ -122,7 +122,7 @@ OTA、飞书推送、认证的参数**不写入这个 conf**，走环境变量�
 
 ## 常见问题
 
-- **车机不认盘**：确认 `/sys/class/udc/` 有控制器、`grep exfat /proc/filesystems` 有输出，再跑 `/opt/tesla-sentry/tesla-gadget.sh status`；新盘首次插车提示格式化属正常。
+- **车机不认盘 / 提示格式化**：确认 `/sys/class/udc/` 有控制器、`grep exfat /proc/filesystems` 有输出，再跑 `/opt/tesla-sentry/tesla-gadget.sh status`。新部署已预置 exFAT，正常不会再提示；旧版安装留下的全零空盘重装时会自动补写。若 `--size` 超过 128G（车机同款布局的寻址上限），会退回空白盘由车机格式化一次；想手动补写可执行 `python3 /opt/tesla-sentry/mkexfat.py <镜像路径> <容量GB>`（镜像里有数据时它会拒绝覆盖）。
 - **播放黑屏**：视频是 H.265 / HEVC，Windows 用 Edge / Chrome（需 HEVC 解码器）、iPhone Safari 原生支持，部分安卓浏览器不支持。
 - **网页没有事件**：看 `/opt/tesla-sentry/` 下的 `tesla-live.log`、`tesla-sync.log`；先确认顶部同步状态胶囊在线，再核对归档目录与镜像路径。
 
