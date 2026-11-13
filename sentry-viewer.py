@@ -98,7 +98,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.38"
+APP_VERSION = "2.8.39"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -560,7 +560,7 @@ def load_settings():
             if "auto_update" in j:
                 d["auto_update"] = bool(j["auto_update"])
             st = str(j.get("ui_style") or "")
-            if st in ("default", "apple", "claude"):
+            if st in ("default", "apple", "claude", "pixel"):
                 d["ui_style"] = st
     except (OSError, ValueError):
         pass
@@ -1078,7 +1078,7 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
 .lvrow select { padding:9px 10px; border-radius:9px; border:1px solid var(--line2); background:var(--panel2); color:var(--text); font-size:13px; }
 .lvbody > .hint { margin-top:2px; margin-bottom:0; }
 @media (max-width:640px){ .expp { left:50%; right:auto; transform:translateX(-50%); bottom:78px; } }
-/* ===== 可选界面风格: 默认 / Apple / Claude =====
+/* ===== 可选界面风格: 默认 / Apple / Claude / 像素 =====
    只覆盖颜色、圆角、阴影与少量排版, 不改布局与 DOM, 与深/浅色主题正交。
    放在基础样式之后, 保证同名选择器 (如 .tab.active) 能盖过默认规则。 */
 html[data-style="apple"] {
@@ -1138,7 +1138,7 @@ html[data-style="claude"] .upbtn { border-radius:11px; }
 html[data-style="claude"] .storbar { border-radius:3px; }
 html[data-style="claude"] .toast { border-radius:12px; }
 /* 界面风格选择卡 (设置 → 网页背景 顶部) */
-.stylepick { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:9px 0 14px; }
+.stylepick { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin:9px 0 14px; }
 .stylepick button { position:relative; padding:9px 9px 8px; border-radius:12px; border:1.5px solid var(--line);
   background:var(--panel2); color:var(--text); cursor:pointer; text-align:left;
   font-size:12.5px; font-weight:600; line-height:1.2; transition:border-color .15s,background .15s; }
@@ -1149,8 +1149,80 @@ html[data-style="claude"] .toast { border-radius:12px; }
   text-align:center; font-weight:700; }
 .stylepick .sw { display:flex; gap:3px; margin-bottom:7px; }
 .stylepick .sw i { display:block; height:16px; flex:1; border-radius:4px; border:1px solid #00000012; }
-@media (max-width:380px){ .stylepick { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
+@media (max-width:520px){ .stylepick { grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
   .stylepick button { padding:8px 7px; font-size:12px; } }
+/* ===== 像素艺术风 (Pixel Art) =====
+   参考 StyleKit pixel-art: 零圆角 / 2px 硬边框 / 4px 硬偏移阴影 / 8-bit 调色板。
+   灵魂是「没有过渡」—— 像素游戏是状态机不是动画引擎, hover 直接换色、按下真的陷进去,
+   所以这里统一 transition:none, 用调色板替换代替淡入淡出。 */
+html[data-style="pixel"] {
+  color-scheme: dark;
+  --bg:#1a1c2c; --headbg:#1a1c2c; --panel:#242947; --panel2:#2d3355; --chipbg:#242947;
+  --line:#414a78; --line2:#525c8f; --text:#f2f3f7; --muted:#a6abcc; --muted2:#8f95bb;
+  --accent:#ff004d; --blue:#29adff; --shadow:4px 4px 0 #0a0b12; --headline:#00000000;
+  --pxshadow:#0a0b12; --pxhi:#ffec27; --pxink:#1a1c2c; --pxdot:#2b3152;
+  --amberbg:rgba(255,236,39,.16); --amber:#ffec27; --amberb:#ffec27; --amberline:#ffec27;
+}
+/* 浅色: 纸白面板 + 深靛硬边框, 像 8-bit 游戏说明书; 蓝在浅底上要压深一档才够对比 */
+html[data-style="pixel"][data-theme="light"] {
+  color-scheme: light;
+  --bg:#f4f4f4; --headbg:#ffffff; --panel:#ffffff; --panel2:#f2f2f4; --chipbg:#ffffff;
+  --line:#1a1c2c; --line2:#1a1c2c; --text:#1a1c2c; --muted:#5c6284; --muted2:#767c9c;
+  --accent:#ff004d; --blue:#0074c9; --shadow:4px 4px 0 #1a1c2c; --headline:#00000000;
+  --pxshadow:#1a1c2c; --pxhi:#ffec27; --pxink:#1a1c2c; --pxdot:#dfe1ea;
+  --amberbg:rgba(255,236,39,.42); --amber:#7a5f00; --amberb:#5c4700; --amberline:#c2a000;
+}
+/* 零圆角 + 零过渡, 一刀切掉所有柔和感 */
+html[data-style="pixel"] *, html[data-style="pixel"] *::before, html[data-style="pixel"] *::after {
+  border-radius:0 !important; transition:none !important;
+}
+/* 正文用等宽字体撑像素感; 有 Press Start 2P 就用, 没有就退到等宽 (不联网拉字体) */
+html[data-style="pixel"] body {
+  font-family:'Press Start 2P','Silkscreen',ui-monospace,'Cascadia Mono',Consolas,'Courier New',monospace;
+  letter-spacing:.15px;
+  background-image:radial-gradient(var(--pxdot) 1px, transparent 1px);
+  background-size:8px 8px;
+}
+/* 顶栏: 深底 + 一条像素红下边框 (Pixel Nav 的做法) */
+html[data-style="pixel"] header { border-bottom:3px solid var(--accent); box-shadow:none; }
+html[data-style="pixel"] header h1 { font-weight:700; letter-spacing:1px; }
+/* 面板/卡片: 2px 硬边框 + 4px 硬偏移阴影, 没有模糊 */
+html[data-style="pixel"] .card,
+html[data-style="pixel"] .storcard,
+html[data-style="pixel"] .panel,
+html[data-style="pixel"] .expp,
+html[data-style="pixel"] .upbtn,
+html[data-style="pixel"] .toast { border:2px solid var(--line); }
+html[data-style="pixel"] .card,
+html[data-style="pixel"] .storcard,
+html[data-style="pixel"] .panel,
+html[data-style="pixel"] .expp,
+html[data-style="pixel"] .upbtn { box-shadow:4px 4px 0 var(--pxshadow); }
+html[data-style="pixel"] .card:hover { transform:none; border-color:var(--accent); box-shadow:4px 4px 0 var(--accent); }
+html[data-style="pixel"] .thumb { border:2px solid var(--line); }
+/* 页签: 方块按键盘, 选中项用像素黄 (街机菜单语义) */
+html[data-style="pixel"] .tab { border:2px solid var(--line); background:var(--panel2); color:var(--muted); font-weight:700; }
+html[data-style="pixel"] .tab:hover { color:var(--text); border-color:var(--blue); }
+html[data-style="pixel"] .tab.active { background:var(--pxhi); color:var(--pxink); border-color:var(--pxink); box-shadow:3px 3px 0 var(--pxshadow); }
+/* 筛选胶囊: 选中 = 像素红, hover 换像素蓝 */
+html[data-style="pixel"] .chip { border:2px solid var(--line); background:var(--chipbg); font-weight:600; }
+html[data-style="pixel"] .chip:hover { border-color:var(--blue); color:var(--text); }
+html[data-style="pixel"] .chip.on { background:var(--accent); border-color:var(--pxshadow); color:#fff; box-shadow:2px 2px 0 var(--pxshadow); }
+/* 存储条: 加粗成血条 (HP bar) */
+html[data-style="pixel"] .storbar { height:9px; border:2px solid var(--line); background:var(--panel2); margin-right:26px; }
+html[data-style="pixel"] .storbar i { border-radius:0 !important; }
+html[data-style="pixel"] .syscell { border:2px solid var(--line); background:var(--panel2); }
+html[data-style="pixel"] .upbtn { border-style:solid; }
+html[data-style="pixel"] .ninput, html[data-style="pixel"] .dpick,
+html[data-style="pixel"] .fm-dest-input, html[data-style="pixel"] select {
+  border:2px solid var(--line) !important; background:var(--panel2) !important; color:var(--text) !important;
+}
+html[data-style="pixel"] .toast { background:var(--accent); color:#fff; box-shadow:4px 4px 0 var(--pxshadow); }
+/* 风格选择卡: 选中 = 黄底 + 硬阴影, 勾选角标变方块 */
+html[data-style="pixel"] .stylepick button { border:2px solid var(--line); background:var(--panel2); }
+html[data-style="pixel"] .stylepick button.on { background:var(--pxhi); color:var(--pxink); border-color:var(--pxink); box-shadow:3px 3px 0 var(--pxshadow); }
+html[data-style="pixel"] .stylepick button.on::after { background:var(--pxink); color:var(--pxhi); }
+html[data-style="pixel"] .stylepick .sw i { border:1px solid var(--line); }
 </style><script>
 /* 版本自检: 服务端升级后, 若当前页面仍是旧版本就自动重载 (看片时不打断, 最多 2 次防死循环) */
 (function () {
@@ -1326,6 +1398,7 @@ html[data-style="claude"] .toast { border-radius:12px; }
       <button data-style="default" onclick="setStyle('default')"><span class="sw"><i style="background:#0e1216"></i><i style="background:#e8443f"></i></span>默认</button>
       <button data-style="apple" onclick="setStyle('apple')"><span class="sw"><i style="background:#ffffff"></i><i style="background:#0071e3"></i></span>Apple</button>
       <button data-style="claude" onclick="setStyle('claude')"><span class="sw"><i style="background:#faf9f5"></i><i style="background:#c96442"></i></span>Claude</button>
+      <button data-style="pixel" onclick="setStyle('pixel')"><span class="sw"><i style="background:#1a1c2c"></i><i style="background:#ff004d"></i></span>像素</button>
     </div>
     <div class="hint">上传 CSS 皮肤文件或背景图 (jpg/png/webp)。CSS 中引用图片请用 /skin-media/文件名。</div>
     <div class="hint"><code>body{background:url(/skin-media/bg.jpg) center/cover}</code></div>
@@ -1583,11 +1656,11 @@ function cycleTheme() {
   applyTheme(nxt);
 }
 applyTheme(localStorage.getItem('tsf_theme') || 'auto');
-/* ---------- 可选界面风格: 默认 / Apple / Claude ----------
+/* ---------- 可选界面风格: 默认 / Apple / Claude / 像素 ----------
    只切换 html[data-style], 配色与圆角交给 CSS; 选择存本地并同步到服务端,
    换手机/浏览器也能保持一致。和深/浅色主题互不影响 */
 const STYLE_KEY = 'tsf_style';
-const STYLE_LIST = ['default', 'apple', 'claude'];
+const STYLE_LIST = ['default', 'apple', 'claude', 'pixel'];
 function applyStyle(s) {
   if (STYLE_LIST.indexOf(s) < 0) s = 'default';
   if (s === 'default') delete document.documentElement.dataset.style;
@@ -8612,7 +8685,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "msg": "参数错误"}, 400)
                 return
             st = str(body.get("style") or "")
-            if st not in ("default", "apple", "claude"):
+            if st not in ("default", "apple", "claude", "pixel"):
                 self._json({"ok": False, "msg": "参数错误"}, 400)
                 return
             save_settings({"ui_style": st})
