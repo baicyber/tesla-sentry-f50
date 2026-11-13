@@ -98,7 +98,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.37"
+APP_VERSION = "2.8.38"
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -552,12 +552,16 @@ AUTO_UPD = {"last_check": 0, "last_result": "", "last_apply": 0, "next_try": 0}
 
 
 def load_settings():
-    d = {"auto_update": True}
+    d = {"auto_update": True, "ui_style": "default"}
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
             j = json.load(f)
-        if isinstance(j, dict) and "auto_update" in j:
-            d["auto_update"] = bool(j["auto_update"])
+        if isinstance(j, dict):
+            if "auto_update" in j:
+                d["auto_update"] = bool(j["auto_update"])
+            st = str(j.get("ui_style") or "")
+            if st in ("default", "apple", "claude"):
+                d["ui_style"] = st
     except (OSError, ValueError):
         pass
     return d
@@ -1074,6 +1078,79 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
 .lvrow select { padding:9px 10px; border-radius:9px; border:1px solid var(--line2); background:var(--panel2); color:var(--text); font-size:13px; }
 .lvbody > .hint { margin-top:2px; margin-bottom:0; }
 @media (max-width:640px){ .expp { left:50%; right:auto; transform:translateX(-50%); bottom:78px; } }
+/* ===== 可选界面风格: 默认 / Apple / Claude =====
+   只覆盖颜色、圆角、阴影与少量排版, 不改布局与 DOM, 与深/浅色主题正交。
+   放在基础样式之后, 保证同名选择器 (如 .tab.active) 能盖过默认规则。 */
+html[data-style="apple"] {
+  --bg:#f5f5f7; --headbg:rgba(255,255,255,.78); --panel:#ffffff; --panel2:#f0f0f2; --chipbg:#ffffff;
+  --line:#e6e6eb; --line2:#d6d6dc; --text:#1d1d1f; --muted:#6e6e73; --muted2:#86868b;
+  --accent:#ff3b30; --blue:#0071e3; --shadow:0 1px 2px #00000008, 0 10px 28px #0000000f; --headline:#00000000;
+}
+html[data-style="apple"][data-theme="dark"] {
+  --bg:#000000; --headbg:rgba(28,28,30,.78); --panel:#1c1c1e; --panel2:#2c2c2e; --chipbg:#1c1c1e;
+  --line:#2c2c2e; --line2:#3a3a3c; --text:#f5f5f7; --muted:#a1a1a6; --muted2:#8e8e93;
+  --accent:#ff453a; --blue:#0a84ff; --shadow:0 10px 28px #00000066; --headline:#ffffff00;
+}
+html[data-style="claude"] {
+  --bg:#faf9f5; --headbg:rgba(250,249,245,.86); --panel:#ffffff; --panel2:#f2efe7; --chipbg:#fffdf8;
+  --line:#e8e3d7; --line2:#ddd6c8; --text:#1f1e1d; --muted:#6b6862; --muted2:#8a857c;
+  --accent:#c96442; --blue:#b8563a; --shadow:0 1px 0 #00000006; --headline:#00000000;
+}
+html[data-style="claude"][data-theme="dark"] {
+  --bg:#1f1e1d; --headbg:rgba(31,30,29,.86); --panel:#262521; --panel2:#302e29; --chipbg:#262521;
+  --line:#35322c; --line2:#423e36; --text:#f0eee6; --muted:#a8a49a; --muted2:#8f8b81;
+  --accent:#d97757; --blue:#d97757; --shadow:none; --headline:#ffffff00;
+}
+html[data-style="apple"] header,
+html[data-style="claude"] header {
+  box-shadow:none; border-bottom:1px solid var(--line);
+  backdrop-filter:saturate(180%) blur(18px); -webkit-backdrop-filter:saturate(180%) blur(18px);
+}
+html[data-style="apple"] header h1 { font-weight:600; letter-spacing:-.2px; }
+html[data-style="apple"] .card { border-color:transparent; border-radius:18px;
+  box-shadow:0 1px 2px #0000000a, 0 8px 24px #0000000d; }
+html[data-style="apple"] .card:hover { transform:translateY(-2px); box-shadow:0 2px 4px #0000000d, 0 14px 34px #00000014; }
+html[data-style="apple"] .thumb { border-radius:12px; }
+html[data-style="apple"] .storcard { border-radius:18px; border-color:transparent; }
+html[data-style="apple"] .syscell { border-radius:10px; border-color:transparent; }
+html[data-style="apple"] .chip { border-radius:999px; background:#fff; box-shadow:0 .5px 1px #0000000a; }
+html[data-style="apple"] .chip.on { background:var(--blue); box-shadow:none; }
+/* 页签做成 iOS 分段控件: 灰槽里浮起一块白色选中块, 而不是深色药丸 */
+html[data-style="apple"] .tab { border-radius:999px; background:#e9e9ec; color:#6e6e73; }
+html[data-style="apple"] .tab:hover { color:#1d1d1f; }
+html[data-style="apple"] .tab.active { background:#fff; color:#1d1d1f;
+  box-shadow:0 .5px 2px #0000001f, 0 0 0 .5px #0000000a; }
+html[data-style="apple"][data-theme="dark"] .tab { background:#1c1c1e; color:#a1a1a6; }
+html[data-style="apple"][data-theme="dark"] .tab.active { background:#3a3a3c; color:#fff;
+  box-shadow:0 1px 3px #00000066; }
+html[data-style="apple"] .panel { border-radius:20px; box-shadow:0 24px 80px #00000033; }
+html[data-style="apple"] .upbtn { border-radius:14px; }
+html[data-style="claude"] header h1 { font-weight:600; letter-spacing:.1px; }
+html[data-style="claude"] .card { border-radius:14px; box-shadow:none; border-color:var(--line); }
+html[data-style="claude"] .card:hover { transform:none; box-shadow:0 2px 10px #00000009; }
+html[data-style="claude"] .storcard { border-radius:14px; box-shadow:none; }
+html[data-style="claude"] .syscell { border-radius:9px; border-color:transparent; background:var(--panel2); }
+html[data-style="claude"] .chip { border-radius:11px; }
+html[data-style="claude"] .chip.on { border-color:var(--blue); }
+html[data-style="claude"] .tab { border-radius:10px; }
+html[data-style="claude"] .panel { border-radius:16px; border:1px solid var(--line); box-shadow:0 20px 60px #00000026; }
+html[data-style="claude"] .upbtn { border-radius:11px; }
+html[data-style="claude"] .storbar { border-radius:3px; }
+html[data-style="claude"] .toast { border-radius:12px; }
+/* 界面风格选择卡 (设置 → 网页背景 顶部) */
+.stylepick { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:9px 0 14px; }
+.stylepick button { position:relative; padding:9px 9px 8px; border-radius:12px; border:1.5px solid var(--line);
+  background:var(--panel2); color:var(--text); cursor:pointer; text-align:left;
+  font-size:12.5px; font-weight:600; line-height:1.2; transition:border-color .15s,background .15s; }
+.stylepick button:hover { border-color:var(--muted2); }
+.stylepick button.on { border-color:var(--blue); background:var(--chipbg); }
+.stylepick button.on::after { content:'✓'; position:absolute; right:7px; top:6px; font-size:11px;
+  color:#fff; background:var(--blue); width:15px; height:15px; line-height:15px; border-radius:50%;
+  text-align:center; font-weight:700; }
+.stylepick .sw { display:flex; gap:3px; margin-bottom:7px; }
+.stylepick .sw i { display:block; height:16px; flex:1; border-radius:4px; border:1px solid #00000012; }
+@media (max-width:380px){ .stylepick { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
+  .stylepick button { padding:8px 7px; font-size:12px; } }
 </style><script>
 /* 版本自检: 服务端升级后, 若当前页面仍是旧版本就自动重载 (看片时不打断, 最多 2 次防死循环) */
 (function () {
@@ -1244,6 +1321,12 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
     <button class="stab" id="st-update" onclick="stab('update')">🔄 更新</button>
   </div>
   <div id="tab-skin" style="display:none">
+    <div class="hint">界面风格 · 只换配色、圆角与阴影, 不动功能; 选完即时生效并记住</div>
+    <div class="stylepick" id="style-pick">
+      <button data-style="default" onclick="setStyle('default')"><span class="sw"><i style="background:#0e1216"></i><i style="background:#e8443f"></i></span>默认</button>
+      <button data-style="apple" onclick="setStyle('apple')"><span class="sw"><i style="background:#ffffff"></i><i style="background:#0071e3"></i></span>Apple</button>
+      <button data-style="claude" onclick="setStyle('claude')"><span class="sw"><i style="background:#faf9f5"></i><i style="background:#c96442"></i></span>Claude</button>
+    </div>
     <div class="hint">上传 CSS 皮肤文件或背景图 (jpg/png/webp)。CSS 中引用图片请用 /skin-media/文件名。</div>
     <div class="hint"><code>body{background:url(/skin-media/bg.jpg) center/cover}</code></div>
     <label class="upbtn">＋ 上传皮肤文件 (css/jpg/png/webp)<input type="file" id="skin-file" accept=".css,.jpg,.jpeg,.png,.webp" hidden></label>
@@ -1500,6 +1583,35 @@ function cycleTheme() {
   applyTheme(nxt);
 }
 applyTheme(localStorage.getItem('tsf_theme') || 'auto');
+/* ---------- 可选界面风格: 默认 / Apple / Claude ----------
+   只切换 html[data-style], 配色与圆角交给 CSS; 选择存本地并同步到服务端,
+   换手机/浏览器也能保持一致。和深/浅色主题互不影响 */
+const STYLE_KEY = 'tsf_style';
+const STYLE_LIST = ['default', 'apple', 'claude'];
+function applyStyle(s) {
+  if (STYLE_LIST.indexOf(s) < 0) s = 'default';
+  if (s === 'default') delete document.documentElement.dataset.style;
+  else document.documentElement.dataset.style = s;
+  const box = document.getElementById('style-pick');
+  if (box) box.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.style === s));
+}
+function setStyle(s) {
+  if (STYLE_LIST.indexOf(s) < 0) return;
+  applyStyle(s);
+  try { localStorage.setItem(STYLE_KEY, s); } catch (e) {}
+  try {
+    fetch('/api/ui/style', { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ style: s }) }).catch(() => {});
+  } catch (e) {}
+}
+applyStyle(localStorage.getItem(STYLE_KEY) || 'default');
+/* 本地没选过时跟随服务端保存的风格 (在别的设备上设过) */
+(function () {
+  try { if (localStorage.getItem(STYLE_KEY)) return; } catch (e) { return; }
+  fetch('/api/settings', { cache: 'no-store' }).then(r => r.json()).then(j => {
+    if (j && j.ui_style) applyStyle(j.ui_style);
+  }).catch(() => {});
+})();
 /* ---------- 存储卡展开/收起 ----------
    默认只显示「虚拟U盘」一行; 点卡片右下角小箭头才展开「归档区 / 总占用」 */
 function toggleStor() {
@@ -3168,6 +3280,7 @@ function stab(which) {
   if (which === 'notify') ntLoad();
   if (which === 'auth') pwLoad();
   if (which === 'wraps') refreshWraps();
+  if (which === 'skin') applyStyle(localStorage.getItem(STYLE_KEY) || 'default');
 }
 
 /* ---------- 飞书推送 ---------- */
@@ -7996,6 +8109,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(ota_check(force=q.get("force", ["0"])[0] == "1"))
         elif path == "/api/settings":
             self._json({"ok": True, "auto_update": load_settings().get("auto_update", True),
+                        "ui_style": load_settings().get("ui_style", "default"),
                         "auto_checked": AUTO_UPD["last_check"], "auto_msg": AUTO_UPD["last_result"]})
         elif path == "/api/font":
             fp = _wm_font()
@@ -8491,6 +8605,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/ota/rollback":
             ok, msg = ota_rollback()
             self._json({"ok": ok, "msg": msg})
+            return
+        if path == "/api/ui/style":
+            body = self._read_json()
+            if body == "TOOBIG" or not isinstance(body, dict):
+                self._json({"ok": False, "msg": "参数错误"}, 400)
+                return
+            st = str(body.get("style") or "")
+            if st not in ("default", "apple", "claude"):
+                self._json({"ok": False, "msg": "参数错误"}, 400)
+                return
+            save_settings({"ui_style": st})
+            self._json({"ok": True, "style": st})
             return
         if path == "/api/ota/auto":
             body = self._read_json()
