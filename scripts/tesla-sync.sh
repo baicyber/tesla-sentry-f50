@@ -51,6 +51,9 @@ if ! flock -n 9; then
         exit 0
     fi
 fi
+for tsf_pending in "$IMG.resize-state" "$IMG.resize-new" "$IMG.resize-backup"; do
+    [ ! -e "$tsf_pending" ] || { echo "SKIP-RESIZE-RECOVERY"; exit 0; }
+done
 
 # --- 自动探测 ---
 find_gadget() {
@@ -61,7 +64,8 @@ find_gadget() {
     return 1
 }
 GADGET=$(find_gadget) || { echo "ERROR: gadget not found"; exit 1; }
-UDC=$(ls /sys/class/udc/ 2>/dev/null | head -1)
+UDC=${TSF_UDC:-$(ls /sys/class/udc/ 2>/dev/null | head -1)}
+[ -d "/sys/class/udc/$UDC" ] || { echo "ERROR: USB Device 控制器不可用"; exit 1; }
 
 # losetup: 优先系统自带, 兼容 busybox 精简系统
 if [ -n "$TSF_LOSETUP" ]; then BB="$TSF_LOSETUP"
