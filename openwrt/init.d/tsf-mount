@@ -1,0 +1,91 @@
+#!/bin/sh /etc/rc.common
+# Mount the F50 data card by filesystem UUID before starting the Tesla apps.
+# The card is a normal MBR/ext4 filesystem; the virtual Tesla disk remains
+# a separate exFAT image inside /mnt/mmc/tesla-sentry.
+
+START=08
+STOP=99
+
+set -a
+[ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf
+set +a
+UUID=${TSF_CARD_UUID:-}
+MNT=${TSF_CARD_MNT:-/mnt/mmc}
+TSF_DIR=${TSF_DIR:-/opt/tesla-sentry}
+. "$TSF_DIR/tsf-storage.sh" || exit 1
+
+start_apps() {
+    if [ -x "$TSF_DIR/tesla-gadget.sh" ]; then
+        sh "$TSF_DIR/tesla-gadget.sh" on || return 1
+    else
+        /etc/init.d/tesla-gadget start || return 1
+    fi
+    /etc/init.d/tesla-live start || return 1
+    /etc/init.d/tesla-viewer start
+}
+
+stop_apps() {
+    /etc/init.d/tesla-live stop 2>/dev/null
+    /etc/init.d/tesla-viewer stop 2>/dev/null
+    if [ -x "$TSF_DIR/tesla-gadget.sh" ]; then
+        sh "$TSF_DIR/tesla-gadget.sh" off >/dev/null 2>&1
+    else
+        /etc/init.d/tesla-gadget stop 2>/dev/null
+    fi
+}
+
+mount_card() {
+    [ -n "$UUID" ] || return 1
+    tsf_storage_ready && return 0
+    # An unrelated mounted disk must never be used as this installation's data disk.
+    awk -v m="$MNT" '$2 == m {found=1} END {exit !found}' /proc/mounts && return 1
+    mkdir -p "$MNT" || return 1
+    DEV=$(blkid -U "$UUID" 2>/dev/null)
+    [ -n "$DEV" ] && [ -b "$DEV" ] || return 1
+    [ "$(blkid -o value -s TYPE "$DEV" 2>/dev/null)" = "ext4" ] || return 1
+    mount -t ext4 -o noatime "$DEV" "$MNT" 2>/dev/null || return 1
+    tsf_storage_ready || return 1
+    logger -t tsf-mount "mounted $DEV -> $MNT"
+    return 0
+}
+
+wait_and_start_services() {
+    i=0
+    while [ "$i" -lt 60 ]; do
+        if mount_card && [ -d "$TSF_GADGET/configs/$TSF_GADGET_CONFIG" ] && [ -d "/sys/class/udc/$TSF_UDC" ]; then
+            logger -t tsf-mount "data card ready after ${i}s"
+            start_apps
+            return $?
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    logger -t tsf-mount "FAILED: card UUID $UUID not mountable after 60s"
+    return 1
+}
+
+start() {
+    [ -n "$UUID" ] || { logger -t tsf-mount "TSF_CARD_UUID is required"; return 1; }
+    wait_and_start_services
+}
+
+stop() {
+    stop_apps
+    tsf_storage_ready || return 0
+    i=0
+    while grep -q " $MNT " /proc/mounts && [ "$i" -lt 10 ]; do
+        umount "$MNT" 2>/dev/null
+        sleep 1
+        i=$((i + 1))
+    done
+    if grep -q " $MNT " /proc/mounts; then
+        logger -t tsf-mount "FAILED to unmount $MNT"
+        return 1
+    fi
+    logger -t tsf-mount "unmounted $MNT"
+    return 0
+}
+
+boot() { (start) >/dev/null 2>&1 & }
+shutdown() { stop; }
+restart() { stop; start; }
