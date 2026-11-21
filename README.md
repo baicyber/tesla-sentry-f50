@@ -2,6 +2,8 @@
 
 **中文** | [English](README.en.md)
 
+本分支包含连续播放、行车记录、录像锁定/删除、存储分配和界面改版；改动范围、部署依赖及验证限制见 [改动说明](docs/PLAYBACK-STORAGE-UI.md)。ARM64 OpenWrt 全新设备可使用独立的 [F50 安装流程](docs/INSTALL-F50.md)。
+
 **虚拟哨兵 U 盘 · 多路同步回放 · SEI 行车遥测 · 水印导出 —— 跑在任意 USB Gadget 设备上。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
