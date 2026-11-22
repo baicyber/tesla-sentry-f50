@@ -4,15 +4,19 @@
 访问: http://<f50-ip>:8080
 """
 import base64
+import glob
 import datetime
 import json
 import os
 import re
 import hmac
 import hashlib
+from functools import lru_cache
 import math
 import shutil
+import signal
 import struct
+import statistics
 import subprocess
 import threading
 import time
@@ -20,6 +24,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 import socket
+import stat
 import select
 import http.client
 import ssl
@@ -28,6 +33,9 @@ import tempfile
 import sys
 import fcntl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import storage_allocation
+import storage_resize
 
 # ---- 配置加载兜底 ----
 # OpenWrt procd 不会把 init.d 脚本里 export 的变量传给服务进程 (实测 /proc/PID/environ 为空),
@@ -58,7 +66,7 @@ AUDIO_Q = os.path.join(ARCHIVE, "boombox-queue")
 AUDIO_DONE = os.path.join(ARCHIVE, "boombox-done")
 FILES_DIR = os.path.join(ARCHIVE, "files")
 PORT = int(os.environ.get("TSF_PORT", "8080"))
-CATS = ["SentryClips", "SavedClips", "RecentClips"]
+CATS = ["SentryClips", "SavedClips", "RecentClips", "DriveClips"]
 # ===== 多语言表 (由 tools/i18n_*.json 生成, key 为中文原文) =====
 LANG_NAMES = [("zh", "中文"), ("en", "English"), ("de", "Deutsch"), ("fr", "Français"),
               ("it", "Italiano"), ("es", "Español"), ("nl", "Nederlands"), ("ru", "Русский"),
@@ -102,7 +110,20 @@ def lang_from_accept(hdr, default="zh"):
             return two
     return default
 
-CAT_NAMES = {"SentryClips": "哨兵告警", "SavedClips": "手动保存", "RecentClips": "行车记录"}
+CAT_NAMES = {"SentryClips": "哨兵告警", "SavedClips": "手动保存",
+             "RecentClips": "最近1小时", "DriveClips": "行车记录"}
+for language, recent_label in (
+    ("de", "Letzte Stunde"),
+    ("en", "Last hour"),
+    ("es", "Última hora"),
+    ("fr", "Dernière heure"),
+    ("it", "Ultima ora"),
+    ("ja", "直近1時間"),
+    ("ko", "최근 1시간"),
+    ("nl", "Afgelopen uur"),
+    ("ru", "Последний час"),
+):
+    LANG_TABLE[language].update({"最近1小时": recent_label})
 # 注入页面用的 JSON (预生成, 避免每次请求都序列化)
 I18N_JS = json.dumps(LANG_TABLE, ensure_ascii=False, separators=(",", ":"))
 LANG_JS = json.dumps([[c, n] for c, n in LANG_NAMES], ensure_ascii=False, separators=(",", ":"))
@@ -115,6 +136,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
 APP_VERSION = "2.8.42"
+VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
     "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
@@ -1151,6 +1173,39 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .nrow > span:first-child { flex:0 0 auto; }
 .nrow input[type=checkbox] { width:18px; height:18px; accent-color:var(--accent); margin-left:auto; }
 .ninput.num { width:76px; margin:0; text-align:center; }
+.storage-row { display:grid; grid-template-columns:minmax(0,1fr) 84px 24px; gap:8px; align-items:center; margin:8px 0; min-height:40px; font-size:13px; }
+.storage-row .ninput { margin:0; width:100%; text-align:right; }
+.storage-row output { text-align:right; font-variant-numeric:tabular-nums; }
+.storage-help { display:grid; place-items:center; width:24px; height:36px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:0; -webkit-tap-highlight-color:transparent; }
+.storage-help::before { content:'?'; display:block; width:14px; height:14px; box-sizing:border-box; border:1px solid currentColor; border-radius:50%; font:10px/12px system-ui,sans-serif; text-align:center; }
+.storage-help:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.storage-summary { display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 12px; margin:12px 0 8px; font-size:12px; }
+.storage-bar { display:flex; height:20px; overflow:hidden; border-radius:5px; background:var(--panel2); }
+.storage-bar > span { flex-shrink:0; }
+.storage-usb-color { background:var(--blue); }
+.storage-archive-color { background:#70a58c; }
+.storage-reserve-color { background:var(--amber); }
+.storage-cache-color { background:var(--muted); }
+.storage-free-color { background:var(--line2); }
+.storage-legend { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 12px; margin:10px 0 16px; font-size:12px; }
+.storage-legend > div { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.storage-legend > [hidden] { display:none; }
+.storage-legend i { width:8px; height:8px; flex-shrink:0; border-radius:2px; }
+.storage-legend output { margin-left:auto; font-variant-numeric:tabular-nums; }
+.storage-nested { margin-left:8px; padding-left:12px; border-left:2px solid var(--line2); }
+.storage-nested label { font-size:12px; }
+.storage-usage { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; margin:12px 0; font-size:12px; }
+.storage-usage output { text-align:right; font-variant-numeric:tabular-nums; }
+#storage-budget[data-error=true] { color:var(--accent); }
+@media (pointer:coarse) {
+  .storage-row { grid-template-columns:minmax(0,1fr) 76px 44px; gap:4px; min-height:44px; }
+  .storage-help { width:44px; height:44px; }
+  .storage-row .ninput { font-size:16px; }
+}
+.storage-tip { position:fixed; z-index:205; width:min(300px,calc(100vw - 24px)); padding:12px; box-sizing:border-box; border:1px solid var(--line2); border-radius:10px; background:var(--panel); color:var(--text); font-size:12.5px; line-height:1.6; box-shadow:0 6px 24px #00000030; }
+.storage-advanced { margin:12px 0; font-size:12px; color:var(--muted); }
+.storage-advanced summary { cursor:pointer; }
+#storage-msg { min-height:20px; overflow-wrap:anywhere; }
 .ninput.masked { color:var(--muted2); letter-spacing:1.5px; cursor:default; border-style:dashed; }
 select.ninput { cursor:pointer; }
 .eyebar { display:flex; align-items:center; gap:8px; margin:0 0 8px; }
@@ -1423,6 +1478,393 @@ html[data-style="pixel"] .stylepick button { border:2px solid var(--line); backg
 html[data-style="pixel"] .stylepick button.on { background:var(--pxhi); color:var(--pxink); border-color:var(--pxink); box-shadow:3px 3px 0 var(--pxshadow); }
 html[data-style="pixel"] .stylepick button.on::after { background:var(--pxink); color:var(--pxhi); }
 html[data-style="pixel"] .stylepick .sw i { border:1px solid var(--line); }
+/* 回放工作区 */
+#grid { grid-template-columns:repeat(auto-fill,minmax(min(100%,310px),1fr)); }
+#grid .card { border-radius:8px; padding:8px; box-shadow:none; }
+#grid .thumb { border-radius:5px; flex-basis:104px; width:104px; height:72px; }
+#grid .card:hover,#grid .card:focus-visible { border-color:var(--muted2); transform:none; }
+#grid .meta .l2 { margin-top:7px; }
+body.watching { overflow:hidden; }
+.player [hidden] { display:none !important; }
+.player { --stage:#101215; --play-accent:#5799cf; }
+.watch-main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; }
+.watch-list { display:none; }
+.player .ptop { min-height:52px; padding:4px clamp(12px,3vw,32px); border-bottom:1px solid var(--line); }
+.player .ptitle { color:var(--text); font-size:14px; font-weight:600; }
+.player .pscroll { padding:16px clamp(12px,3vw,32px) max(18px,env(safe-area-inset-bottom)); gap:10px; }
+.player .vwrap { order:0; border-radius:8px; }
+.player .vgrid { background:#101215; }
+.player .vgrid.loading { display:flex; align-items:center; justify-content:center; gap:10px; min-height:26vh; color:#d0d6dc; }
+.player .vcell { aspect-ratio:auto; min-width:0; min-height:0; }
+.player .vcell video { object-fit:contain; }
+.player .vgrid.one .vcell { cursor:default; }
+.player .clabel { z-index:2; left:10px; top:10px; right:auto; bottom:auto; letter-spacing:.05em; }
+/* Keep the last frame visible during brief decoder and network waits. */
+.player .cload.buffering { inset:auto 8px 8px auto; border-radius:4px; padding:3px 7px;
+  animation:show-buffering 0s .65s backwards; }
+@keyframes show-buffering { from { visibility:hidden; } to { visibility:visible; } }
+.player .cload button { pointer-events:auto; padding:6px; }
+.player .vcell canvas.hold { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; pointer-events:none; }
+.player .tpanel.plain #tp-date { display:none; }
+.player .tpanel.plain:has(.tp-loc:empty):not(:has(.tp-tag.show)) { display:none; }
+.player .cambar { order:1; justify-content:flex-start; flex-wrap:nowrap; overflow-x:auto; padding:2px 0; }
+.player .cambar button { white-space:nowrap; border-radius:6px; padding:7px 13px; min-height:38px; }
+.player .cambar button.on { background:var(--text); color:var(--bg); border-color:var(--text); }
+.transport { order:2; width:100%; max-width:980px; margin:0 auto; padding:8px 0 12px; border-bottom:1px solid var(--line); }
+.clockline,.playtools,.watch-live { display:flex; align-items:center; gap:10px; }
+.clockline { font-variant-numeric:tabular-nums; }
+.clockline output { font:600 20px/1.2 ui-monospace,Consolas,monospace; }
+#track-end { margin-left:auto; color:var(--muted); font-size:12px; }
+#trigger-marker { background:transparent; color:var(--text); border:0; font-size:12px; min-height:32px; cursor:pointer; }
+#trigger-marker::first-letter { color:#e65050; }
+.timeline { position:relative; height:36px; display:flex; align-items:center; }
+#track-bands { position:absolute; left:8px; right:8px; height:6px; border-radius:3px; background:linear-gradient(to right,var(--play-accent) var(--played,0%),var(--muted2) var(--played,0%)); pointer-events:none; }
+#track-bands i { position:absolute; inset-block:0; }
+#track-bands .gap { min-width:1px; background:#fff; }
+#track-bands .trigger { height:13px; top:-4px; width:3px; border-radius:1px; background:#e65050; }
+#seek { position:relative; width:100%; height:36px; margin:0; cursor:pointer; appearance:none; -webkit-appearance:none; background:transparent; }
+#seek::-webkit-slider-runnable-track { background:transparent; height:6px; }
+#seek::-moz-range-track { background:transparent; height:6px; }
+#seek::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:var(--text); border:2px solid var(--bg); margin-top:-5px; }
+#seek::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:var(--text); border:2px solid var(--bg); }
+.playtools { display:grid; grid-template-columns:1fr auto 1fr; }
+.playtools button,.watch-live button,.watch-live select { cursor:pointer; font:inherit; font-size:13px; border:0; background:var(--panel2); color:var(--text); border-radius:6px; min-height:40px; padding:0 10px; }
+.playtools .qsel { justify-self:start; }
+.playtools .qmenu { left:0; right:auto; }
+.playtools .qmenu button { min-height:32px; }
+.shuttle,.viewtools { display:flex; align-items:center; gap:4px; }
+.viewtools { justify-self:end; }
+.viewtools svg { width:17px; height:17px; }
+.shuttle #ppbtn { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; padding:0; border-radius:50%; width:44px; height:44px; background:var(--text); color:var(--bg); }
+.shuttle #ppbtn .ic { width:20px; height:20px; fill:currentColor; stroke:none; }
+.watch-live { margin-top:12px; flex-wrap:wrap; font-size:13px; color:var(--muted); }
+.watch-live #lv-status { margin-right:auto; }
+.watch-live :disabled { opacity:.5; cursor:default; }
+.player .tpanel { order:3; box-shadow:none; border-radius:6px; }
+.player .infocard { order:4; border:0; padding:0; border-radius:0; background:transparent; box-shadow:none; }
+.player .ic-fold { margin:0; font-size:13px; }
+.player .ic-rows.open + .clipbar { display:flex; }
+.player :focus-visible { outline:2px solid var(--play-accent); outline-offset:2px; }
+@media (min-width:1000px) {
+  .player.open { flex-direction:row; }
+  .watch-list { display:flex; flex-direction:column; width:clamp(230px,24vw,350px); flex:none; background:var(--panel); border-right:1px solid var(--line); padding:20px 12px; }
+  .watch-list h2 { font-size:16px; margin:0 10px 18px; }
+  #watch-items { overflow:auto; }
+  #watch-items button { display:grid; gap:5px; width:100%; text-align:start; background:transparent; color:var(--text); border:0; border-left:3px solid transparent; border-bottom:1px solid var(--line); padding:13px 12px; cursor:pointer; }
+  #watch-items small { font-variant-numeric:tabular-nums; color:var(--muted); }
+  #watch-items button.selected { background:var(--panel2); border-left-color:var(--play-accent); }
+}
+:root:fullscreen .player .watch-list,.player.expanded .watch-list { display:none; }
+:root:fullscreen .player :is(.tpanel,.infocard) { display:none; }
+:root:fullscreen .player .vwrap,.player.expanded .vwrap { max-width:none; }
+.player .startmask { width:100%; border:0; }
+.player.expanded .tpanel,.player.expanded .infocard { display:none; }
+@media (max-width:400px) {
+  .playtools { gap:3px; } .playtools button { padding:0 7px; }
+  .player .pscroll { padding-inline:9px; } .player .cambar { gap:4px; }
+}
+@media (orientation:landscape) and (max-height:550px) {
+  .player .pscroll { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(260px,1fr); gap:6px 12px; padding:4px 10px; align-content:start; }
+  .player .vwrap { grid-column:1; grid-row:1 / span 4; align-self:start; }
+  .player .cambar,.player .transport,.player .tpanel,.player .infocard { grid-column:2; margin:0; }
+  .player .cambar { flex-wrap:wrap; }
+  .player .ptop { min-height:32px; } .player .cambar button { min-height:30px; padding:4px 9px; }
+  .transport { padding:0; } .clockline output { font-size:15px; }
+}
+/* Shared shell for the library, player and settings. Custom skins may override it. */
+:root { --app-header:64px; --accent:#1598ba; --blue:#53b3d2; --bg:#151d25; --headbg:#1b2630; --panel:#1b2630; --panel2:#243340; --chipbg:#243340; --line:#344653; --line2:#2a3b48; --text:#e5edf3; --muted:#a4b5c2; --muted2:#6d8292; --shadow:none; --selected:#173d4c; --danger:#db6565; }
+html[data-theme="light"] { --bg:#f4f8fb; --headbg:#fff; --panel:#fff; --panel2:#edf4f8; --chipbg:#edf4f8; --line:#dce5eb; --line2:#e8eef2; --text:#1e2933; --muted:#617384; --muted2:#9baab5; --accent:#087fa1; --blue:#087fa1; --shadow:none; --selected:#e6f3f8; --danger:#b33b3b; }
+body { font-size:14px; }
+button,input,select { font:inherit; }
+button:focus-visible,input:focus-visible,select:focus-visible,[role="button"]:focus-visible,summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.app-header { height:var(--app-header); box-sizing:border-box; flex-wrap:nowrap; gap:16px; padding:0 28px; z-index:220; background:var(--headbg); box-shadow:none; border-bottom:1px solid var(--line); }
+.app-header h1 { font-size:19px; gap:9px; min-width:0; flex:0 1 220px; max-width:220px; }
+.app-header #bname { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.app-header .blogo { flex-shrink:0; }
+.app-header .blogo { width:28px; height:28px; border-radius:5px; }
+#stat { display:none; }
+#live { order:2; margin-left:auto; background:transparent!important; border:0!important; padding:0!important; max-width:170px; }
+#livetxt { overflow:hidden; text-overflow:ellipsis; }
+.app-header .tabs { order:1; align-self:stretch; align-items:stretch; margin:0 auto; gap:14px; background:none; border:0; padding:0; border-radius:0; flex:0 1 auto; min-width:0; }
+.app-header .tab { padding:0 8px; min-height:44px; background:transparent; color:var(--text); border:0; border-bottom:3px solid transparent; border-radius:0; box-shadow:none; font-size:14px; white-space:nowrap; }
+html[data-theme] .app-header .tab.active { background:transparent; color:var(--accent); border-bottom-color:var(--accent); font-weight:600; box-shadow:none; }
+body.settings-open .app-header .tab.active { color:var(--text); border-bottom-color:transparent; }
+.app-header .tn { display:none; }
+.app-header #theme,.app-header #gear { order:3; height:44px; min-width:36px; width:auto; display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:0 6px; margin:0; border:0; border-radius:0; color:var(--text); background:transparent; }
+.app-header #gear[aria-expanded="true"] { color:var(--accent); border-bottom:3px solid var(--accent); }
+.app-header .ic { width:19px; height:19px; }
+.library-page { max-width:1440px; margin:auto; padding:26px 32px 40px; }
+body.watching .library-page,body.settings-open .library-page { visibility:hidden; }
+.storwrap { max-width:none; margin:0 0 28px; padding:0; }
+.storcard { display:flex; flex-wrap:wrap; align-items:center; gap:24px; padding:14px 48px 14px 20px; border-radius:8px; background:var(--selected); border:1px solid var(--line); box-shadow:none; }
+.storcard #live { display:inline-flex!important; order:0; margin:0; flex-shrink:0; }
+.storwrap.status-only :is(.storage-brief,.storextra,.stortog) { display:none; }
+.storage-brief { width:clamp(180px,25vw,320px); min-width:0; }
+.storrow { font-size:13px; gap:12px; }
+.storval { font-variant-numeric:tabular-nums; }
+.storbar { height:3px; margin:7px 0 0; background:var(--line); }
+.filter-reset { color:var(--accent); background:none; border:0; padding:4px 0; min-height:36px; cursor:pointer; }
+.storextra { width:100%; margin:0; padding-top:14px; border-top:1px solid var(--line); }
+.stortog { right:7px; top:16px; }
+.library-toolbar { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
+.library-toolbar h2 { margin:0; font-size:22px; }
+#library-count { color:var(--muted); white-space:nowrap; }
+.library-filters { display:flex; gap:12px; align-items:center; margin-left:auto; }
+.library-filters .filters { padding:0; margin:0; max-width:none; overflow:visible; mask-image:none; }
+.filters select { color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:6px; min-height:38px; padding:0 32px 0 12px; max-width:220px; cursor:pointer; }
+#grid.grid-wrap { display:block; max-width:none; margin:0; padding:0; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+#grid:empty { display:none; }
+#grid .dhead { display:flex; align-items:center; margin:0; padding:10px 18px; background:var(--panel2); font-size:14px; border-bottom:1px solid var(--line); gap:10px; }
+#grid .dhead .n { margin:0; color:var(--muted); font-size:12px; }
+#grid .card { display:grid; grid-template-columns:156px minmax(160px,1.5fr) minmax(90px,.6fr) 60px minmax(110px,1fr) 24px; align-items:center; gap:24px; padding:12px 18px; border:0; border-bottom:1px solid var(--line); border-radius:0; background:var(--panel); box-shadow:none; transform:none; }
+#grid .card:last-child { border-bottom:0; }
+#grid .card:hover { background:var(--panel2); transform:none; }
+#grid .thumb { width:156px; height:88px; border-radius:4px; flex:none; }
+#grid .thumb img { object-fit:cover; }
+#grid .cnum { display:none; }
+#grid .meta { min-width:0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.record-time { font-size:19px; font-variant-numeric:tabular-nums; line-height:1.3; }
+.record-reason,.record-location { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.record-reason,.record-size,.record-location { color:var(--muted); }
+.record-play { color:var(--accent); fill:none; stroke:currentColor; width:22px; }
+.player { top:var(--app-header); height:calc(100% - var(--app-header)); --play-accent:var(--accent); background:var(--bg); }
+.player .ptop { min-height:54px; padding:4px 24px; gap:12px; background:var(--panel); }
+.player .ptitle { text-align:left; font-size:16px; }
+.player .pback { color:var(--muted); font-size:14px; min-height:40px; }
+.player .pscroll { padding:16px 24px max(18px,env(safe-area-inset-bottom)); gap:12px; }
+.player .vwrap,.player .transport,.player .tpanel,.player .infocard,.player .cambar { max-width:1200px; width:100%; margin-inline:auto; }
+.player .vwrap { border-radius:6px; flex:none; }
+.player .cambar { order:-1; gap:0; padding:0; overflow:visible; }
+.player .cambar button { border:1px solid var(--line); border-radius:0; margin-left:-1px; min-height:36px; padding:4px 18px; background:var(--panel); color:var(--text); }
+.player .cambar button:first-child { border-radius:6px 0 0 6px; margin-left:0; }
+.player .cambar button:last-child { border-radius:0 6px 6px 0; }
+.player .cambar button.on { color:var(--accent); background:var(--selected); border-color:var(--accent); z-index:1; }
+.player .transport { padding:0 0 12px; }
+.clockline output { font-size:17px; font-weight:500; font-style:normal; }
+.playtools { grid-template-columns:1fr auto auto; gap:12px; }
+.playtools .shuttle { grid-column:1; grid-row:1; gap:8px; }
+.playtools .qsel { grid-column:2; grid-row:1; }
+.playtools .viewtools { grid-column:3; grid-row:1; }
+.playtools button { background:var(--panel); border:1px solid var(--line); min-height:36px; }
+.shuttle #ppbtn { border-radius:6px; background:var(--accent); color:white; border:0; width:40px; height:36px; }
+.playtools .qsel .qbtn { background:var(--panel); color:var(--accent); border:1px solid var(--line); border-radius:6px; }
+.playtools .qmenu { right:0; left:auto; border-radius:6px; }
+.player .tpanel { padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.player .tp-spd { font-size:32px; }
+.player .tp-badge { border-radius:5px; padding:5px 8px; font-size:13px; }
+.player .tp-gear { width:25px; height:25px; font-size:15px; }
+.player .tp-date { font-size:13px; }
+.player .tp-fold { padding:5px 0 0; }
+.watch-list { width:248px; padding:20px 12px; }
+.watch-list h2 { margin:0 10px 14px; font-size:16px; }
+#watch-items { overflow:auto; }
+#watch-items button { display:grid; gap:8px; width:100%; text-align:start; background:transparent; color:var(--text); border:0; border-left:3px solid transparent; border-bottom:1px solid var(--line); padding:14px 10px; cursor:pointer; }
+#watch-items strong { font-size:14px; font-weight:500; }
+#watch-items small { font-size:12px; font-variant-numeric:tabular-nums; color:var(--muted); }
+#watch-items button.selected { background:var(--selected); border-left-color:var(--accent); }
+.list-toggle { width:36px; height:36px; display:grid; place-items:center; background:transparent; color:var(--muted); border:1px solid var(--line); border-radius:6px; cursor:pointer; }
+.library-shade { display:none; }
+.player.library-collapsed .watch-list { display:none; }
+body.settings-open { overflow:hidden; }
+.mask.open { display:none; }
+.panel { top:var(--app-header); left:0; right:0; bottom:0; transform:none; width:100%; max-width:none; max-height:none; height:calc(100% - var(--app-header)); padding:0; border:0; border-radius:0; box-shadow:none; overflow:hidden; background:var(--bg); z-index:210; }
+.panel.open { display:flex; }
+.settings-nav { width:220px; flex-shrink:0; padding:22px 12px; overflow:auto; background:var(--panel); border-right:1px solid var(--line); }
+.settings-nav h2 { font-size:20px; padding:0 10px; margin:0 0 24px; }
+.settings-nav .x { font-size:16px; min-width:32px; min-height:32px; }
+.panel .stabs { display:flex; flex-direction:column; gap:2px; margin:0; }
+.stabs h3 { font-size:12px; color:var(--muted); font-weight:500; margin:22px 10px 10px; }
+.stabs h3:first-child { margin-top:0; }
+.panel .stabs .stab { display:flex; align-items:center; justify-content:flex-start; gap:9px; min-height:40px; padding:8px 12px; border:0; border-left:3px solid transparent; border-radius:4px; background:transparent; color:var(--text); font-size:14px; text-align:left; }
+.panel .stabs .stab .ic { width:16px; height:16px; color:var(--muted); }
+.panel .stabs .stab.active { color:var(--accent); background:var(--selected); border-left-color:var(--accent); }
+.settings-content { flex:1; min-width:0; overflow:auto; padding:28px clamp(20px,3vw,48px) 40px; }
+.settings-content > h2 { font-size:23px; margin:0 0 12px; }
+.settings-content > div[id^="tab-"] { max-width:1200px; }
+.settings-content h3 { font-size:17px; margin:0 0 18px; }
+.settings-back { display:none; }
+.panel .ninput,.panel select,.panel input:not([type="checkbox"]):not([type="file"]):not([type="radio"]):not([type="range"]) { border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--text); min-height:36px; padding:6px 10px; box-sizing:border-box; max-width:100%; }
+.panel .mini,.panel button.primary,.panel .upbtn { border:1px solid var(--line); border-radius:6px; min-height:36px; padding:7px 14px; background:var(--panel); color:var(--text); box-shadow:none; font-size:13px; }
+.panel .mini.primary,.panel button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+.panel .hint { color:var(--muted); font-size:12px; line-height:1.6; }
+#storage-plan { background:var(--selected); border:1px solid var(--line); border-radius:8px; padding:18px; margin:14px 0 8px; }
+.storage-bar { height:20px; border-radius:4px; }
+.storage-usb-color { background:#087fa1; }
+.storage-archive-color { background:#23896e; }
+.storage-reserve-color { background:#cc9b22; }
+.storage-legend { display:flex; flex-wrap:wrap; gap:12px 24px; }
+.storage-legend output { margin-left:6px; }
+.storage-row { grid-template-columns:minmax(0,1fr) 98px 28px; gap:10px; min-height:48px; margin:0; }
+.storage-row input { width:100%; }
+.storage-row > label,.storage-row > span { font-size:14px; }
+.storage-total-row { display:flex; align-items:center; gap:10px; font-size:16px; font-weight:600; }
+.storage-total-row output { margin-left:4px; }
+.storage-total-row .storage-help { margin-left:auto; }
+.storage-columns { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); gap:20px; margin-top:20px; }
+.storage-quota,#storage-usage { padding:20px; border:1px solid var(--line); border-radius:8px; background:var(--panel); margin:0; }
+.storage-nested { margin-left:12px; padding-left:12px; border-left:1px solid var(--line); }
+.storage-advanced { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+#storage-usage > summary { font-size:17px; color:var(--text); font-weight:600; padding:0 0 18px; }
+.storage-usage { display:block; font-size:13px; }
+.usage-row { display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; margin:0 0 20px; }
+.usage-row meter { appearance:none; width:100%; height:5px; border:0; background:var(--line); border-radius:3px; }
+.usage-row meter::-webkit-meter-bar { background:var(--line); border:0; border-radius:3px; }
+.usage-row meter::-webkit-meter-optimum-value { background:var(--accent); border-radius:3px; }
+.usage-row meter::-moz-meter-bar { background:var(--accent); border-radius:3px; }
+.usage-row.nested { margin-left:12px; padding-left:12px; border-left:1px solid var(--line); }
+.usage-row.free { margin:0; padding-top:18px; border-top:1px solid var(--line); }
+.storage-usage output { font-variant-numeric:tabular-nums; }
+.storage-danger { margin-top:26px; padding-top:22px; border-top:1px solid var(--line); position:relative; }
+.storage-danger h3 { color:var(--danger); }
+.storage-danger .storage-row { max-width:420px; }
+#storage-resize { border-color:var(--danger); color:var(--danger); background:transparent; }
+.support-box { max-width:1200px; border:0; border-top:1px solid var(--line); border-radius:0; box-shadow:none; background:transparent; margin-top:28px; padding:16px 0; }
+.support-box > summary { color:var(--muted); font-size:13px; cursor:pointer; }
+.support-sec { margin-top:18px; }
+.storage-tip { z-index:240; }
+:root:fullscreen .app-header,body:has(.player.expanded) .app-header { display:none; }
+:root:fullscreen .player,.player.expanded { top:0; height:100%; }
+@media (max-width:1199px) {
+  .app-header { padding-inline:18px; gap:10px; }
+  .app-header .tabs { gap:6px; }
+  #grid .card { gap:18px; grid-template-columns:140px minmax(140px,1.5fr) 90px 50px minmax(90px,1fr) 22px; }
+  #grid .thumb { width:140px; height:80px; }
+  .storage-columns { grid-template-columns:1fr; }
+}
+@media (max-width:999px) {
+  .app-header { --app-header:104px; flex-wrap:wrap; align-content:start; row-gap:0; height:104px; }
+  :root { --app-header:104px; }
+  .app-header h1 { height:54px; margin-right:auto; flex:1 1 0; max-width:none; }
+  .app-header #theme,.app-header #gear { order:0; height:54px; }
+  .app-header .tabs { flex:1 0 100%; height:50px; order:4; justify-content:space-between; gap:4px; }
+  .app-header .tab { flex:1; padding:0 4px; }
+  .library-page { padding:20px; }
+  .library-toolbar { flex-wrap:wrap; }
+  .library-filters { flex:1 0 100%; margin:4px 0 0; }
+  #grid .card { grid-template-columns:132px minmax(0,1fr) 80px 22px; gap:16px; }
+  #grid .thumb { width:132px; height:76px; }
+  .record-location,.record-cameras { display:none; }
+  .player .watch-list { display:none; }
+  .player.library-open .watch-list { display:flex; position:absolute; inset:0 auto 0 0; z-index:6; width:min(300px,80vw); background:var(--panel); border-right:1px solid var(--line); flex-direction:column; }
+  .player.library-open .library-shade { display:block; position:absolute; inset:0; z-index:5; background:#0006; border:0; width:100%; }
+  .player .ptop { padding-inline:16px; }
+  .player .pscroll { padding-inline:16px; }
+  .settings-nav { width:190px; }
+  .settings-content { padding:24px; }
+}
+@media (max-width:600px) {
+  .app-header { padding-inline:12px; }
+  .app-header h1 { font-size:17px; }
+  .app-header .blogo { width:25px; height:25px; }
+  .app-header .tab { font-size:12px; min-width:0; }
+  .app-header #gear span { display:none; }
+  .library-page { padding:16px 12px 28px; }
+  .storwrap { margin-bottom:20px; }
+  .storcard { gap:12px; padding:12px 36px 12px 12px; }
+  .storcard #live { flex-basis:100%; max-width:none; }
+  .storage-brief { width:100%; }
+  .stortog { top:8px; }
+  .library-toolbar h2 { font-size:20px; }
+  .library-filters { gap:8px; flex-wrap:wrap; }
+  .library-filters .filters.show { display:block; flex:1; min-width:0; }
+  .filters select { min-height:44px; width:100%; padding:0 8px; font-size:12px; max-width:none; }
+  .filter-reset { min-height:44px; font-size:12px; }
+  #grid .dhead { padding:9px 12px; }
+  #grid .card { grid-template-columns:100px minmax(0,1fr) 18px; padding:12px; gap:12px; }
+  #grid .thumb { width:100px; height:66px; }
+  #grid .cnum { display:block; font-size:10px; }
+  #grid .meta { gap:7px; }
+  .record-time { font-size:16px; }
+  .record-reason { font-size:12px; }
+  .record-size { display:none; }
+  .record-play { width:18px; }
+  .player .ptop { padding:4px 10px; min-height:48px; gap:8px; }
+  .player .ptitle { font-size:12px; }
+  .player .pback { font-size:12px; }
+  .list-toggle { width:40px; min-width:40px; height:40px; }
+  .player .pscroll { padding:12px 10px max(16px,env(safe-area-inset-bottom)); gap:10px; }
+  .player .cambar button { flex:1; min-height:44px; padding:4px; font-size:12px; }
+  .playtools { gap:6px; }
+  .playtools .shuttle { gap:3px; }
+  .playtools button { padding:0 6px; min-height:44px; font-size:12px; }
+  .playtools .viewtools { gap:3px; }
+  .shuttle #ppbtn { width:44px; height:44px; }
+  .viewtools #screenbtn { width:44px; padding:0; }
+  .player .tpanel { padding:12px; }
+  .player .tp-spd { font-size:28px; }
+  .player .tp-badge { font-size:12px; padding:4px 6px; }
+  .settings-nav { width:100%; border:0; box-sizing:border-box; padding:18px 12px; }
+  .settings-content { display:none; padding:16px 12px 32px; }
+  .panel.settings-detail .settings-nav { display:none; }
+  .panel.settings-detail .settings-content { display:block; }
+  .settings-back { display:block; border:0; background:transparent; color:var(--accent); min-height:44px; padding:0; margin-bottom:8px; }
+  .settings-content > h2 { font-size:20px; }
+  .panel .stabs .stab { min-height:48px; }
+  .storage-columns { gap:14px; margin-top:14px; }
+  .storage-quota,#storage-usage { padding:16px 12px; }
+  #storage-plan { padding:14px 12px; }
+  .storage-legend { gap:10px; font-size:12px; }
+  .storage-row { grid-template-columns:minmax(0,1fr) 70px 32px; gap:5px; }
+  .storage-row > label,.storage-row > span { font-size:12px; }
+  .storage-nested { margin-left:4px; padding-left:6px; }
+  .panel .mini,.panel .upbtn,.panel button.primary,.panel .ninput { min-height:44px; }
+  .storage-help { min-height:44px; }
+  .storage-usage { gap:16px 6px; font-size:12px; }
+}
+@media (orientation:landscape) and (max-height:550px) {
+  :root { --app-header:48px; }
+  .app-header { height:48px; flex-wrap:nowrap; padding-inline:10px; gap:6px; }
+  .app-header h1 { height:48px; font-size:13px; flex:0 1 130px; max-width:130px; }
+  .app-header .blogo { display:none; }
+  .app-header .tabs { order:1; flex:1; height:48px; gap:0; }
+  .app-header .tab { font-size:11px; padding:0 3px; }
+  .app-header #theme,.app-header #gear { order:2; height:48px; }
+  .app-header #gear span { display:none; }
+  .player .pscroll { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(260px,1fr); padding:6px 10px; gap:6px 12px; }
+  .player .cambar { grid-row:1; }
+  .player .transport { grid-row:2; }
+  .player .cambar button { padding:3px 8px; min-height:36px; }
+  .player .ptop { min-height:36px; }
+}
+@media (pointer:coarse) {
+  .storage-row { grid-template-columns:minmax(0,1fr) 70px 44px; }
+  .storage-help { width:44px; height:44px; }
+}
+@media (max-width:360px) {
+  .app-header .tabs { gap:0; }
+  .app-header .tab { font-size:11px; padding-inline:0; }
+  .record-time { font-size:14px; overflow-wrap:anywhere; }
+}
+.system-status { order:2; display:flex; align-items:center; gap:12px; color:var(--muted); font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.system-status strong { color:var(--text); font-weight:500; }
+.system-status .hot { color:var(--danger); }
+.player-actions { display:flex; gap:4px; flex:none; }
+.player-actions button { display:inline-flex; align-items:center; justify-content:center; gap:5px; min-height:40px; padding:0 10px; background:transparent; border:1px solid var(--line); border-radius:4px; color:var(--text); cursor:pointer; }
+.player-actions button:disabled { opacity:.5; cursor:default; }
+.player-actions button[aria-disabled="true"] { opacity:.5; }
+.player-actions button[aria-pressed="true"] { color:var(--accent); background:var(--selected); }
+.player-actions .ic { width:17px; height:17px; }
+@media (min-width:1000px) { .app-header { gap:12px; } .app-header h1 { flex-basis:170px; } .app-header .tabs { gap:4px; } }
+@media (max-width:1199px) and (min-width:1000px) { .system-status { gap:6px; font-size:11px; } .app-header h1 { flex-basis:140px; font-size:16px; } }
+@media (max-width:999px) { .system-status { order:0; } }
+@media (max-width:600px) {
+  :root { --app-header:132px; }
+  .app-header { --app-header:132px; height:132px; }
+  .system-status { order:1; flex:1 0 100%; height:28px; justify-content:flex-end; gap:16px; }
+  .player .ptop { flex-wrap:wrap; }
+  .player .ptitle { flex-basis:calc(100% - 100px); }
+  .player-actions { margin-left:auto; }
+  .player-actions button { min-height:44px; }
+}
+@media (orientation:landscape) and (max-height:550px) {
+  :root { --app-header:76px; }
+  .app-header { --app-header:76px; height:76px; flex-wrap:wrap; row-gap:0; }
+  .system-status { order:4; flex:1 0 100%; height:28px; justify-content:flex-end; }
+  .app-header .tabs { flex:1; }
+  .player .ptop { flex-wrap:nowrap; }
+  .player .ptitle { flex:1; }
+  .player-actions button { min-height:32px; }
+}
 </style><script>
 /* 版本自检: 服务端升级后, 若当前页面仍是旧版本就自动重载 (看片时不打断, 最多 2 次防死循环) */
 (function () {
@@ -1450,6 +1892,8 @@ html[data-style="pixel"] .stylepick .sw i { border:1px solid var(--line); }
 <!-- 内联 SVG 图标: 单文件自包含, 不引外链/字体; 线宽与颜色跟 currentColor 走,
      4 套界面风格 + 深浅色自动适配 (emoji 会随系统渲染成彩色卡通, 跟 UI 不搭) -->
 <svg id="isprite" aria-hidden="true" focusable="false" style="position:absolute;width:0;height:0;overflow:hidden"><defs>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></symbol>
 <symbol id="i-car" viewBox="0 0 24 24"><path d="M4.2 16.2h1.7m5.4 0h5.4m3.4 0h1.7"/><path d="M4.2 16.2v-2.6l4-1.7 2.6-2.9h4.4l2.6 2.9 4 1.7v2.6"/><circle cx="7.6" cy="16.3" r="1.7"/><circle cx="16.4" cy="16.3" r="1.7"/></symbol>
 <symbol id="i-usb" viewBox="0 0 24 24"><rect x="3.4" y="7.4" width="17.2" height="9.2" rx="2"/><circle cx="16.4" cy="12" r="1.35"/><path d="M6.8 10.4h4.8"/></symbol>
 <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M12 3.4a8.6 8.6 0 0 1 0 17.2z" fill="currentColor" stroke="none"/></symbol>
@@ -1472,37 +1916,52 @@ html[data-style="pixel"] .stylepick .sw i { border:1px solid var(--line); }
 <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.6 12S6.1 5.6 12 5.6 21.4 12 21.4 12 17.9 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.9"/></symbol>
 <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4.2 20 20"/><path d="M9.7 5.9A9.4 9.4 0 0 1 12 5.6c5.9 0 9.4 6.4 9.4 6.4a17 17 0 0 1-2.5 3.4"/><path d="M6.4 7.3A16.6 16.6 0 0 0 2.6 12S6.1 18.4 12 18.4c1.3 0 2.5-.28 3.6-.76"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
 <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.8v11.4"/><path d="m7.4 10.8 4.6 4.6 4.6-4.6"/><path d="M4.4 20h15.2"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
 <symbol id="i-link" viewBox="0 0 24 24"><path d="M9.6 14.4a4.2 4.2 0 0 0 6 0l2.6-2.6a4.2 4.2 0 0 0-6-6l-1.5 1.5"/><path d="M14.4 9.6a4.2 4.2 0 0 0-6 0L5.8 12.2a4.2 4.2 0 0 0 6 6l1.5-1.5"/></symbol>
 <symbol id="i-brand" viewBox="0 0 24 24"><path d="M12 3.6l2.35 4.05 4.55.7-3.3 3.2.8 4.55L12 13.95 7.6 16.1l.8-4.55-3.3-3.2 4.55-.7z"/></symbol>
 </defs></svg>
-<header><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">哨兵一剪梅</span></h1><span class="sub" id="stat"></span>
-<span id="live" title="车机在线只读同步状态" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:4px 10px;white-space:nowrap"><span id="livedot" style="width:7px;height:7px;border-radius:50%;background:#5f6b76"></span><span id="livetxt">同步状态</span></span>
-<nav class="tabs" id="tabs"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button><button id="gear" title="设置"><svg class="ic"><use href="#i-gear"/></svg></button></header>
-<nav class="storwrap" id="storwrap" style="display:none">
+<header class="app-header"><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">哨兵一剪梅</span></h1><span class="sub" id="stat"></span>
+<div class="system-status" aria-label="系统状态"><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
+<nav class="tabs" id="tabs" aria-label="录像分类"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button><button id="gear" title="设置" aria-expanded="false" aria-controls="panel"><svg class="ic"><use href="#i-gear"/></svg><span>设置</span></button></header>
+<main class="library-page">
+<nav class="storwrap status-only" id="storwrap">
   <div class="storcard" id="storcard">
-<div class="storrow"><span class="storlab">虚拟U盘</span><span class="storval" id="storvusb"></span></div>
+<span id="live" title="车机在线只读同步状态" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:4px 10px;white-space:nowrap"><span id="livedot" style="width:7px;height:7px;border-radius:50%;background:#5f6b76"></span><span id="livetxt">同步状态</span></span>
+<div class="storage-brief"><div class="storrow"><span class="storlab">车机 U 盘</span><span class="storval" id="storvusb"></span></div>
 <div class="storbar"><i id="storvusbbar"></i></div>
-<div class="storextra" id="storextra">
-<div class="storrow"><span class="storlab">归档区</span><span class="storval" id="storarc"></span></div>
+</div><div class="storage-brief"><div class="storrow"><span class="storlab">盒子归档</span><span class="storval" id="storarc"></span></div>
 <div class="storbar"><i id="storarcbar"></i></div>
+</div>
+<div class="storextra" id="storextra">
 <div class="storrow"><span class="storlab">总占用</span><span class="storval" id="stortot"></span></div>
 <div class="storbar"><i id="stortotbar"></i></div>
-<div class="storsys"><span class="storlab">系统状态</span><div class="sysgrid" id="storsys"></div></div>
 </div>
-<button class="stortog" id="stortog" onclick="toggleStor()" title="展开归档区、总占用与系统状态" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+<button class="stortog" id="stortog" onclick="toggleStor()" title="展开总占用" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
 </nav>
-<nav class="filters" id="filters"></nav>
+<div class="library-toolbar"><h2 id="library-title">录像</h2><span id="library-count"></span><div class="library-filters">
 <nav class="filters" id="dfilters"></nav>
+<nav class="filters" id="filters"></nav>
+<button class="filter-reset" onclick="reasonFilter='all';dateFilter='all';render(currentCat)">重置</button>
+</div></div>
 <input type="date" id="dpick" class="dpick" onchange="if(this.value) setDate(this.value)">
 <div class="grid-wrap" id="grid"></div>
 <div class="empty" id="empty" style="display:none"><div class="big">📹</div>
 <div>暂无归档视频<br><small style="font-size:12px">车机录制后, 归档同步任务会自动把视频收进来 (镜像需空闲10分钟)</small></div></div>
+</main>
 
 <div class="player" id="player">
+  <button class="library-shade" aria-label="关闭录像列表" onclick="toggleLibrary(false)"></button>
+  <aside class="watch-list" id="watch-list" aria-label="录像列表"><h2 id="watch-list-title">录像</h2><div id="watch-items"></div></aside>
+  <div class="watch-main">
   <div class="ptop">
+    <button class="list-toggle" onclick="toggleLibrary()" aria-label="录像列表" aria-controls="watch-list" aria-expanded="true"><svg class="ic"><use href="#i-folder"/></svg></button>
     <button class="pback" onclick="closePlayer()">‹ 返回</button>
     <span class="ptitle" id="ptitle"></span>
+    <div class="player-actions">
+      <button id="record-lock" disabled onclick="manageRecording('lock')" aria-pressed="false"><svg class="ic"><use href="#i-lock"/></svg><span>锁定</span></button>
+      <button id="record-delete" disabled onclick="manageRecording('delete')"><svg class="ic"><use href="#i-trash"/></svg><span>删除</span></button>
+    </div>
     <button class="pdl" onclick="openExport()" title="导出"><svg class="ic"><use href="#i-download"/></svg></button>
   </div>
   <div class="pscroll">
@@ -1523,25 +1982,29 @@ html[data-style="pixel"] .stylepick .sw i { border:1px solid var(--line); }
         <div class="tp-rows" id="tp-rows"></div>
     </div>
     <div class="vwrap">
-      <div class="startmask" id="startmask">▶ 轻触开始同步播放</div>
+      <button type="button" class="startmask" id="startmask">▶ 轻触开始同步播放</button>
       <div class="vgrid" id="vgrid"></div>
     </div>
-    <div class="cambar" id="cambar"></div>
+    <div class="cambar" id="cambar" aria-label="摄像头"></div>
+    <section class="transport" aria-label="回放控制">
+      <div class="clockline"><output id="ptime">--:--:--</output><button id="trigger-marker" hidden>触发时刻</button><span id="track-end"></span></div>
+      <div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"></div>
+      <div class="playtools">
+        <div class="qsel" id="qsel"></div>
+        <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
+        <div class="viewtools"><button id="spdbtn" onclick="cycleSpeed()">1×</button><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
+      </div>
+      <div id="livep" class="watch-live" hidden>
+        <span id="lv-status"></span><button id="lv-back" onclick="backToLatest()">回到最新</button>
+        <select id="lv-iv" aria-label="检查间隔" onchange="liveRestart()"><option value="3">3 秒</option><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">1 分钟</option><option value="0">仅手动</option></select>
+        <button onclick="liveTick()">检查更新</button>
+      </div>
+    </section>
     <div class="infocard" id="infocard">
-      <div class="ic-top"><span class="ic-time" id="ic-time">—</span><span class="ic-badge" id="ic-cat">—</span></div>
-      <div class="ic-mid"><span class="ic-big" id="ic-big">—</span><span class="ic-sub" id="ic-sub"></span></div>
-      <div class="clipbar" id="clipbar"></div>
       <button class="ic-fold" id="ic-fold" onclick="toggleDetail()">收起详细数据 ⌃</button>
-      <div class="ic-rows" id="ic-rows"></div>
+      <div class="ic-rows" id="ic-rows"></div><div class="clipbar" id="clipbar"></div>
     </div>
   </div>
-  <div class="pbar">
-    <button class="pp" id="ppbtn" onclick="togglePlay()">⏸</button>
-    <input type="range" id="seek" min="0" max="1000" value="0">
-    <span class="t" id="ptime">00:00</span>
-    <button class="spd" id="spdbtn" onclick="cycleSpeed()">1x</button>
-    <div class="qsel" id="qsel"></div>
-    <div class="qhint" id="qhint"></div>
   </div>
 </div>
 
@@ -1574,52 +2037,58 @@ html[data-style="pixel"] .stylepick .sw i { border:1px solid var(--line); }
   <div class="hint" style="margin-top:8px;margin-bottom:0">单选取原文件直接下载(加水印时走本机合成)；多选合成一个多画面视频。下载/打包按所选清晰度导出(首次需等转码)。「推送飞书」按所选画面+水印合成后发到你的飞书私聊 (需已配置推送, 首次合成约1-3分钟)。</div>
 </div>
 
+<div class="storage-tip" id="storage-tip" role="note" hidden></div>
 <div class="mask" id="mask" onclick="closePanel()"></div>
 
-<div class="livep" id="livep">
-  <div class="lvtop">
-    <span class="lvtitle">📡 准实时预览 <small style="color:#7d8894;font-weight:400">延时约 1~2 分钟</small></span>
-    <span class="lvstatus" id="lv-status"></span>
-  </div>
-  <div class="lvbody">
-    <div class="lvmeta" id="lv-name">—</div>
-    <video id="lv-video" controls playsinline muted></video>
-    <div class="lvgrid" id="lv-grid"></div>
-    <div class="lvrow" id="lv-cams"></div>
-    <div class="lvrow">
-      <span style="font-size:13px;color:var(--muted)">画质</span>
-      <select id="lv-q" onchange="setLiveQ(this.value)" title="与回放相同的几档画质; 非原画由设备后台转码, 首次先用已有档位立即开播, 转好后下次生效">
-        <option value="orig">原画</option>
-        <option value="720p">720p</option>
-        <option value="480p">480p</option>
-        <option value="360p">360p</option>
-      </select>
-    </div>
-    <div class="lvrow">
-      <span style="font-size:13px;color:var(--muted)">刷新检查</span>
-      <select id="lv-iv" onchange="liveRestart()">
-        <option value="15">15 秒</option>
-        <option value="30">30 秒</option>
-        <option value="60">1 分钟</option>
-        <option value="0">仅手动</option>
-      </select>
-      <button class="lvbtn" onclick="liveTick()">检查更新</button>
-    </div>
-    <div class="hint">「全览」同时播放全部摄像头, 数据量较大 (4 路每分钟约 100MB), 建议流量充足时使用; 点任一格可切到单路。画质可选 原画 / 720p / 480p / 360p: 非原画由设备后台转码, 首次先用已有档位立即开播, 转好后下次打开即生效 (全览建议 480p 及以下)。原理: 车机循环录制 1 分钟一段; 后台的只读同步 (不打断车机) 把刚写完的片段持续收进归档, 这里自动发现并播放最新片段, 即约 1 分钟延时的"直播"。刚停车/刚触发录像的片段要等写完才会出现。</div>
-  </div>
-</div>
 <div class="panel" id="panel">
-  <h2><svg class="ic"><use href="#i-gear"/></svg>个性化 <button class="x" onclick="closePanel()">✕</button></h2>
-  <div class="stabs">
-    <button class="stab active" id="st-files" onclick="stab('files')"><svg class="ic"><use href="#i-folder"/></svg>文件</button>
+  <aside class="settings-nav"><h2>设置 <button class="x" onclick="closePanel()" aria-label="关闭设置">✕</button></h2>
+  <nav class="stabs" aria-label="设置分类"><h3>存储与文件</h3>
+    <button class="stab" id="st-storage" onclick="stab('storage')"><svg class="ic"><use href="#i-archive"/></svg>存储分配</button>
+    <button class="stab" id="st-files" onclick="stab('files');switchArea('usb')"><svg class="ic"><use href="#i-folder"/></svg>车机 U 盘文件</button>
+    <button class="stab" id="st-archive" onclick="stab('files');switchArea('archive')"><svg class="ic"><use href="#i-archive"/></svg>盒子归档</button>
+    <h3>车辆个性化</h3>
     <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车语音</button>
     <button class="stab" id="st-wraps" onclick="stab('wraps')"><svg class="ic"><use href="#i-brush"/></svg>涂装</button>
+    <h3>系统与偏好</h3>
     <button class="stab" id="st-notify" onclick="stab('notify')"><svg class="ic"><use href="#i-bell"/></svg>推送</button>
     <button class="stab" id="st-auth" onclick="stab('auth')"><svg class="ic"><use href="#i-key"/></svg>账号</button>
     <button class="stab" id="st-lang" onclick="stab('lang')"><svg class="ic"><use href="#i-globe"/></svg>语言</button>
-    <button class="stab" id="st-skin" onclick="stab('skin')"><svg class="ic"><use href="#i-image"/></svg>网页背景</button>
+    <button class="stab" id="st-skin" onclick="stab('skin')"><svg class="ic"><use href="#i-image"/></svg>外观与背景</button>
     <button class="stab" id="st-brand" onclick="stab('brand')"><svg class="ic"><use href="#i-brand"/></svg>品牌</button>
     <button class="stab" id="st-update" onclick="stab('update')"><svg class="ic"><use href="#i-refresh"/></svg>更新</button>
+  </nav></aside>
+  <div class="settings-content"><button class="settings-back" onclick="settingsBack()">‹ 设置</button><h2 id="settings-title">存储分配</h2>
+  <div id="tab-storage" style="display:none">
+    <div class="hint">容量单位：GiB</div>
+    <div id="storage-plan" hidden>
+      <div class="storage-total-row"><span>存储卡实际容量</span><output id="storage-total">—</output><span>GiB</span><button class="storage-help" type="button" aria-label="存储卡实际容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="total">?</button></div>
+      <div class="storage-summary"><span>分配预览</span><span>可分配 <output id="storage-available">—</output> GiB</span></div>
+      <div class="storage-bar" id="storage-bar" role="img" aria-label="容量分配">
+        <span class="storage-usb-color" data-storage-segment="usb"></span><span class="storage-archive-color" data-storage-segment="archive"></span><span class="storage-reserve-color" data-storage-segment="reserve"></span><span class="storage-cache-color" data-storage-segment="cache"></span><span class="storage-free-color" data-storage-segment="free"></span>
+      </div>
+      <div class="storage-legend">
+        <div><i class="storage-usb-color"></i>车机 U 盘<output data-storage-value="usb"></output></div>
+        <div><i class="storage-archive-color"></i>盒子归档<output data-storage-value="archive"></output></div>
+        <div><i class="storage-reserve-color"></i>安全预留<output data-storage-value="reserve"></output></div>
+        <div id="storage-cache-legend"><i class="storage-cache-color"></i>缓存预算<output data-storage-value="cache"></output></div>
+        <div><i class="storage-free-color"></i>未分配<output data-storage-value="free"></output></div>
+      </div>
+    </div>
+    <div class="hint" id="storage-budget" role="status"></div>
+    <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
+    <div class="storage-row"><label for="storage-archive">盒子归档总上限</label><input class="ninput" id="storage-archive" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
+    <div class="storage-nested"><div class="storage-row"><label for="storage-drive">其中：行车记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="行车记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div></div>
+    <div class="storage-row"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
+    <details class="storage-advanced"><summary>高级保护</summary>
+      <div class="storage-row"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
+    </details>
+    <div class="updbtns"><button class="mini primary" id="storage-save" onclick="storageSave()" disabled>保存归档设置</button><button class="mini" onclick="storageLoad()">重新加载</button></div>
+    <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
+    </section><details class="storage-advanced" id="storage-usage" open><summary>实际用量 · 已用／上限</summary>
+      <div class="storage-usage"><div class="usage-row"><span>车机 U 盘</span><output id="storage-used-usb">—</output><meter id="storage-meter-usb" min="0" max="100" value="0" aria-label="车机 U 盘用量"></meter></div><div class="usage-row"><span>盒子归档</span><output id="storage-used-archive">—</output><meter id="storage-meter-archive" min="0" max="100" value="0" aria-label="盒子归档用量"></meter></div><div class="usage-row nested"><span>其中：行车记录</span><output id="storage-used-drive">—</output><meter id="storage-meter-drive" min="0" max="100" value="0" aria-label="行车记录用量"></meter></div><div class="usage-row free"><span>存储卡当前空闲</span><output id="storage-used-free">—</output></div></div>
+    </details></div>
+    <section class="storage-danger"><h3>调整车机 U 盘容量</h3><div class="storage-row"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
+    <div class="hint">调整会清空车机 U 盘全部内容，盒子归档保留。</div><button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button><div id="storage-resize-status"></div></section>
   </div>
   <div id="tab-brand" style="display:none">
     <div class="hint">标题栏左侧的图标与名称 · 改完立即生效, 访客刷新页面后看到新的; 名称留空即用默认「哨兵一剪梅」</div>
@@ -1771,8 +2240,7 @@ html[data-style="pixel"] .stylepick .sw i { border:1px solid var(--line); }
     <div class="langgrid" id="lang-grid"></div>
     <div class="hint">界面语言，保存在本机浏览器</div>
   </div>
-  <!-- 常驻模块: 在 stab 控制的 tab 容器之外, 所有设置子菜单下都可见 -->
-  <div class="support-box" id="support-box">
+  <details class="support-box" id="support-box"><summary>交流与赞助</summary>
     <div class="support-sec">
       <div class="support-title">💬 交流加群</div>
       <div class="support-text">交流加群请联系作者，扫码关注抖音或添加微信好友~</div>
@@ -1789,7 +2257,7 @@ html[data-style="pixel"] .stylepick .sw i { border:1px solid var(--line); }
         <figure><img src="/sponsor/wechatpay?v=__SPONSOR_VER__" alt="微信收款码" loading="lazy"><figcaption>微信支付</figcaption></figure>
       </div>
     </div>
-  </div>
+  </details></div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -1812,6 +2280,7 @@ let curClips = [], curClipIx = 0, TEL = null;
    切回中文时从节点上保存的原文还原, 不会叠加翻译。 */
 const I18N = window.__I18N || {};
 const LANGS = window.__LANGS || [['zh', '中文']];
+const UI_LABEL_ALIASES = {'哨兵录像':'哨兵告警', '车机 U 盘文件':'车机U盘', '盒子归档':'归档区', '外观与背景':'网页背景'};
 let LANG = (localStorage.getItem('tsf_lang') || '').trim();
 if (!LANGS.some(l => l[0] === LANG)) {
   const nav = String((navigator.languages && navigator.languages[0]) || navigator.language || 'zh').toLowerCase();
@@ -1821,7 +2290,8 @@ if (!LANGS.some(l => l[0] === LANG)) {
 function t(s) {
   if (!s || LANG === 'zh') return s;
   const m = I18N[LANG] || {};
-  return m[s] || (I18N.en || {})[s] || s;
+  const key = UI_LABEL_ALIASES[s] || s;
+  return m[s] || m[key] || (I18N.en || {})[key] || s;
 }
 function langName(code) {
   const l = LANGS.find(x => x[0] === code);
@@ -1942,22 +2412,15 @@ function toggleStor() {
 if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if ((localStorage.getItem('tsf_theme') || 'auto') === 'auto') applyTheme('auto');
 });
-/* ---------- 清晰度选择 ----------
-   默认 480p: 播放器已改单路, 480p 单路只占 ~60KB/s (公网实测首帧 0.08s), 带宽不再是瓶颈;
-   与飞书推送/导出的默认档位一致, 看着的和推出去的同一分辨率。原画一段 26MB 仍传不完,
-   想省流量可手选 360p, 选过之后会记住
-   记忆 key 从 tsfq 换成 tsfq2/tsfq3: 每次改默认档位都换一个, 否则老设备里存的旧选择
-   (orig / 360p) 会盖掉新默认值 */
+/* 清晰度偏好按播放入口保存。 */
 const Q_LIST = [['orig', '原画'], ['720p', '720p'], ['480p', '480p'], ['360p', '360p']];
-const isLanNet = /^(100\.96\.|192\.168\.|10\.|127\.)/.test(location.hostname);
-let curQ = localStorage.getItem('tsfq3') || '480p';
-/* 已提前提交过后台转码的 (分类+画质+事件列表) 组合, 避免 10 秒轮询重复 POST */
-let prekicked = new Set();
+const localAddress = /^(localhost$|127\.|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.|\[::1\]$)/i.test(location.hostname);
+const defaultQuality = localAddress ? 'orig' : '480p';
+let curQ = localStorage.getItem('tsfq3') || defaultQuality;
 /* 苹果设备: 合成改走设备端 (Safari 的 MediaRecorder 只能出 webm, 微信不认) */
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-if (!Q_LIST.some(x => x[0] === curQ)) curQ = '480p';
-function qUrl(u) { return curQ === 'orig' ? u : u + '?q=' + curQ; }
+if (!Q_LIST.some(x => x[0] === curQ)) curQ = defaultQuality;
 function renderQSel() {
   const curLabel = (Q_LIST.find(x => x[0] === curQ) || Q_LIST[0])[1];
   document.getElementById('qsel').innerHTML =
@@ -1976,39 +2439,13 @@ document.addEventListener('click', closeQ);
 function setQuality(q) {
   closeQ();
   if (q === curQ) return;
-  curQ = q; localStorage.setItem('tsfq3', q);
+  curQ = q;
+  localStorage.setItem(liveMode ? 'tsfliveq' : 'tsfq3', q);
   renderQSel();
-  if (!cur) return;
-  // 记住各路播放进度与播放状态, 换源后续播
-  const v0el = document.querySelector('#vgrid video');
-  const wasPlaying = v0el ? !v0el.paused : false;
-  const times = [...document.querySelectorAll('#vgrid video')].map(v => v.currentTime || 0);
-  const hint = document.getElementById('qhint');
-  /* 延迟提示取消: 现在 /media 未命中画质缓存时先给原画 + 后台转码, 首帧不再干等
-     十几秒, 只需说明「本次是原画、转好后下次生效」即可 */
-  clearTimeout(setQuality._ht); clearTimeout(setQuality._show);
-  hint.style.display = 'none';
-  if (q !== 'orig') {
-    hint.textContent = '正在后台生成 ' + q + ' 画质, 本次先用现有档位播放 (切段或下次打开即生效)';
-    hint.style.display = 'block';
-    setQuality._ht = setTimeout(() => { hint.style.display = 'none'; }, 6000);
-  }
-  { prekicked.clear(); prekickList(); }
-  renderClip();
-  const vids = [...document.querySelectorAll('#vgrid video')];
-  vids.forEach((v, i) => {
-    const seek = () => { try { if (times[i]) v.currentTime = times[i]; } catch (e) {} };
-    if (v.readyState >= 1) seek();
-    else v.addEventListener('loadedmetadata', seek, { once: true });
-  });
-  /* tryPlay 需要传 video 参数: 以前这里 tryPlay() 无参调用会抛 TypeError,
-     表现为切清晰度后视频停在暂停态、还得再手动点一下播放 */
-  if (wasPlaying) playAll();
-  // 第一路能播就撤提示
-  const v0 = vids[0];
-  if (v0) v0.addEventListener('canplay', () => { hint.style.display = 'none'; }, { once: true });
+  if (curClips.length) showClip(curClipIx, playbackOffset());
 }
 const CATS_NAME = __CAT_NAMES__;
+CATS_NAME.SentryClips = '哨兵录像';
 /* event.json 里的 reason → 中文名 (reason 是自由文本, 新值靠前缀匹配兜底) */
 const REASON_LABEL = {
   sentry_aware_object_detection: '哨兵警觉',
@@ -2019,6 +2456,7 @@ const REASON_LABEL = {
   sentry_trigger: '哨兵模式触发',
   user_interaction_dashcam_saved: '手动保存',
   user_interaction_dashcam_menu: '行车记录仪菜单保存',
+  user_interaction_dashcam_icon_tapped: '点击行车记录仪图标',
   user_interaction_dashcam_launcher_action_tapped: '点击行车记录仪图标',
   user_interaction_honk: '按喇叭保存'
 };
@@ -2048,6 +2486,7 @@ function fmtFull(n) {
 /* 事件展示时间: 有 event.json 就用触发时刻, 否则退回目录名
    (目录名是录制收尾时间, 常在触发之后几十秒, 直接显示会让人以为定位错了) */
 function evTime(ev) {
+  if (ev && ev.end) return fmtFull(ev.name) + '–' + ev.end.slice(11, 19).replace(/-/g, ':');
   const m = String((ev && ev.meta && ev.meta.timestamp) || '')
     .match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
   if (m) return `${m[1]}/${m[2]}/${m[3]} ${m[4]}:${m[5]}:${m[6]}`;
@@ -2060,7 +2499,8 @@ function camShort(c) {
 function toggleDetail() {
   const r = document.getElementById('ic-rows'), b = document.getElementById('ic-fold');
   const open = r.classList.toggle('open');
-  b.textContent = open ? '收起详细数据 ⌃' : '展开详细数据 ⌄';
+  if (open) renderSegmentButtons();
+  b.textContent = open ? '收起片段详情' : '片段详情';
   layoutPlayer();
 }
 function fmtName(n) {
@@ -2089,12 +2529,6 @@ function groupVideos(vids) {
   return [...m.keys()].sort().map(k => ({ key: k, vids: m.get(k) }));
 }
 function curVids() { return (curClips[curClipIx] || { vids: [] }).vids; }
-function switchClip(i) {
-  if (!curClips[i]) return;
-  curClipIx = i;
-  pendSeek = 0;          // 手动切段就从头播, 不要沿用触发点定位
-  renderClip();
-}
 function gridDims(n) {
   if (n <= 1) return [1, 1];
   if (n === 2) return [2, 1];
@@ -2104,63 +2538,38 @@ function gridDims(n) {
   return [c, Math.ceil(n / c)];
 }
 
-/* 页面一打开就把「最可能点开的几路」按当前画质提交后台转码, 只对哨兵/手动保存。
-   行车记录不预热: 片段每分钟新增、很快滚动删除, 预转的缓存立刻作废, 还会让
-   SoC 长期满载高温。真点开时由 /media 按需后台转码, 先发首帧不阻塞。 */
-function prekickList() {
-  const q = curQ;
-  if (!data || !q || q === 'orig' || !Q_LIST.some(x => x[0] === q)) return;
-  if (currentCat !== 'SentryClips' && currentCat !== 'SavedClips') return;
-  const evs = (data[currentCat] || []).slice(0, 2);
-  if (!evs.length) return;
-  const tag = q + '|' + currentCat + '|' + evs.map(e => e.name).join(',');
-  if (prekicked.has(tag)) return;
-  prekicked.add(tag);
-  const paths = [];
-  evs.forEach(ev => {
-    const clips = groupVideos(ev.videos || []);
-    if (!clips.length) return;
-    const hit = triggerClip(ev, clips);
-    const c = clips[hit ? hit.ix : clips.length - 1];
-    if (!c) return;
-    const tc = triggerCam(ev);
-    const pick = (tc && (c.vids || []).find(v => v.cam === tc)) || camSort(c.vids || [])[0];
-    if (pick) paths.push(pick.url);
-  });
-  if (!paths.length) return;
-  try { fetch('/api/kick', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({paths: paths, q: q})}).catch(() => {}); } catch (e) {}
-}
-
 async function load() {
   data = await (await fetch('/api/events')).json();
   const tabs = document.getElementById('tabs');
   tabs.innerHTML = '';
-  const liveOpen = document.getElementById('livep').classList.contains('open');
+  const liveOpen = liveMode;
   for (const c of Object.keys(data)) {
     const b = document.createElement('button');
     b.className = 'tab' + (!liveOpen && c === currentCat ? ' active' : '');
+    b.dataset.category = c;
     b.innerHTML = `<span class="tl">${t(CATS_NAME[c] || c)}</span><span class="tn">${data[c].length}</span>`;
-    b.onclick = () => { document.querySelectorAll('.tab').forEach(t => t.classList.remove('active')); b.classList.add('active'); currentCat = c; reasonFilter = 'all'; dateFilter = 'all'; closeLive(); render(c); prekickList(); };
+    b.onclick = () => { closePanel(); closePlayer(); document.querySelectorAll('.tab').forEach(t => t.classList.remove('active')); b.classList.add('active'); currentCat = c; reasonFilter = 'all'; dateFilter = 'all'; render(c); };
     tabs.appendChild(b);
   }
-  /* 第 4 个页签: 实时预览 (与分类页签同级) */
+  /* 实时预览与分类页签同级 */
   const lv = document.createElement('button');
   lv.className = 'tab' + (liveOpen ? ' active' : '');
   lv.id = 'tab-live';
   lv.innerHTML = `<span class="tl">${t('实时预览')}</span>`;   // 与其它页签同结构 (单行分段控件里才不会错位)
-  lv.onclick = () => { document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); lv.classList.add('active'); openLive(); };
+  lv.onclick = () => { closePanel(); document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); lv.classList.add('active'); openLive(); };
   tabs.appendChild(lv);
   document.getElementById('stat').textContent = `${t('归档')} ${Object.values(data).reduce((a, v) => a + v.length, 0)} ${t('条')}`;
   lastSig = sigOf(data);
   renderQSel();
   render(currentCat);
   openDeepLink();
-  prekickList();
 }
 
 /* 支持 ?ev=SentryClips/2026-11-04_12-30-00 直接打开某个事件 */
+let deepLinkUsed = false;
 function openDeepLink() {
+  if (deepLinkUsed) return;
+  deepLinkUsed = true;
   const q = new URLSearchParams(location.search);
   /* ?date=2026-11-03 只看某一天 */
   const qd = q.get('date');
@@ -2178,22 +2587,21 @@ function openDeepLink() {
   if (!m) return;
   const keys = Object.keys(data);
   for (const c of keys) {
-    const ev = (data[c] || []).find(e => e.name === m || (c + '/' + e.name) === m);
+    const name = m.startsWith(c + '/') ? m.slice(c.length + 1) : m;
+    const ev = (data[c] || []).find(e => e.name === name || e.clips?.includes(name));
     if (!ev) continue;
     const tabs = document.getElementById('tabs');
     [...tabs.children].forEach(b => b.classList.remove('active'));
     const idx = keys.indexOf(c);
     if (tabs.children[idx]) tabs.children[idx].classList.add('active');
-    currentCat = c; reasonFilter = 'all'; render(c); openPlayer(ev);
-    const cam = new URLSearchParams(location.search).get('cam');
-    if (cam) setCam(cam);
-    if (q.get('exp') === '1') setTimeout(openExport, 600);
+    currentCat = c; reasonFilter = 'all'; render(c);
+    openPlayer(ev, false, q.get('cam'), name).then(ok => { if (ok && q.get('exp') === '1') openExport(); });
     return;
   }
 }
 
 function sigOf(d) {
-  return Object.keys(d).map(c => c + ':' + d[c].map(e => e.name + '/' + e.videos.length).join(',')).join('|');
+  return Object.keys(d).map(c => c + ':' + d[c].map(e => e.name + '/' + e.videos.length + '/' + !!e.locked + '/' + !!e.lock_unknown).join(',')).join('|');
 }
 
 /* 容量条配色: <30% 绿 / 30%~85% 蓝 / >85% 红 (三行同规则) */
@@ -2205,9 +2613,19 @@ function storColor(pct) {
 }
 
 /* 实时同步状态 + 新片段自动出现 */
+function updateSystemStatus(sys) {
+  const temp = sys && sys.cpu_temp != null ? sys.cpu_temp : null;
+  byId('sys-temp').textContent = temp == null ? '—' : temp + '°C';
+  byId('sys-temp').classList.toggle('hot', temp > 70);
+  byId('sys-cpu').textContent = sys && sys.cpu_pct != null ? sys.cpu_pct + '%' : '—';
+  const validMemory = sys && sys.mem_total > 0;
+  byId('sys-mem').textContent = validMemory ? Math.round(sys.mem_used / sys.mem_total * 100) + '%' : '—';
+  byId('sys-memory').title = validMemory ? Math.round(sys.mem_used / 1048576) + ' / ' + Math.round(sys.mem_total / 1048576) + ' MB' : '';
+}
 async function refreshLive() {
   let live = null;
-  try { live = await (await fetch('/api/live')).json(); } catch (e) { return; }
+  try { live = await (await fetch('/api/live')).json(); } catch (e) { updateSystemStatus(null); return; }
+  updateSystemStatus(live.sys);
   const dot = document.getElementById('livedot'), txt = document.getElementById('livetxt');
   if (live.running) {
     dot.style.background = '#4cc38a';
@@ -2218,8 +2636,9 @@ async function refreshLive() {
     dot.style.background = '#e8443f';
     txt.textContent = t('同步服务未运行');
   }
-  // 存储卡: 默认只显示虚拟U盘, 点右下角小箭头再展开归档区/总占用
+  // 同步状态常驻；容量尚未读到时只隐藏容量摘要。
   const sw = document.getElementById('storwrap');  const dk = live.disk;
+  sw.classList.toggle('status-only', !(dk && dk.disk_total > 0));
   if (dk && dk.disk_total > 0) {
     const GB = 1073741824;
     const gb = n => {
@@ -2233,38 +2652,22 @@ async function refreshLive() {
       el.style.width = pct.toFixed(1) + '%';
       el.style.background = storColor(pct);
     };
-    sw.style.display = '';
     // 虚拟U盘: 卷内实际写入 / 镜像标称容量
     // (img_real 是镜像在宿主盘上的预分配占用, 几乎等于标称容量, 永远 100% 不直观)
     tset('storvusb', dk.img_used != null ? dk.img_used : dk.img_real, dk.img_nominal,
          'storvusbbar');
     const vu = document.getElementById('storvusb');
     if (vu) vu.title = t('车机 U 盘里已写入的数据 / 车机看到的容量');
-    // 归档区: 已归档 / 可用上限 (= 已归档 + 盘剩余)
-    const arcTot = (dk.arc_used || 0) + (dk.arc_free || 0);
+    // 归档区: 已归档 / 配置的归档总量上限
+    const arcTot = dk.arc_limit > 0 ? dk.arc_limit : (dk.arc_used || 0) + (dk.arc_free || 0);
     tset('storarc', dk.arc_used, arcTot, 'storarcbar');
     const ia = document.getElementById('storarc');
     if (ia) ia.title = t('盒子上保存的历史副本 (车机 U 盘里只保留滚动缓冲)');
     // 总占用: 整盘已用 / 整盘容量 (三行统一按 storColor 的占用比例取色)
     tset('stortot', dk.disk_used, dk.disk_total, 'stortotbar');
-    // 系统状态 (同一折叠区): 三等分指标格, 标签在上/数值在下; 温度异常时染色
-    const sy = live.sys, syEl = document.getElementById('storsys');
-    if (syEl) {
-      const cell = (k, v, color) =>
-        '<div class="syscell"><span class="k">' + k + '</span>' +
-        '<span class="v"' + (color ? ' style="color:' + color + '"' : '') + '>' + v + '</span></div>';
-      const tp = (sy && sy.cpu_temp != null) ? sy.cpu_temp : null;
-      const tc = tp == null ? '' : tp > 70 ? '#e8443f' : tp < 40 ? '#4cc38a' : '';
-      const mem = (sy && sy.mem_total > 0)
-        ? gb(sy.mem_used) + '<span class="u">/' + gb(sy.mem_total) + '</span>' : '—';
-      syEl.innerHTML =
-        cell('温度', tp != null ? tp + '°C' : '—', tc) +
-        cell('CPU', (sy && sy.cpu_pct != null) ? sy.cpu_pct + '%' : '—') +
-        cell('内存', mem);
-    }
-  } else {
-    sw.style.display = 'none';
   }
+  // 实时预览单独检查 RecentClips，避免全量归档请求与视频争用连接。
+  if (liveMode) return;
   // 事件有变化时无缝重绘 (不打断播放器)
   try {
     const d = await (await fetch('/api/events')).json();
@@ -2278,7 +2681,11 @@ async function refreshLive() {
       });
       document.getElementById('stat').textContent = `${t('归档')} ${Object.values(d).reduce((a, v) => a + v.length, 0)} ${t('条')}`;
       if (!document.getElementById('player').classList.contains('open')) render(currentCat);
-      prekickList();   // 新的哨兵/保存事件刚同步过来时, 按当前画质提交后台预转
+      if (playerRecording) {
+        const item = (d[playerRecording.cat] || []).find(e => e.name === playerRecording.name);
+        if (item) { playerRecording.locked = !!item.locked; playerRecording.lock_unknown = !!item.lock_unknown; }
+        updateRecordingActions();
+      }
     }
   } catch (e) {}
 }
@@ -2335,36 +2742,43 @@ function matchReason(cat, ev) {
   if (cat === 'SentryClips') return reasonTab(reasonOf(ev)) === reasonFilter;
   return reasonOf(ev) === reasonFilter;
 }
-/* 两行筛选: 触发原因 / 日期, 互为主次 (计数按对方的筛选结果算) */
+/* 日期和事件互相筛选，计数仍按另一项的筛选结果计算。 */
+function filterSelect(box, label, items, value, change) {
+  box.replaceChildren();
+  box.className = 'filters show';
+  const select = document.createElement('select');
+  select.setAttribute('aria-label', label);
+  for (const [key, title, count] of items) {
+    const option = document.createElement('option');
+    option.value = key;
+    option.textContent = title + (count == null ? '' : ' · ' + count);
+    select.append(option);
+  }
+  select.value = value;
+  select.onchange = () => change(select.value);
+  box.append(select);
+}
 function renderFilters(cat) {
   const evs = data[cat] || [];
   const rbox = document.getElementById('filters'), dbox = document.getElementById('dfilters');
+  // 只有动态生成的筛选项才可能因录像变动而消失。
+  if (cat !== 'SentryClips' && reasonFilter !== 'all' && !evs.some(ev => matchReason(cat, ev))) reasonFilter = 'all';
   const byDate = dateFilter === 'all' ? evs : evs.filter(ev => dateOf(ev) === dateFilter);
   const byReason = reasonFilter === 'all' ? evs : evs.filter(ev => matchReason(cat, ev));
 
-  // 原因筛选在新分类里可能不存在, 自动回落避免"空列表卡死"; 日期允许选到没有事件的那天(会显示空态提示)
-  if (reasonFilter !== 'all' && !evs.some(ev => matchReason(cat, ev))) reasonFilter = 'all';
-
   if (cat === 'SentryClips') {
-    // 官方App样式: 固定分类行常驻, 计数为 0 也显示 (和车机/官方App一致)
     const cnt = { all: byDate.length };
     byDate.forEach(ev => { const t = reasonTab(reasonOf(ev)); cnt[t] = (cnt[t] || 0) + 1; });
-    rbox.className = 'filters show';
-    rbox.innerHTML = SENTRY_TABS.map(([k, label]) =>
-      `<button class="chip${k === reasonFilter ? ' on' : ''}" onclick="setReason('${k}')">${t(label)}<span class="n">${cnt[k] || 0}</span></button>`
-    ).join('');
+    filterSelect(rbox, t('原因'), SENTRY_TABS.map(([k, label]) => [k, t(label), cnt[k] || 0]), reasonFilter, setReason);
   } else {
     const rcnt = {};
     byDate.forEach(ev => { const r = reasonOf(ev); rcnt[r] = (rcnt[r] || 0) + 1; });
     const rkeys = Object.keys(rcnt).sort((a, b) => rcnt[b] - rcnt[a]);
     if (rkeys.length < 2) { rbox.className = 'filters'; rbox.innerHTML = ''; }
     else {
-      rbox.className = 'filters show';
       const items = [['all', t('全部'), byDate.length]].concat(
         rkeys.map(k => [k, reasonLabel(k) !== k ? reasonLabel(k) : t('未标注原因'), rcnt[k]]));
-      rbox.innerHTML = '<span class="flab">' + t('原因') + '</span>' + items.map(([k, label, n]) =>
-        `<button class="chip${k === reasonFilter ? ' on' : ''}" onclick="setReason('${k}')">${label}<span class="n">${n}</span></button>`
-      ).join('');
+      filterSelect(rbox, t('原因'), items, reasonFilter, setReason);
     }
   }
 
@@ -2376,12 +2790,12 @@ function renderFilters(cat) {
   // 自选日期可能当天没有事件, 仍然把选中的那天显示出来, 方便点回「全部日期」
   if (dateFilter !== 'all' && !days.includes(dateFilter)) days = [dateFilter].concat(days);
   if (!alldays.length && dateFilter === 'all') { dbox.className = 'filters'; dbox.innerHTML = ''; return; }
-  dbox.className = 'filters show';
   const items = [['all', t('全部日期'), byReason.length]].concat(
-    days.map(d => [d, d.slice(5).replace('-', '/'), dcnt[d] || 0]));
-  dbox.innerHTML = '<span class="flab">' + t('日期') + '</span>' + items.map(([k, label, n]) =>
-    `<button class="chip d${k === dateFilter ? ' on' : ''}" onclick="setDate('${k}')">${label}<span class="n">${n}</span></button>`
-  ).join('') + '<button class="chip pick" onclick="pickDate()" title="' + t('选择日期…') + '">' + t('选择日期…') + '</button>';
+    days.map(d => [d, d.replaceAll('-', '/'), dcnt[d] || 0]), [['pick', t('选择日期…'), null]]);
+  filterSelect(dbox, t('日期'), items, dateFilter, value => {
+    if (value === 'pick') { dbox.querySelector('select').value = dateFilter; pickDate(); }
+    else setDate(value);
+  });
 }
 /* 原生日期选择器: 分类里只有一天时也能翻到别的日期 */
 function pickDate() {
@@ -2431,6 +2845,8 @@ function render(cat) {
   let evs = data[cat] || [];
   evs = evs.filter(ev => matchReason(cat, ev));
   if (dateFilter !== 'all') evs = evs.filter(ev => dateOf(ev) === dateFilter);
+  document.getElementById('library-title').textContent = t(CATS_NAME[cat] || cat);
+  document.getElementById('library-count').textContent = evs.length + ' ' + t('条');
   e.style.display = evs.length ? 'none' : 'block';
   if (!evs.length) {
     e.innerHTML = (reasonFilter !== 'all' || dateFilter !== 'all')
@@ -2471,268 +2887,964 @@ function render(cat) {
     }
     /* 列表时间优先用 event.json 的触发时刻, 与点进去后播放器标题一致
        (目录名是录制收尾时间, 常比触发晚几十秒) */
-    const tsM = String(mm.timestamp || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-    const tm = tsM ? tsM[4] + ':' + tsM[5]
-                   : (ev.name.match(/_(\d{2}-\d{2})/) || [,''])[1].replace('-', ':');
-    const tmTxt = tm ? tm : fmtName(ev.name);
-    const extra = (mm.city ? ' · ' + mm.city : '') + (mm.street ? ' ' + mm.street : '');
-    const dayTxt = dateFilter === 'all' && day ? day.slice(5).replace('-', '/') + ' · ' : '';
-    const mb = ev.size / 1048576;
-    const szTxt = mb >= 1 ? mb.toFixed(1) + ' MB' : (mb * 1024).toFixed(0) + ' KB';
-    card.innerHTML = th + `<div class="meta"><div class="l1"><span class="rt" title="${title}">${title}</span><span class="tm">${tmTxt}${extra}</span></div><div class="l2"><span>${dayTxt}${vids.length} ${t('路画面')}</span><span class="sz">${szTxt}</span></div></div>`;
+    const tmTxt = evTime(ev).replace(/^\d{4}\/\d{2}\/\d{2} /, '');
+    const locationText = [mm.city, mm.street].filter(Boolean).join(' · ');
+    card.innerHTML = th + '<div class="meta"><strong class="record-time">' + esc(tmTxt) +
+      '</strong><span class="record-reason">' + esc(title) + '</span></div><span class="record-size">' +
+      esc(fmtSize(ev.size || 0)) + '</span><span class="record-cameras">' + vids.length + ' ' + t('路') +
+      '</span><span class="record-location">' + esc(locationText || '—') +
+      '</span><svg class="ic record-play" aria-hidden="true"><use href="#i-play"/></svg>';
+    card.tabIndex = 0; card.setAttribute('role', 'button');
     card.onclick = () => openPlayer(ev);
+    card.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPlayer(ev); } };
     g.appendChild(card);
   }
   applyLang();
 }
 
-function layoutPlayer() {
-  const vg = document.getElementById('vgrid');
-  if (vg.querySelector('.vcell.focused')) return;  // 单路放大时保持满屏
-  const n = vg.children.length;
-  if (!n) return;
-  const d = gridDims(n);
-  vg.style.gridTemplateColumns = `repeat(${d[0]},1fr)`;
-  // 显式像素行高: 不依赖 CSS aspect-ratio (老版 iOS Safari 不支持时格子会塌陷/视频层溢出遮挡)
-  const w = vg.clientWidth || 0;
-  if (w > 0) {
-    const gap = 3;
-    const cw = (w - gap * (d[0] - 1)) / d[0];
-    /* 单路: 按画面真实比例 (哨兵片源多为 4:3), 不然 16:9 的格子会把上下裁掉 */
-    let ar = 9 / 16;
-    if (n === 1) {
-      const v0 = vg.querySelector('video');
-      if (v0 && v0.videoWidth > 0 && v0.videoHeight > 0) ar = v0.videoHeight / v0.videoWidth;
+const byId = id => document.getElementById(id);
+let camSel = 'front', baseRate = 1, wantedPlay = false, clipOffset = 0;
+let sessionId = 0, renderId = 0, lastTick = 0, editingSeek = false;
+let seekPointerStart = null;
+let prefetch = null, triggerTime = null, triggerSource = null, libraryCat = '', listScroll = 0;
+let liveMode = false, followLatest = false, atEnd = false;
+let overviewPosition = null;
+let clockVideo = null, videoTimes = new WeakMap();
+let indexRequest = null, clipRequest = null;
+let gapRequest = null, gapSignature = '';
+const gapEvidence = new Map();
+let allCameras = [];
+const activeVideos = () => [...byId('vgrid').querySelectorAll('video')];
+const currentClip = () => curClips[curClipIx];
+const wallLabel = value => fmtTelDate(new Date(value * 1000)).slice(-8);
+const videoDuration = v => Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+
+function timelineOf(events) {
+  const groups = [];
+  for (const event of events) {
+    for (const group of groupVideos(event.videos || [])) {
+      groups.push({...group, event, start: clipEpoch(group.key) / 1000});
     }
-    vg.style.gridAutoRows = Math.round(cw * ar) + 'px';
   }
+  groups.sort((a, b) => a.key.localeCompare(b.key));
+  return arrangeTimeline(groups);
 }
-/* 点击任意一路: 单路铺满; 再点一次(或 Esc)恢复多路 */
-function focusCell(cell) {
-  const vg = document.getElementById('vgrid');
-  const cells = [...vg.children];
-  if (cells.length < 2) return;     // 单路模式已经是满宽, 再放大没有意义
-  const wasFocused = cell.classList.contains('focused');
-  cells.forEach(c => { c.classList.remove('focused'); c.style.display = ''; });
-  if (wasFocused) { layoutPlayer(); return; }
-  cell.classList.add('focused');
-  cells.forEach(c => { if (c !== cell) c.style.display = 'none'; });
-  vg.style.gridTemplateColumns = '1fr';
-  vg.style.gridTemplateRows = '1fr';
+
+function arrangeTimeline(groups, anchor = null) {
+  const anchorStart = anchor?.start;
+  let previousEnd = 0, sourceEnd = 0;
+  for (const group of groups) {
+    group.sourceStart = group.sourceStart || group.start || sourceEnd || clipEpoch(group.event.name) / 1000;
+    const measured = Math.max(0, ...group.vids.map(videoDuration));
+    group.length = measured || 60;
+    // The filenames can overlap even when the source files contain new frames.
+    // Keep every file playable; only the progress coordinate is serialized.
+    group.start = previousEnd ? previousEnd + Math.max(0, group.sourceStart - sourceEnd) : group.sourceStart;
+    previousEnd = group.start + group.length;
+    sourceEnd = Math.max(sourceEnd, group.sourceStart + group.length);
+  }
+  const found = anchor && groups.find(group => group.key === anchor.key);
+  if (found) {
+    const shift = anchorStart - found.start;
+    groups.forEach(group => { group.start += shift; });
+  }
+  return groups;
 }
-/* 本次渲染要定位到的秒数 (触发时刻), 0 = 从头播 */
-let pendSeek = 0;
-/* 找出 event.json 触发时刻落在哪一段, 返回 {ix, off}; 对不上返回 null。
-   一组哨兵片段通常是「触发前 1 分钟 + 触发 + 后续几分钟」, 触发点在中间某段,
-   取 start <= 触发时刻 且最接近的那段 (片段实长约 60 秒, 上限放宽到 70 秒)。*/
-function triggerClip(ev, clips) {
-  const m = String((ev.meta || {}).timestamp || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
-  if (!m) return null;
-  const tg = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
-  if (!tg) return null;
-  let best = null;
-  (clips || []).forEach((c, i) => {
-    const s = clipEpoch(c.key);
-    if (!s || s > tg) return;
-    const off = (tg - s) / 1000;
-    if (off <= 70 && (!best || s > best.s)) best = { ix: i, off: off, s: s };
-  });
-  return best;
+
+function updateCameras() {
+  const cameras = new Map();
+  curClips.forEach(c => c.vids.forEach(v => cameras.set(v.cam, v)));
+  allCameras = camSort([...cameras.values()]).map(v => v.cam);
 }
-/* 画面模式: 'all' = 全览 (所有方位同屏), 其他 = 单路 (只加载这一路的视频)。
-   默认是触发摄像头那一路 —— 单路既秒开又省流量, 其他方位等用户点按钮再加载。 */
-let camSel = 'all';
-function triggerCam(ev) {
-  const md = (ev && ev.meta) || {};
-  const c = md.camera;
-  if (c === undefined || c === null || String(c).trim() === '' || !isSentryEv(md)) return '';
-  return CAM_IDX[+c] || '';
-}
-function pickDefaultCam() {
-  const vs = curVids();
-  const tc = triggerCam(cur);
-  if (tc && vs.some(v => (v.cam || '') === tc)) return tc;
-  const s = camSort(vs);
-  return s.length ? (s[0].cam || '') : 'all';   // 没有触发画面信息就用第一路(通常是前视)
-}
-/* 单路 ↔ 全览切换: 保留当前进度, 只加载被选中的那一路 */
-function setCam(c) {
-  if (c === camSel) return;
-  const old = document.querySelector('#vgrid video');
-  const t0 = old ? (old.currentTime || 0) : 0;
-  camSel = c;
-  pendSeek = t0;          // 换画面不回到片头, 接着刚才的位置播
-  renderClip();
-}
-function renderCamBar() {
-  const bar = document.getElementById('cambar');
-  const all = camSort(curVids());
-  if (!bar) return;
-  /* 只有一路画面时没必要显示选择条 */
-  if (all.length < 2) { bar.className = 'cambar'; bar.innerHTML = ''; return; }
-  const tc = triggerCam(cur);
-  bar.className = 'cambar show';
-  bar.innerHTML = all.map(v => {
-    const c = v.cam || '';
-    const isTrig = !!c && c === tc;
-    return `<button class="${camSel === c ? 'on' : ''}${isTrig ? ' trig' : ''}"` +
-      (isTrig ? ' title="触发画面"' : '') + ` onclick="setCam('${c}')">${camLabel(c)}</button>`;
-  }).join('') +
-    `<button class="${camSel === 'all' ? 'on' : ''}" onclick="setCam('all')">${t('全览')}</button>`;
-}
-function openPlayer(ev) {
-  cur = ev;
-  curClips = groupVideos(ev.videos);
-  kicked = new Set();      // 新事件重新计算预转范围
-  /* 默认定位到触发时刻所在那一段, 并停在触发前 5 秒 —— 以前固定取最后一段,
-     所以多段事件点进去常常是「人已经走了」的那一分钟 */
-  const hit = triggerClip(ev, curClips);
-  curClipIx = hit ? hit.ix : (curClips.length ? curClips.length - 1 : 0);
-  pendSeek = hit ? Math.max(0, hit.off - 5) : 0;
-  camSel = pickDefaultCam();     // 默认单路: 触发摄像头
-  renderClip();
-}
-/* 播放器打开/切段时, 把相邻段的当前清晰度让服务端提前转好。
-   预热只覆盖触发段±1 组, 但用户会点任意片段芯片 —— 现看现转要每路十几秒,
-   提前一分钟踢一脚, 切过去基本就是秒开。 */
-let kicked = new Set();
-function kickGroup(ix) {
+
+function locateWall(target) {
+  const i = curClips.findIndex(c => target < c.start + c.length);
+  const ix = i === -1 ? curClips.length - 1 : i;
   const c = curClips[ix];
-  if (!c || curQ === 'orig') return;
-  const tag = curQ + ' ' + c.key + ' ' + camSel;
-  if (kicked.has(tag)) return;
-  kicked.add(tag);
-  /* 单路模式只预转被选中的那一路, 其他方位等用户点按钮再说 */
-  const vids = camSel === 'all' ? camSort(c.vids)
-                                : c.vids.filter(v => (v.cam || '') === camSel);
-  const paths = vids.map(v => v.url);
-  if (!paths.length) return;
-  try { fetch('/api/kick', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({paths: paths, q: curQ})}).catch(() => {}); } catch (e) {}
+  return {ix, offset: Math.max(0, Math.min(target - c.start, c.length - 0.001))};
 }
-function renderClip() {
-  const ev = cur;
-  const seekTo = pendSeek;   // 本次渲染消费掉定位点, 之后换语言等重渲染不会又跳一次
-  pendSeek = 0;
-  const clip = curClips[curClipIx] || { key: '', vids: [] };
-  const vg = document.getElementById('vgrid'); vg.innerHTML = '';
-  /* 单路模式: 只这一路进 DOM —— 没被选中的方位连请求都不会发出去 */
-  const allVids = camSort(clip.vids);
-  let shown = allVids;
-  if (camSel !== 'all') {
-    const one = allVids.filter(v => (v.cam || '') === camSel);
-    if (one.length) shown = one;
-    else camSel = 'all';          // 这一段没有该方位, 退回全览
+
+function recordingTime(position) {
+  const {ix, offset} = locateWall(position);
+  return curClips[ix].sourceStart + offset;
+}
+
+function playbackOffset() {
+  if (wantedPlay && clockVideo && !clockVideo.seeking && !clockVideo.dataset.positioning) {
+    return Math.min(currentClip().length, Math.max(clipOffset, clockVideo.currentTime));
   }
-  shown.forEach(v => {
-    const cell = document.createElement('div'); cell.className = 'vcell';
-    cell.dataset.cam = v.cam || '';
-    const vid = document.createElement('video');
-    /* preload 用 metadata 而不是 auto: 4 路同时 auto 会各拉整段 3.7MB (合计 15MB),
-       在盒子 4G 上行这种窄链路上互相抢, 反而谁都要缓冲半天。
-       只要元数据就能定位到触发时刻, 点播放时再按需拉那一小段。*/
-    vid.src = qUrl(v.url); vid.muted = true; vid.defaultMuted = true; vid.preload = 'metadata';
-    /* 每格加载状态: 转码/缓冲时显示提示, 避免黑屏让人以为坏了 */
-    const cl = document.createElement('div'); cl.className = 'cload';
-    cl.innerHTML = '<span class="spin"></span><span>缓冲中…</span>';
-    const clDone = () => { cl.style.display = 'none'; };
-    vid.addEventListener('loadeddata', clDone);
-    vid.addEventListener('playing', clDone);
-    vid.addEventListener('error', () => {
-      cl.className = 'cload err';
-      cl.innerHTML = '<span>' + t('加载失败, 点其他片段再试') + '</span>';
-    });
-    vid.addEventListener('waiting', () => { cl.style.display = ''; });
-    /* 注意: 这里不再往 #qhint 塞「正在转码」的提示 —— 那段文案是 2.8.x 早期「点开才转码」的残留,
-       现在新事件触发段已经预热好了, 中途一次带宽抖动也会触发 waiting, 提示纯属误导。
-       每格自己有「缓冲中…」遮罩, 足够表达状态; #qhint 只留给手动切清晰度时用。
-       现在 /media 未命中画质缓存会先给原画 + 后台转码, 首帧不再干等十几秒。*/
-    vid.addEventListener('canplay', () => { document.getElementById('qhint').style.display = 'none'; });
-    vid.setAttribute('muted', ''); vid.setAttribute('playsinline', '');
-    vid.setAttribute('webkit-playsinline', ''); vid.setAttribute('x5-playsinline', '');
-    /* 触发段: metadata 一到就跳到触发前几秒, 不然会先从片段开头播一遍 */
-    if (seekTo > 0) {
-      const ap = () => {
-        const d0 = isFinite(vid.duration) ? vid.duration : 0;
-        try { vid.currentTime = d0 ? Math.min(seekTo, Math.max(0, d0 - 0.4)) : seekTo; } catch (e) {}
-      };
-      vid.addEventListener('loadedmetadata', ap);
-      if (vid.readyState >= 1) ap();
+  return clipOffset;
+}
+
+function resetPlaybackClock() {
+  clockVideo = null;
+  videoTimes = new WeakMap();
+}
+
+function hasBufferedTime(video, time, through = time) {
+  time = bufferedPosition(video, time);
+  for (let i = 0; i < video.buffered.length; ++i) {
+    const end = video.buffered.end(i);
+    if (video.buffered.start(i) <= time && time < end && through <= end + .001) return true;
+  }
+  return false;
+}
+
+function bufferedPosition(video, time) {
+  // Independently encoded previews can begin a few milliseconds after the cut.
+  // Snap only within that encoded second; never bridge a missing part.
+  if (video.dataset.mse) for (let i = 0; i < video.buffered.length; ++i) {
+    const start = video.buffered.start(i);
+    if (start > time && start - time <= .045 && Math.floor(start) === Math.floor(time)) return start;
+  }
+  return time;
+}
+
+function releaseVideo(v) {
+  v.pause();
+  v.removeAttribute('src');
+  v.load();
+}
+
+function dropPrefetch() {
+  if (prefetch?.controller) prefetch.controller.abort();
+  if (prefetch && prefetch.video) releaseVideo(prefetch.video);
+  prefetch = null;
+}
+
+function layoutPlayer() {
+  const grid = byId('vgrid'), count = grid.children.length;
+  const player = byId('player');
+  const listVisible = matchMedia('(max-width:999px)').matches
+    ? player.classList.contains('library-open') : !player.classList.contains('library-collapsed');
+  player.querySelector('.list-toggle').setAttribute('aria-expanded', String(listVisible));
+  if (!count) return;
+  const [cols, rows] = gridDims(count);
+  const width = grid.clientWidth;
+  const video = grid.querySelector('video');
+  const ratio = video && video.videoWidth ? video.videoHeight / video.videoWidth : 0.75;
+  const landscapePhone = matchMedia('(orientation:landscape) and (max-height:550px)').matches;
+  const immersive = !!document.fullscreenElement || byId('player').classList.contains('expanded');
+  const top = document.querySelector('.player .ptop').getBoundingClientRect().bottom;
+  const controls = document.querySelector('.transport').offsetHeight + byId('cambar').offsetHeight;
+  const available = innerHeight - top - controls - 55;
+  const limit = landscapePhone ? Math.max(100, innerHeight - top - 16) :
+    immersive ? Math.max(160, available) : Math.max(160, Math.min(innerHeight * .58, available));
+  grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0,1fr))';
+  grid.style.gridAutoRows = Math.max(1, Math.min(width / cols * ratio, limit / rows)) + 'px';
+}
+
+function toggleLibrary(show) {
+  const player = byId('player');
+  const mobile = matchMedia('(max-width:999px)').matches;
+  const open = show == null ? (mobile ? !player.classList.contains('library-open') : player.classList.contains('library-collapsed')) : show;
+  player.classList.toggle('library-open', mobile && open);
+  player.classList.toggle('library-collapsed', !mobile && !open);
+  player.querySelector('.list-toggle').setAttribute('aria-expanded', String(open));
+  requestAnimationFrame(layoutPlayer);
+}
+
+function triggerCam(ev) {
+  const md = ev && ev.meta;
+  return md && isSentryEv(md) ? CAM_IDX[md.camera] || '' : '';
+}
+
+function showLibrary(ev) {
+  const box = byId('watch-items');
+  box.replaceChildren();
+  const source = data[libraryCat] || [];
+  const items = source.filter(e => liveMode || (matchReason(libraryCat, e) && (dateFilter === 'all' || dateOf(e) === dateFilter)));
+  byId('watch-list-title').textContent = t(CATS_NAME[libraryCat] || libraryCat);
+  for (const item of items) {
+    const button = document.createElement('button');
+    button.classList.toggle('selected', !!ev && item.name === (ev.trip || ev.name));
+    const label = document.createElement('strong'), time = document.createElement('small');
+    button.dataset.event = item.name;
+    const dateTime = evTime(item);
+    label.textContent = dateTime.replace(/^\d{4}\/\d{2}\/\d{2} /, '');
+    time.textContent = dateTime.slice(0, 10) + ' · ' + (reasonLabel((item.meta || {}).reason) || t(CATS_NAME[libraryCat]));
+    button.append(label, time);
+    button.onclick = () => {
+      if (matchMedia('(max-width:999px)').matches) toggleLibrary(false);
+      if (liveMode) {
+        const clip = curClips.find(c => c.event.name === item.name);
+        if (clip) seekWall(clip.start);
+      } else openPlayer(item);
+    };
+    box.append(button);
+  }
+}
+
+async function fetchTimeline(category, name, signal) {
+  const query = new URLSearchParams({cat: category, event: name || '', gaps: '0'});
+  const response = await fetch('/api/timeline?' + query, {signal, cache: 'no-store'});
+  if (!response.ok) throw Error('timeline');
+  return timelineOf(await response.json());
+}
+
+async function loadGapEvidence(attempt = 0) {
+  const files = curClips.flatMap(group => group.vids);
+  const signature = files.map(file => file.url + '|' + file.revision).join();
+  for (const file of files) file.gap_before = gapEvidence.get(file.url + '|' + file.revision) || file.gap_before;
+  if (!editingSeek) drawTimeline();
+  if (!files.length || signature === gapSignature) return;
+  gapSignature = signature;
+  if (gapRequest) gapRequest.abort();
+  const request = gapRequest = new AbortController(), ticket = sessionId;
+  const query = new URLSearchParams({cat:libraryCat, event:cur.event || cur.name, gaps:'1'});
+  try {
+    const response = await fetch('/api/timeline?' + query, {signal:request.signal, cache:'no-store'});
+    if (ticket !== sessionId || request.signal.aborted) return;
+    if (!response.ok || response.status === 202) {
+      if (attempt < 2) setTimeout(() => {
+        if (!request.signal.aborted && ticket === sessionId && gapRequest === request) {
+          gapSignature = ''; loadGapEvidence(attempt + 1);
+        }
+      }, 1500);
+      return;
     }
-    const lb = document.createElement('span'); lb.className = 'clabel'; lb.textContent = camShort(v.cam);
-    cell.appendChild(vid); cell.appendChild(cl); cell.appendChild(lb);
-    cell.onclick = () => focusCell(cell);
-    /* 单路: 拿到真实宽高后按画面比例重算格子高度 (4:3 片源不再被裁) */
-    if (shown.length === 1) {
-      vid.addEventListener('loadedmetadata', () => { if (vg.children.length === 1) layoutPlayer(); });
+    const events = await response.json();
+    if (ticket !== sessionId || request.signal.aborted) return;
+    for (const event of events) for (const file of event.videos) {
+      if (file.gap_before) gapEvidence.set(file.url + '|' + file.revision, file.gap_before);
     }
-    vg.appendChild(cell);
+    for (const file of curClips.flatMap(group => group.vids)) {
+      file.gap_before = gapEvidence.get(file.url + '|' + file.revision);
+    }
+    if (!editingSeek) drawTimeline();
+  } catch (error) { if (!request.signal.aborted) gapSignature = ''; }
+}
+
+let playerRecording = null, recordingBusy = false;
+function updateRecordingActions() {
+  const record = playerRecording;
+  const available = record && !liveMode && ['SentryClips','SavedClips','DriveClips'].includes(record.cat);
+  const reason = record?.lock_unknown ? '无法读取录像锁定状态' : !available ? '循环录像不支持锁定和删除' : '';
+  const lock = byId('record-lock'), remove = byId('record-delete');
+  lock.disabled = recordingBusy || (!record && !liveMode);
+  remove.disabled = lock.disabled || !!record?.locked;
+  lock.setAttribute('aria-disabled', String(!!reason || lock.disabled));
+  remove.setAttribute('aria-disabled', String(!!reason || remove.disabled));
+  lock.dataset.reason = remove.dataset.reason = reason;
+  lock.setAttribute('aria-pressed', String(!!record?.locked));
+  lock.querySelector('span').textContent = record?.locked ? '解锁' : '锁定';
+  lock.title = reason || (record.locked ? '解除自动清理保护' : '锁定后不参与自动清理');
+  remove.title = reason || (record.locked ? '请先解锁录像' : '删除整条录像的所有视角');
+}
+async function manageRecording(action) {
+  const record = playerRecording, ticket = sessionId;
+  if (recordingBusy || byId(action === 'delete' ? 'record-delete' : 'record-lock').disabled) return;
+  const reason = byId(action === 'delete' ? 'record-delete' : 'record-lock').dataset.reason;
+  if (reason) { toast(reason); return; }
+  if (!record) return;
+  if (action === 'delete' && !confirm('确定删除这条' + t(CATS_NAME[record.cat]) + '的全部片段和所有视角吗？\n' +
+      record.label + '\n仅删除盒子里的录像，删除后不可恢复。')) return;
+  recordingBusy = true;
+  updateRecordingActions();
+  try {
+    const response = await fetch('/api/recording', {method:'POST', headers:{'Content-Type':'application/json','X-TSF-Recording':'1'},
+      body:JSON.stringify({cat:record.cat, event:record.name, clips:record.clips, action, locked:!record.locked})});
+    const result = await response.json();
+    if (result.ok && action === 'lock') record.locked = result.locked;
+    // The request owns the captured recording, even if another recording has since opened.
+    if (action === 'delete' && result.done > 0 && ticket === sessionId) closePlayer();
+    await refreshLive();
+    toast(result.msg || (result.ok ? '已保存' : '操作失败'));
+  } catch (error) { toast('操作结果未确认，请刷新后查看'); }
+  finally { recordingBusy = false; updateRecordingActions(); }
+}
+
+async function openPlayer(ev, live = false, camera = '', clipName = '') {
+  const firstOpen = !byId('player').classList.contains('open');
+  if (firstOpen) listScroll = window.scrollY;
+  closePlayback();
+  const ticket = sessionId;
+  liveMode = live;
+  followLatest = live;
+  libraryCat = live ? 'RecentClips' : currentCat;
+  playerRecording = ev ? {cat:libraryCat, name:ev.name, clips:ev.clips || [ev.name], locked:!!ev.locked, lock_unknown:!!ev.lock_unknown, label:evTime(ev)} : null;
+  updateRecordingActions();
+  curQ = localStorage.getItem(live ? 'tsfliveq' : 'tsfq3') || (live && localStorage.getItem('tsfq3')) || defaultQuality;
+  if (!Q_LIST.some(([q]) => q === curQ)) curQ = defaultQuality;
+  renderQSel();
+  byId('player').classList.add('open');
+  document.body.classList.add('watching');
+  byId('livep').hidden = !live;
+  byId('ptitle').textContent = live ? t('实时预览') : evTime(ev);
+  byId('vgrid').textContent = '正在加载录像…';
+  byId('vgrid').classList.add('loading');
+  byId('trigger-marker').hidden = true;
+  byId('seek').disabled = true;
+  wantedPlay = true;
+  byId('ppbtn').disabled = false;
+  updateControls();
+  showLibrary(ev);
+  indexRequest = new AbortController();
+  try {
+    const groups = await fetchTimeline(libraryCat, clipName || (ev && ev.name), indexRequest.signal);
+    if (ticket !== sessionId) return false;
+    curClips = groups;
+    if (live) liveRestart();
+    if (!curClips.length) {
+      byId('vgrid').textContent = live ? '等待新录像' : '暂无录像';
+      if (!live) { wantedPlay = false; byId('ppbtn').disabled = true; }
+      updateControls();
+      return false;
+    }
+    updateCameras();
+    const initial = live ? curClips[curClips.length - 1] : curClips.find(c => c.event.name === (clipName || ev.name)) || curClips[0];
+    const stamp = live ? '' : (ev.meta || {}).timestamp;
+    const seconds = stamp && clipEpoch(String(stamp).replace('T', '_').slice(0, 19).replace(/:(\d\d)/g, '-$1')) / 1000;
+    const matches = seconds ? curClips.filter(c => seconds >= c.sourceStart && seconds < c.sourceStart + c.length) : [];
+    triggerSource = matches.length === 1 ? {key:matches[0].key, offset:seconds-matches[0].sourceStart} : null;
+    triggerTime = matches.length === 1 ? matches[0].start + seconds - matches[0].sourceStart : null;
+    const target = locateWall(triggerTime === null ? initial.start : triggerTime - 5);
+    const preferred = camera || (live && localStorage.getItem('tsflivecam')) || triggerCam(ev);
+    camSel = preferred === '__all' || preferred === 'all' ? 'all'
+      : allCameras.includes(preferred) ? preferred : (curClips[target.ix].vids.find(v => v.cam === 'front') || curClips[target.ix].vids[0]).cam;
+    showClip(target.ix, target.offset);
+    loadGapEvidence();
+    syncTimer = setInterval(tick, 100);
+    return true;
+  } catch (error) {
+    if (ticket === sessionId) {
+      wantedPlay = false;
+      byId('ppbtn').disabled = true;
+      updateControls();
+      byId('vgrid').textContent = '录像加载失败';
+      const retry = document.createElement('button');
+      retry.textContent = '重试'; retry.onclick = () => openPlayer(ev, live, camera);
+      byId('vgrid').append(retry);
+    }
+    return false;
+  }
+}
+
+function cameraBar() {
+  const bar = byId('cambar');
+  bar.replaceChildren();
+  bar.classList.toggle('show', allCameras.length > 1);
+  for (const cam of [...allCameras, 'all']) {
+    const button = document.createElement('button');
+    button.textContent = cam === 'all' ? t('全览') : camLabel(cam);
+    button.classList.toggle('on', cam === camSel);
+    button.setAttribute('aria-pressed', String(cam === camSel));
+    button.onclick = () => setCam(cam);
+    bar.append(button);
+  }
+}
+
+function setCam(cam) {
+  if (!curClips.length || cam === camSel || (cam !== 'all' && !allCameras.includes(cam))) return;
+  const position = playbackOffset();
+  camSel = cam;
+  if (liveMode) localStorage.setItem('tsflivecam', cam);
+  showClip(curClipIx, position);
+}
+
+const hlsPreview = document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
+const PREVIEW_START_SECONDS = 1.5;
+const PREVIEW_HD_START_SECONDS = 2;
+const PREVIEW_HD_RECOVERY_SECONDS = 4;
+const PREVIEW_HD_READ_AHEAD_SECONDS = 12;
+function previewMime(quality) {
+  return quality === '720p' ? 'video/mp4; codecs="avc1.42C01F"' : 'video/mp4; codecs="avc1.42C01E"';
+}
+function supportsPreviewMse(quality) {
+  return window.MediaSource && MediaSource.isTypeSupported(previewMime(quality));
+}
+function usesPreviewParts(file) {
+  return curQ !== 'orig' && videoDuration(file) &&
+    (hlsPreview || supportsPreviewMse(curQ));
+}
+
+function hasPreviewLead(video, at = video.currentTime) {
+  const end = Math.min(videoDuration(video) || Infinity, currentClip().length);
+  // At the end of a clip, buffer only as far as playback can actually reach.
+  const lead = Number(video.dataset.previewLead) || PREVIEW_START_SECONDS;
+  const through = Math.max(at, Math.min(at + lead * baseRate, end - 0.08));
+  return hasBufferedTime(video, at, through);
+}
+
+function previewLeadForQuality() {
+  return curQ === '720p' ? PREVIEW_HD_START_SECONDS : PREVIEW_START_SECONDS;
+}
+
+function previewReadyToPlay(video) {
+  return video.readyState >= 2 && !video.seeking && !video.dataset.positioning && hasPreviewLead(video);
+}
+
+async function readySource(file, quality, signal, openParts) {
+  if (quality === 'orig') return file.url;
+  const params = new URLSearchParams({file: file.url, q: quality});
+  if (openParts) params.set('parts', '1');
+  const response = await fetch('/api/playback-source?' + params, {signal, cache: 'no-store'});
+  if (!response.ok) throw Error('source');
+  const {state, seconds} = await response.json();
+  if (state === 'parts' && openParts && !signal.aborted) return openParts(seconds, quality);
+  if (state === 'pending' || state === 'cooling') return null;
+  if (state !== 'ready') throw Error('quality');
+  return file.url + '?q=' + quality + '&exact=1';
+}
+
+function previewStream(video, file, seconds, quality, signal, failed) {
+  video.dataset.parts = '1';
+  const params = new URLSearchParams({file:file.url, q:quality});
+  const mime = previewMime(quality);
+  if (!supportsPreviewMse(quality)) {
+    params.set('at', String(clipOffset));
+    return '/api/playback-preview/index.m3u8?' + params;
+  }
+  video.dataset.mse = '1';
+  video.dataset.startBuffer = '1';
+  video.dataset.previewLead = String(quality === '720p' ? PREVIEW_HD_START_SECONDS : PREVIEW_START_SECONDS);
+  const readAhead = quality === '720p' ? PREVIEW_HD_READ_AHEAD_SECONDS : 5;
+  const source = new MediaSource(), url = URL.createObjectURL(source);
+  let buffer, timer, fetching = null, stopped = false;
+  let fetchingIndex = -1, fetchingPriority = 2, fetchingSeekRevision = 0;
+  let waitingIndex = -1, waitingSeekRevision = -1, waitingSince = 0;
+  let finalPartEnd = 0;
+  const total = Math.max(1, Math.ceil((file.duration - .08) / seconds));
+  const position = () => video.dataset.positioning || video.seeking ? Number(video.dataset.seekTarget) : video.currentTime;
+  const indexAt = pos => Math.min(total - 1, Math.max(0, Math.floor(pos / seconds)));
+  const stop = () => {
+    stopped = true;
+    clearInterval(timer);
+    if (fetching) fetching.abort();
+    URL.revokeObjectURL(url);
+  };
+  signal.addEventListener('abort', stop, {once:true});
+  async function fill() {
+    if (stopped || !buffer) return;
+    if (editingSeek) {
+      waitingIndex = -1;
+      if (fetching) fetching.abort();
+      return;
+    }
+    if (buffer.updating || source.readyState === 'closed') return;
+    // Appending an earlier part after a seek reopens an ended MediaSource.
+    // Restore its end only while the final encoded frames are still buffered.
+    if (finalPartEnd && source.readyState === 'open' && buffer.buffered.length &&
+        buffer.buffered.end(buffer.buffered.length - 1) >= finalPartEnd - .001) {
+      source.endOfStream();
+    }
+    const at = position();
+    const synchronizing = camSel === 'all' && overviewPosition !== null;
+    if (wantedPlay && synchronizing && hasPreviewLead(video, at)) {
+      // Let the lagging cameras finish the shared recovery before reading farther.
+      waitingIndex = -1;
+      if (fetching) fetching.abort();
+      return;
+    }
+    if (finalPartEnd && at >= finalPartEnd && buffer.buffered.length &&
+        buffer.buffered.end(buffer.buffered.length - 1) >= finalPartEnd - .001) return;
+    let index = indexAt(at);
+    for (let i = 0; i < buffer.buffered.length; ++i) {
+      const end = buffer.buffered.end(i);
+      // The buffered end is exclusive. A paused seek onto that boundary needs
+      // the next part, even when it is within the normal timestamp tolerance.
+      if (buffer.buffered.start(i) > bufferedPosition(video, at) || end <= at) continue;
+      if (!wantedPlay || end - at >= readAhead * baseRate || end >= file.duration - .045) {
+        waitingIndex = -1;
+        if (fetching) fetching.abort();
+        return;
+      }
+      index = Math.max(index, Math.round(end / seconds));
+      break;
+    }
+    if (index >= total) return;
+    const ahead = index > indexAt(at);
+    const recovering = !!video.dataset.startBuffer || synchronizing;
+    const prime = wantedPlay && recovering && !hasPreviewLead(video, at);
+    const priority = !ahead ? 0 : prime ? 1 : 2;
+    const seekRevision = Number(video.dataset.seekRevision) || 0;
+    if (fetching) {
+      if (fetchingIndex === index && (seekRevision !== fetchingSeekRevision || recovering) && priority < fetchingPriority ||
+          fetchingIndex !== index && (fetchingIndex < indexAt(at) || fetchingIndex > indexAt(at) + 1)) fetching.abort();
+      return;
+    }
+    const request = new AbortController();
+    fetching = request; fetchingIndex = index; fetchingPriority = priority; fetchingSeekRevision = seekRevision;
+    if (waitingIndex !== index || waitingSeekRevision !== seekRevision) {
+      waitingIndex = index; waitingSeekRevision = seekRevision; waitingSince = performance.now();
+    }
+    let timedOut = false;
+    const remaining = Math.max(0, 30000 - (performance.now() - waitingSince));
+    const timeout = setTimeout(() => { timedOut = true; request.abort(); }, remaining);
+    try {
+      params.set('part', String(index));
+      params.set('ahead', ahead ? '1' : '0');
+      if (prime) params.set('prime', '1');
+      else params.delete('prime');
+      const response = await fetch('/api/playback-preview/part.mp4?' + params, {signal:request.signal});
+      if (response.status === 503) {
+        if (performance.now() - waitingSince > 30000) throw Error('preview timeout');
+        return;
+      }
+      if (!response.ok) throw Error('preview part');
+      const data = await response.arrayBuffer();
+      if (request.signal.aborted || signal.aborted) return;
+      buffer.timestampOffset = index * seconds;
+      buffer.appendBuffer(data);
+      waitingIndex = -1;
+      buffer.addEventListener('updateend', () => {
+        if (signal.aborted) return;
+        const target = position(), playable = bufferedPosition(video, target);
+        if (playable > target && !video.dataset.positioning) {
+          video.dataset.seekTarget = String(playable);
+          video.currentTime = playable;
+        }
+        if (index + 1 === total && buffer.buffered.length) {
+          finalPartEnd = buffer.buffered.end(buffer.buffered.length - 1);
+        }
+        fill();
+      }, {once:true});
+    } catch (e) {
+      if (request.signal.aborted && !timedOut) waitingIndex = -1;
+      if ((!request.signal.aborted || timedOut) && !signal.aborted) { stop(); failed(); }
+    } finally {
+      clearTimeout(timeout);
+      if (fetching === request) fetching = null;
+    }
+  }
+  source.addEventListener('sourceopen', () => {
+    if (signal.aborted) return;
+    try {
+      buffer = source.addSourceBuffer(mime);
+      source.duration = file.duration;
+      video.addEventListener('seeking', fill, {signal});
+      video.addEventListener('play', fill, {signal});
+      timer = setInterval(fill, 120);
+      fill();
+    } catch (e) { stop(); failed(); }
+  }, {once:true});
+  return url;
+}
+
+function makeVideo() {
+  const v = document.createElement('video');
+  v.muted = true; v.defaultMuted = true; v.playsInline = true;
+  v.preload = 'auto';
+  return v;
+}
+
+async function prepareNext() {
+  const next = curClips[curClipIx + 1];
+  if (!next || prefetch || editingSeek) return;
+  const files = next.vids.filter(v => camSel === 'all' || v.cam === camSel);
+  if (!files.length) return;
+  if (files.some(usesPreviewParts)) {
+    await prepareNextParts(next, files.filter(usesPreviewParts));
+    return;
+  }
+  const remaining = currentClip().length - clipOffset;
+  if (camSel === 'all' || remaining >= Math.max(curQ === 'orig' ? 4 : 20, baseRate * 2)) return;
+  const file = files[0];
+  const slot = {file, video: null, quality: curQ};
+  prefetch = slot;
+  updateDemand(file);
+  try {
+    let url;
+    while (slot === prefetch && wantedPlay) {
+      url = await readySource(file, slot.quality, clipRequest.signal);
+      if (url || slot !== prefetch) break;
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+    if (slot !== prefetch || !url) return;
+    slot.video = makeVideo(); slot.video.src = url;
+    slot.video.load();
+  } catch (e) { /* 正式切段时重试。 */ }
+}
+
+async function prepareNextParts(next, files) {
+  const videos = activeVideos();
+  if (!videos.some(v => !v.paused && v.readyState >= 3)) return;
+  const currentFiles = curVids().filter(v => (camSel === 'all' || v.cam === camSel) && usesPreviewParts(v));
+  const quality = curQ, controller = new AbortController();
+  const slot = {controller, quality, nextKey: next.key, nextPaths: files.map(v => v.url).join(), done: false};
+  prefetch = slot;
+  try {
+    // 补齐当前播放位置到片尾的设备端缓存。镜头落后时，保留它还需要的片段。
+    const offset = Math.min(clipOffset, ...videos.filter(v => !v.ended).map(v => v.currentTime));
+    await cachePreviewFiles(currentFiles, slot, offset, false);
+    await cachePreviewFiles(files, slot, 0, true);
+  } catch (e) { /* 播放请求可以独立取片。 */ }
+  finally {
+    slot.done = true;
+    if (prefetch === slot && currentClip()?.key === slot.nextKey) dropPrefetch();
+  }
+}
+
+async function cachePreviewFiles(files, slot, offset, nextClip) {
+  const {quality, controller: {signal}} = slot;
+  const transport = supportsPreviewMse(quality) ? 'mp4' : 'ts';
+  const jobs = [];
+  for (const file of files) {
+    if (signal.aborted) return;
+    const source = await readySource(file, quality, signal, seconds => seconds).catch(() => null);
+    if (signal.aborted) return;
+    if (typeof source === 'string') {
+      if (nextClip && camSel !== 'all' && currentClip()?.key !== slot.nextKey) {
+        slot.file = file; slot.video = makeVideo(); slot.video.src = source;
+        slot.video.load();
+      }
+      continue;
+    }
+    if (!(source > 0)) continue;
+    const end = Math.max(1, Math.ceil((file.duration - .08) / source));
+    const start = Math.min(end, Math.max(1, Math.ceil(previewLeadForQuality() * baseRate / source)));
+    const index = Math.floor(offset / source);
+    jobs.push({file, end, start, index});
+  }
+  // 先给下一段的每路攒够起播缓存，再轮流补到片尾。
+  for (const limit of (nextClip ? ['start', 'end'] : ['end'])) {
+    while (!signal.aborted && jobs.some(job => job.index < job[limit])) {
+      for (const job of jobs) {
+        if (signal.aborted) return;
+        if (job.index >= job[limit]) continue;
+        const query = new URLSearchParams({file: job.file.url, q: quality, part: job.index, ahead: '1', cache_only: '1'});
+        if (limit === 'start') query.set('warm', '1');
+        const response = await fetch('/api/playback-preview/part.' + transport + '?' + query, {signal}).catch(() => null);
+        if (signal.aborted) return;
+        if (!response || response.status === 503) {
+          await new Promise(resolve => setTimeout(resolve, 750));
+          continue;
+        }
+        const nextIndex = Number(response.headers.get('X-Preview-Next-Part'));
+        if (response.status !== 204 || nextIndex <= job.index || !Number.isInteger(nextIndex)) {
+          job.index = job.end;
+          continue;
+        }
+        job.index = nextIndex;
+      }
+    }
+  }
+}
+
+function holdOverview() {
+  if (camSel !== 'all' || !wantedPlay) return;
+  const videos = activeVideos();
+  if (overviewPosition === null) {
+    const times = videos.filter(v => !v.ended && !v.dataset.positioning && v.readyState >= 1).map(v => v.currentTime);
+    overviewPosition = times.length ? Math.min(...times) : clipOffset;
+    clipOffset = overviewPosition;
+    resetPlaybackClock();
+  }
+  videos.forEach(v => v.pause());
+}
+
+function syncOverview(videos) {
+  const playing = videos.filter(v => !v.ended && !v.dataset.outside);
+  if (!playing.length) return true;
+  const times = playing.map(v => v.currentTime);
+  if (playing.some(v => v.paused || v.seeking || v.dataset.positioning || v.dataset.startBuffer ||
+      v.error || v.dataset.loadFailed || (v.readyState < 3 && v.duration - v.currentTime > .08)) ||
+      Math.max(...times) - Math.min(...times) > .15) holdOverview();
+  if (overviewPosition === null) return true;
+  for (const v of playing) {
+    const target = bufferedPosition(v, overviewPosition);
+    if (v.readyState >= 1 && !v.dataset.positioning && !v.seeking &&
+        (Math.abs(v.currentTime - target) > .04 || v.currentTime < target && target !== overviewPosition)) {
+      v.dataset.seekTarget = String(target);
+      v.currentTime = target;
+    }
+  }
+  if (playing.some(v => v.error || v.dataset.loadFailed || v.seeking || v.dataset.positioning ||
+      v.readyState < 2 || (v.dataset.mse ? !hasPreviewLead(v) :
+        v.readyState < 3 && v.duration - v.currentTime > .08))) return false;
+  overviewPosition = null;
+  resetPlaybackClock();
+  playing.forEach(v => tryPlay(v, true));
+  return true;
+}
+
+function tryPlay(v, synchronized = false) {
+  if (!wantedPlay || (camSel === 'all' && synchronized !== true) || v.ended || v.error || v.dataset.loadFailed ||
+      v.dataset.outside || !v.getAttribute('src')) return;
+  if (v.dataset.startBuffer) {
+    if (!previewReadyToPlay(v)) {
+      v.parentElement.querySelector('.cload').hidden = false;
+      return;
+    }
+    delete v.dataset.startBuffer;
+    if (curQ === '720p') v.dataset.previewLead = String(PREVIEW_HD_RECOVERY_SECONDS);
+  }
+  const play = v.play();
+  if (play) play.catch(e => {
+    if (e.name === 'NotAllowedError' && v.isConnected && wantedPlay) {
+      pauseAll(); byId('startmask').classList.add('show');
+    }
   });
-  vg.classList.toggle('one', shown.length === 1);   // 单路: 交给 JS 按画面比例定行高
-  renderCamBar();
-  document.getElementById('ic-time').textContent = evTime(ev);
-  const pt = document.getElementById('ptitle');
-  if (pt) pt.textContent = t(CATS_NAME[currentCat] || currentCat) + ' · ' + evTime(ev);
-  document.getElementById('ic-cat').textContent = t(CATS_NAME[currentCat] || currentCat);
-  const md0 = ev.meta || {};
-  document.getElementById('ic-big').textContent =
-    (md0.reason && (reasonLabel(md0.reason) || md0.reason)) || CATS_NAME[currentCat] || currentCat;
-  const mb = (ev.size || 0) / 1048576;
-  const camTxt = camSel === 'all'
-    ? (shown.length + ' 路同屏')
-    : (camLabel(camSel) + ' 单路' + (clip.vids.length > shown.length ? ' (共 ' + clip.vids.length + ' 路可选)' : ''));
-  document.getElementById('ic-sub').innerHTML = camTxt + ' · <span id="ic-dur">--:--</span>' + (mb >= 0.05 ? ' · ' + (mb >= 1 ? mb.toFixed(1) + ' MB' : Math.round(mb * 1024) + ' KB') : '');
-  const cb = document.getElementById('clipbar');
-  if (curClips.length > 1) {
-    const hitClip = triggerClip(ev, curClips);
-    cb.classList.add('show');
-    cb.innerHTML = '<span class="ick" style="min-width:auto;align-self:center">片段</span>' +
-      curClips.map((c, i) => {
-        const t = (c.key.split('_')[1] || c.key).replace(/-/g, ':');
-        const isTrig = hitClip && hitClip.ix === i;
-        return `<button class="${i === curClipIx ? 'on' : ''}${isTrig ? ' trig' : ''}"` +
-          (isTrig ? ' title="触发时刻在这段"' : '') +
-          ` onclick="switchClip(${i})">${t}</button>`;
-      }).join('');
-  } else {
-    cb.classList.remove('show');
-    cb.innerHTML = '';
+}
+
+function mountCell(cam, file, prepared, offset, generation, seekStartup = false) {
+  const cell = document.createElement('div');
+  cell.className = 'vcell';
+  cell.dataset.cam = cam;
+  const label = document.createElement('span'), status = document.createElement('div');
+  label.className = 'clabel'; label.textContent = camLabel(cam);
+  status.className = 'cload';
+  cell.append(label, status);
+  if (camSel === 'all') cell.onclick = () => setCam(cam);
+  if (!file || (file.duration > 0 && offset >= file.duration)) {
+    status.textContent = '此时段无画面';
+    return cell;
   }
-  const md = ev.meta || {};
-  let rh = '';
-  rh += '<div data-k="time"><span class="ick">时间</span>' + (md.timestamp ? md.timestamp.replace('T', ' ') : fmtFull(ev.name)) + '</div>';
-  if (md.city) rh += '<div data-k="city"><span class="ick">城市</span>' + md.city + '</div>';
-  if (md.street) rh += '<div data-k="street"><span class="ick">位置</span>' + md.street + '</div>';
-  if (md.est_lat && md.est_lon) rh += '<div data-k="coord"><span class="ick">坐标</span>' + md.est_lat + ', ' + md.est_lon + '</div>';
-  if (md.reason) rh += '<div><span class="ick">触发原因</span>' + (reasonLabel(md.reason) || md.reason) + '</div>';
-  /* camera 字段只有哨兵事件有意义; 手动保存等也会带 camera:"0" */
-  if (md.camera && isSentryEv(md)) { const cn = CAM_IDX[+md.camera]; rh += '<div data-k="camera"><span class="ick">触发画面</span>' + (cn ? camLabel(cn) : '摄像头') + ' #' + md.camera + '</div>'; }
-  if (md.campaign_id) rh += '<div><span class="ick">活动ID</span>' + md.campaign_id + '</div>';
-  rh += '<div><span class="ick">画面</span>' + clip.vids.length + ' 路</div>';
-  if (curClips.length > 1) rh += '<div><span class="ick">片段</span>共 ' + curClips.length + ' 段, 当前第 ' + (curClipIx + 1) + ' 段</div>';
-  rh += camSort(clip.vids).map(v => '<div><span class="ick">' + camLabel(v.cam) + '</span>' + v.url.split('/').pop() + '</div>').join('');
-  if (!md.timestamp) rh += '<div><span class="ick">元数据</span>无 event.json（该事件未写入元数据）</div>';
-  const rows = document.getElementById('ic-rows');
-  rows.innerHTML = rh;
-  rows.classList.remove('open');
-  document.getElementById('ic-fold').textContent = '展开详细数据 ⌄';
+  const v = prepared || makeVideo();
+  v.dataset.cam = cam;
+  if (seekStartup) v.dataset.previewLead = String(previewLeadForQuality());
+  v.dataset.seekTarget = String(offset);
+  v.dataset.positioning = '1';
+  cell.prepend(v);
+  status.classList.add('buffering');
+  status.textContent = '缓冲中…';
+  const signal = clipRequest.signal;
+  const position = () => {
+    if (generation !== renderId) return;
+    const length = videoDuration(v);
+    if (length) {
+      const group = currentClip();
+      if (!videoDuration(file)) {
+        file.duration = length;
+        arrangeTimeline(curClips, group);
+        drawTimeline();
+      }
+      // A pending camera may have been scrubbed backwards since it was mounted.
+      const pos = Math.min(clipOffset, Math.max(0, length - 0.001));
+      if (Math.abs(v.currentTime - pos) > 0.025) v.currentTime = pos;
+    }
+    delete v.dataset.positioning;
+    v.playbackRate = baseRate;
+    layoutPlayer();
+    if (wantedPlay) tryPlay(v);
+  };
+  v.addEventListener('loadedmetadata', position, {once: true});
+  v.onloadeddata = v.oncanplay = v.onplaying = () => {
+    if (!v.dataset.outside && (!v.dataset.startBuffer || !wantedPlay)) status.hidden = true;
+  };
+  v.onwaiting = () => {
+    // A queued waiting event can arrive after decoding recovered or the clip changed.
+    if (generation !== renderId || !wantedPlay || v.readyState >= 3) return;
+    if (camSel === 'all') holdOverview();
+    if (v.dataset.startBuffer || (v.dataset.mse && v.seeking)) return;
+    status.textContent = '缓冲中…'; status.hidden = false;
+    if (v.dataset.mse) {
+      v.dataset.startBuffer = '1';
+      v.pause();
+    }
+  };
+  v.onended = () => {
+    if (generation !== renderId) return;
+    if (v.duration + 0.08 < currentClip().length) {
+      status.classList.remove('buffering');
+      status.textContent = '此时段无画面'; status.hidden = false;
+    }
+    tick();
+  };
+  const failed = () => {
+    if (generation !== renderId) return;
+    v.dataset.loadFailed = '1';
+    status.classList.remove('buffering');
+    status.hidden = false;
+    status.textContent = curQ === 'orig' ? '画面加载失败' : curQ + ' 暂不可用';
+    const retry = document.createElement('button'); retry.textContent = '重试';
+    retry.onclick = e => { e.stopPropagation(); showClip(curClipIx, playbackOffset()); };
+    status.append(retry);
+    if (curQ !== 'orig') {
+      const original = document.createElement('button'); original.textContent = '播放原画';
+      original.onclick = e => { e.stopPropagation(); setQuality('orig'); };
+      status.append(original);
+    }
+  };
+  v.onerror = failed;
+  if (prepared) {
+    if (v.readyState >= 1) { v.removeEventListener('loadedmetadata', position); position(); }
+    status.hidden = v.readyState >= 2;
+  } else if (curQ === 'orig') {
+    v.src = file.url;
+  } else {
+    const resolve = async () => {
+      try {
+        const openParts = usesPreviewParts(file) ? (seconds, quality) => previewStream(v, file, seconds, quality, signal, failed) : null;
+        const url = await readySource(file, curQ, signal, openParts);
+        if (signal.aborted) return;
+        if (url) v.src = url;
+        else setTimeout(() => { if (!signal.aborted) resolve(); }, 1500);
+      } catch (e) { if (!signal.aborted) failed(); }
+    };
+    resolve();
+  }
+  return cell;
+}
+
+function showClip(ix, offset, continuous = false, seekStartup = false) {
+  if (clipRequest) clipRequest.abort();
+  clipRequest = new AbortController();
+  const generation = ++renderId;
+  const group = curClips[ix];
+  const eventName = group.event.trip || group.event.name;
+  if (!cur || (cur.trip || cur.name) !== eventName) {
+    byId('watch-items').querySelectorAll('button').forEach(b => b.classList.toggle('selected', b.dataset.event === eventName));
+  }
+  curClipIx = ix; cur = group.event; clipOffset = offset; atEnd = false;
+  resetPlaybackClock();
+  overviewPosition = camSel === 'all' ? offset : null;
+  updateDemand();
+  lastTick = performance.now();
+  const grid = byId('vgrid');
+  const channels = camSel === 'all' ? allCameras : [camSel];
+  const old = activeVideos();
+  const previous = new Map(old.map(v => [v.dataset.cam, v]));
+  const cells = channels.map(cam => {
+    const file = group.vids.find(v => v.cam === cam);
+    let prepared = null;
+    if (file && prefetch?.file?.url === file.url && prefetch.quality === curQ) {
+      prepared = prefetch.video; prefetch = null;
+    }
+    const cell = mountCell(cam, file, prepared, offset, generation, seekStartup);
+    const last = previous.get(cam), incoming = cell.querySelector('video');
+    if (continuous && last && last.videoWidth && incoming && incoming.readyState < 2) {
+      const still = document.createElement('canvas');
+      still.className = 'hold'; still.width = Math.min(640, last.videoWidth);
+      still.height = Math.round(still.width * last.videoHeight / last.videoWidth);
+      still.getContext('2d').drawImage(last, 0, 0, still.width, still.height);
+      incoming.after(still);
+      incoming.addEventListener('loadeddata', () => still.remove(), {once:true});
+      incoming.addEventListener('error', () => still.remove(), {once:true});
+    }
+    return cell;
+  });
+  if (!continuous || prefetch?.nextKey !== group.key || prefetch.done) dropPrefetch();
+  old.forEach(v => { v.onerror = v.onended = null; releaseVideo(v); });
+  grid.replaceChildren(...cells);
+  grid.classList.remove('loading');
+  grid.classList.toggle('one', cells.length === 1);
   layoutPlayer();
-  document.getElementById('player').classList.add('open');
-  requestAnimationFrame(layoutPlayer);  // 可见后再算一次, 保证拿到真实宽度设置像素行高
-  const sm = document.getElementById('startmask');
-  if ('ontouchstart' in window) { sm.classList.add('show'); }
-  playAll();
-  kickGroup(curClipIx + 1);   // 前后相邻组提前转码, 切段不再等十几秒
-  kickGroup(curClipIx - 1);
-  if (syncTimer) clearInterval(syncTimer);
-  syncTimer = setInterval(tick, 250);
-  const sortedVids = camSort(shown);
-  loadTelemetry(sortedVids.length ? sortedVids[0].url : null, md);
+  cameraBar();
+  renderInfo();
+  drawTimeline();
+  updateControls();
+  const metaFile = group.vids.find(v => v.cam === camSel) || group.vids[0];
+  loadTelemetry(metaFile.url, cur.meta);
+  byId('startmask').classList.remove('show');
+}
+
+function renderInfo() {
+  const md = cur.meta || {};
+  byId('ptitle').textContent = liveMode ? t('实时预览') : (reasonLabel(md.reason) || t(CATS_NAME[libraryCat])) + ' · ' + evTime(cur);
+  byId('ic-rows').replaceChildren();
+  const fields = [['录像时间', evTime(cur)], ['分类', t(CATS_NAME[libraryCat])], ['大小', fmtSize(cur.size || 0)],
+    ['本段时长', fmtSec(currentClip().length)], ['画面', curVids().length + ' 路'], ['触发原因', reasonLabel(md.reason)], ['位置', [md.city, md.street].filter(Boolean).join(' · ')],
+    ['坐标', md.est_lat != null && md.est_lon != null ? md.est_lat + ', ' + md.est_lon : ''],
+    ['活动ID', md.campaign_id], ['触发画面', triggerCam(cur) && camLabel(triggerCam(cur))],
+    ['片段', (curClipIx + 1) + ' / ' + curClips.length], ...curVids().map(v => [camLabel(v.cam), v.f])];
+  if (!md.timestamp) fields.push(['元数据', '无 event.json']);
+  fields.filter(([, value]) => value).forEach(([key, value]) => {
+    const row = document.createElement('div'), k = document.createElement('span');
+    k.className = 'ick'; k.textContent = key; row.append(k, String(value)); byId('ic-rows').append(row);
+  });
+  const bar = byId('clipbar'); bar.replaceChildren();
+  if (byId('ic-rows').classList.contains('open')) renderSegmentButtons();
+}
+
+function renderSegmentButtons() {
+  const bar = byId('clipbar'); bar.replaceChildren();
+  for (const [i, clip] of curClips.entries()) {
+    const button = document.createElement('button'); button.textContent = wallLabel(clip.sourceStart);
+    button.classList.toggle('on', i === curClipIx); button.onclick = () => seekWall(clip.start); bar.append(button);
+  }
+}
+
+function timelineGaps() {
+  if (!curClips.length) return [];
+  const start = curClips[0].start, last = curClips[curClips.length - 1];
+  const end = last.start + last.length;
+  const cameras = camSel === 'all' ? allCameras : [camSel];
+  const missing = [];
+  for (const cam of cameras) {
+    let coveredUntil = start, previousIndex = -1;
+    for (const [index, group] of curClips.entries()) {
+      const file = group.vids.find(v => v.cam === cam);
+      if (!file) continue;
+      // Match the clip boundaries and camera availability used by seekWall/mountCell.
+      const length = Math.min(group.length, videoDuration(file) || group.length);
+      if (length <= 0) continue;
+      const gap = group.start - coveredUntil;
+      const evidence = file.gap_before;
+      const previous = curClips[previousIndex];
+      const omittedClip = index > previousIndex + 1;
+      const known = evidence && evidence.previous === previous?.key;
+      const confirmed = omittedClip || (known ? evidence.minimum > .5 : gap > 1.5);
+      if (gap > .5 + 1e-6 && confirmed) {
+        const reported = known && evidence.basis === 'sequence' ? evidence.seconds : gap;
+        missing.push({start: coveredUntil, end: group.start, cam, reported});
+      }
+      coveredUntil = Math.max(coveredUntil, group.start + length);
+      previousIndex = index;
+    }
+    if (end - coveredUntil > .5 + 1e-6) missing.push({start: coveredUntil, end, cam});
+  }
+  missing.sort((a, b) => a.start - b.start || a.end - b.end);
+  const gaps = [];
+  for (const interval of missing) {
+    let gap = gaps[gaps.length - 1];
+    if (!gap || interval.start > gap.end) {
+      gap = {start: interval.start, end: interval.end, cameras: new Map()};
+      gaps.push(gap);
+    }
+    gap.end = Math.max(gap.end, interval.end);
+    gap.cameras.set(interval.cam, (gap.cameras.get(interval.cam) || 0) +
+      (interval.reported ?? interval.end - interval.start));
+  }
+  return gaps.map(gap => ({start: gap.start, end: gap.end, seconds: gap.end - gap.start,
+    label: cameras.filter(cam => gap.cameras.has(cam)).map(cam =>
+      (camSel === 'all' ? camLabel(cam) + ' ' : '') + '缺录约 ' + Number(gap.cameras.get(cam).toFixed(2)) + ' 秒'
+    ).join(' · ')}));
+}
+
+function timelineGapSummary(group) {
+  return timelineGaps().find(gap => Math.abs(gap.end - group.start) < .001) || null;
+}
+
+function drawTimeline() {
+  if (!curClips.length) return;
+  const start = curClips[0].start, last = curClips[curClips.length - 1];
+  const span = last.start + last.length - start;
+  const range = byId('seek'); range.disabled = false; range.max = span; range.removeAttribute('title');
+  const bands = byId('track-bands'); bands.replaceChildren();
+  const mark = (left, width, cls, label = '') => {
+    const band = document.createElement('i'); band.className = cls;
+    if (cls === 'gap') band.style.right = (start + span - left - width) / span * 100 + '%';
+    else band.style.left = (left - start) / span * 100 + '%';
+    if (width) band.style.width = width / span * 100 + '%';
+    if (label) band.title = label;
+    bands.append(band);
+  };
+  timelineGaps().forEach(gap => mark(gap.start, gap.seconds, 'gap', gap.label));
+  const trigger = byId('trigger-marker');
+  if (triggerSource) {
+    const clip = curClips.find(group => group.key === triggerSource.key);
+    triggerTime = clip ? clip.start + triggerSource.offset : null;
+  }
+  trigger.hidden = triggerTime === null;
+  if (triggerTime !== null) {
+    trigger.textContent = '◆ ' + wallLabel(recordingTime(triggerTime)) + ' 触发';
+    mark(triggerTime, 0, 'trigger');
+  }
+  byId('track-end').textContent = wallLabel(last.sourceStart + last.length);
+}
+
+function timelineGapAt(clientX) {
+  return [...byId('track-bands').querySelectorAll('.gap')].find(band => {
+    const rect = band.getBoundingClientRect();
+    return clientX >= rect.left - 2 && clientX <= rect.right + 2;
+  });
 }
 
 /* ---------- 行车遥测面板 (SEI, 视频上方) ---------- */
 let telT0 = null, TEL_META = {};
 function loadTelemetry(url, meta) {
+  const generation = renderId;
   TEL = null;
   TEL_META = meta || {};
   const p = document.getElementById('tpanel'), card = document.getElementById('infocard');
@@ -2754,7 +3866,7 @@ function loadTelemetry(url, meta) {
   }
   telT0 = null;
   if (!url) return;
-  const m = url.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);
+  const m = url.split('/').pop().match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);
   if (m) telT0 = new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
   // 顶部时间: 优先 event.json 的 timestamp, 否则退回片段文件名里的时间
   const ts = String(TEL_META.timestamp || '').replace('T', ' ').replace(/\.\d+/, '').replace(/Z$/, '').slice(0, 19);
@@ -2763,6 +3875,7 @@ function loadTelemetry(url, meta) {
   fetch('/api/telemetry?path=' + encodeURIComponent(fp))
     .then(r => r.json())
     .then(d => {
+      if (generation !== renderId) return;
       if (!d.ok || !d.frames || !d.frames.length) { showPlainPanel(); return; }
       TEL = d;
       p.classList.add('show');
@@ -2775,7 +3888,7 @@ function loadTelemetry(url, meta) {
       document.getElementById('ic-rows').insertAdjacentHTML('beforeend',
         '<div><span class="ick">刹车占比</span>' + d.brake_ratio + '%</div>' +
         '<div><span class="ick">遥测</span>SEI 元数据 · ' + d.count + ' 帧 @ ' + d.fps + 'fps</div>');
-    }).catch(() => showPlainPanel());
+    }).catch(() => { if (generation === renderId) showPlainPanel(); });
 }
 /* 哨兵/停车片段没有 SEI 遥测: 顶部仍然显示 时间 + 城市·位置, 只是不带车速/挡位 */
 function showPlainPanel() {
@@ -2968,198 +4081,155 @@ function updateHud(t) {
 }
 window.addEventListener('resize', () => { if (document.getElementById('player').classList.contains('open')) layoutPlayer(); });
 
-/* ---------- 准实时预览 ---------- */
-/* 画面框跟片源尺寸匹配 (与哨兵/记录仪播放器同一套思路):
-   单路按 videoWidth/Height 定宽高, 最高 58vh 并居中; 全览按第一路比例算
-   像素行高。Tesla 片源多为 4:3, 固定 16/9 + cover 会把上下裁掉一截。 */
-function layoutLive() {
-  const v = document.getElementById('lv-video');
-  if (!v || !v.videoWidth || !v.videoHeight || v.style.display === 'none') return;
-  const ar = v.videoWidth / v.videoHeight;
-  const boxW = (v.parentElement && v.parentElement.clientWidth) || window.innerWidth;
-  const w = Math.max(1, Math.min(boxW, window.innerHeight * 0.58 * ar));
-  v.style.width = Math.round(w) + 'px';
-  v.style.height = Math.round(w / ar) + 'px';
+let liveTimer = null, liveReading = false, liveStream = null, liveDirty = false, liveSignature = '';
+const demandClient = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, '0')).join('');
+let demandRevision = 0, demandTimer = null, activeDemand = null;
+function postDemand(body, closing = false) {
+  return fetch('/api/live/demand', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body), keepalive:closing}).catch(() => {});
 }
-function layoutLiveGrid() {
-  const g = document.getElementById('lv-grid');
-  if (!g || !g.classList.contains('on')) return;
-  const v0 = g.querySelector('video');
-  if (!v0 || !v0.videoWidth || !v0.videoHeight) return;
-  const cols = (g.children.length === 1 || g.classList.contains('n1')) ? 1 : 2;
-  const w = g.clientWidth || 0;
-  if (!w) return;
-  const cw = (w - 3 * (cols - 1)) / cols;
-  g.style.gridAutoRows = Math.round(cw * v0.videoHeight / v0.videoWidth) + 'px';
-  g.classList.add('ready');
+function releaseDemand() {
+  clearInterval(demandTimer);
+  if (activeDemand) postDemand({client:demandClient, rev:++demandRevision, q:'orig', paths:[], closed:true}, true);
+  activeDemand = null;
 }
-window.addEventListener('resize', () => { layoutLive(); layoutLiveGrid(); });
-const _lvSingle = document.getElementById('lv-video');
-if (_lvSingle) _lvSingle.addEventListener('loadedmetadata', layoutLive);
+function updateDemand(nextFile) {
+  if (!cur) return;
+  const files = curVids().filter(v => camSel === 'all' || v.cam === camSel);
+  if (nextFile) files.push(nextFile);
+  activeDemand = {client:demandClient, rev:++demandRevision, q:curQ, paths:curQ === 'orig' ? [] : files.filter(v => !usesPreviewParts(v)).map(v => v.url)};
+  postDemand(activeDemand);
+  clearInterval(demandTimer);
+  demandTimer = setInterval(() => { if (activeDemand) postDemand(activeDemand); }, 7000);
+}
+window.addEventListener('pagehide', () => { releaseDemand(); if (liveStream) liveStream.close(); });
+window.addEventListener('pageshow', e => {
+  if (e.persisted && cur) { updateDemand(); if (liveMode) liveRestart(); }
+});
 
-let liveCam = localStorage.getItem('tsflivecam') || 'front';
-/* 画质: 记住上次选择, 没选过就跟随播放器当前画质 (与回放同一套 原画/720p/480p/360p) */
-let liveQ = localStorage.getItem('tsfliveq') || '';
-let liveFolder = '', liveTimer = null, liveBusy = false, liveLoading = false, liveSyncTimer = null, liveEv = null;
-function liveQv() { return liveQ || curQ || 'orig'; }
-function lvUrl(u) {
-  const q = liveQv();
-  if (q === 'orig') return u;
-  return u + (u.indexOf('?') < 0 ? '?' : '&') + 'q=' + q;
-}
-function setLiveQ(v) {
-  liveQ = v;
-  localStorage.setItem('tsfliveq', v);
-  if (liveEv) renderLive(liveEv);
-}
-function latestLiveEv() { const arr = (data && data.RecentClips) || []; return arr[0] || null; }
 function openLive() {
-  document.getElementById('livep').classList.add('open');
-  document.body.classList.add('livemode');       /* 隐藏分类/日期筛选与归档列表 */
-  const qs = document.getElementById('lv-q');
-  if (qs) qs.value = liveQv();
-  /* 从播放器切过来时把播放器收起, 免得浮层盖在实时预览上 */
-  if (document.getElementById('player').classList.contains('open')) closePlayer();
-  const ev = latestLiveEv();
-  if (ev) { liveFolder = ev.name; renderLive(ev); }
-  try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, 0); }
-  liveTick();
-  liveRestart();
+  openPlayer(null, true);
 }
-function closeLive() {
-  document.getElementById('livep').classList.remove('open');
-  document.body.classList.remove('livemode');
-  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
-  clearLiveGrid();
-  const v = document.getElementById('lv-video');
-  try { v.pause(); v.removeAttribute('src'); v.load(); } catch (err) {}
-  /* 从实时预览返回时, 高亮恢复到当前分类页签 (不是固定第一个) */
-  const tl = document.getElementById('tab-live');
-  if (tl && tl.classList.contains('active')) {
-    tl.classList.remove('active');
-    const all = document.querySelectorAll('#tabs .tab');
-    const ix = Object.keys(data || {}).indexOf(currentCat);
-    const target = all[ix >= 0 ? ix : 0];
-    if (target && target !== tl) target.classList.add('active');
+
+function backToLatest() {
+  if (!curClips.length) { liveTick(); return; }
+  followLatest = true; wantedPlay = true;
+  showClip(curClips.length - 1, 0);
+}
+
+function addLiveCameras(previous) {
+  const group = currentClip();
+  const files = new Map(group.vids.map(file => [file.cam, file]));
+  const oldFiles = new Map(previous.vids.map(file => [file.cam, file]));
+  const grid = byId('vgrid');
+  const cells = new Map([...grid.children].map(cell => [cell.dataset.cam, cell]));
+  const channels = camSel === 'all' ? allCameras : [camSel];
+  for (const [camera, cell] of cells) {
+    if (!channels.includes(camera) || (cell.querySelector('video') && oldFiles.get(camera)?.url !== files.get(camera)?.url)) {
+      return false;
+    }
   }
-}
-function renderLive(ev) {
-  liveEv = ev;
-  document.getElementById('lv-name').textContent = '最新片段: ' + ev.name.replace(/_/g, ' ');
-  const vids = camSort(ev.videos || []);
-  if (!vids.length) return;
-  if (liveCam !== '__all' && !vids.find(v => v.cam === liveCam)) liveCam = '__all';
-  const row = document.getElementById('lv-cams');
-  row.innerHTML = '';
-  const mkBtn = (cam, label) => {
-    const b = document.createElement('button');
-    b.className = 'lvbtn' + (cam === liveCam ? ' on' : '');
-    b.textContent = label;
-    b.onclick = () => { liveCam = cam; localStorage.setItem('tsflivecam', liveCam); renderLive(ev); };
-    row.appendChild(b);
-  };
-  vids.forEach(v => mkBtn(v.cam, camLabel(v.cam)));
-  /* 最后一个: 全览 (所有摄像头同屏) */
-  mkBtn('__all', '全览 (' + vids.length + ')');
-  const vid = document.getElementById('lv-video');
-  const grid = document.getElementById('lv-grid');
-  if (liveCam === '__all') {
-    vid.style.display = 'none';
-    try { vid.pause(); vid.removeAttribute('src'); vid.load(); } catch (err) {}
-    buildLiveGrid(vids);
-  } else {
-    clearLiveGrid();
-    vid.style.display = '';
-    const v = vids.find(x => x.cam === liveCam) || vids[0];
-    const want = lvUrl(v.url);
-    if (v && vid.getAttribute('src') !== want) { vid.src = want; vid.play().catch(() => {}); }
-    layoutLive();
+  const offset = playbackOffset();
+  for (const [index, camera] of channels.entries()) {
+    const previousCell = cells.get(camera), file = files.get(camera);
+    let cell = previousCell;
+    if (!cell || (!oldFiles.has(camera) && file)) {
+      cell = mountCell(camera, file, null, offset, renderId);
+      if (previousCell) previousCell.replaceWith(cell);
+      else grid.append(cell);
+    }
+    cell.style.order = index;
   }
+  cur = group.event;
+  grid.classList.toggle('one', channels.length === 1);
+  updateDemand();
+  renderInfo();
+  layoutPlayer();
+  return true;
 }
-/* 全览: 每路一个 video, 同屏播放并互相对齐进度 */
-function clearLiveGrid() {
-  if (liveSyncTimer) { clearInterval(liveSyncTimer); liveSyncTimer = null; }
-  const g = document.getElementById('lv-grid');
-  g.classList.remove('on', 'n1', 'ready');
-  g.style.gridAutoRows = '';
-  [...g.querySelectorAll('video')].forEach(v => { try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {} });
-  g.innerHTML = '';
-}
-function buildLiveGrid(vids) {
-  const g = document.getElementById('lv-grid');
-  [...g.querySelectorAll('video')].forEach(v => { try { v.pause(); v.removeAttribute('src'); } catch (e) {} });
-  g.innerHTML = '';
-  g.classList.add('on');
-  g.classList.toggle('n1', vids.length === 1);
-  vids.forEach((v, ix) => {
-    const cell = document.createElement('div');
-    cell.className = 'lvcell';
-    const el = document.createElement('video');
-    el.playsInline = true; el.muted = true; el.preload = 'auto';
-    el.onloadedmetadata = () => { el.currentTime = 0.05; el.play().catch(() => {}); };
-    el.addEventListener('loadedmetadata', layoutLiveGrid);
-    const lb = document.createElement('div');
-    lb.className = 'clabel';
-    lb.textContent = camLabel(v.cam);
-    cell.appendChild(el); cell.appendChild(lb);
-    cell.onclick = () => { liveCam = v.cam; localStorage.setItem('tsflivecam', liveCam); if (liveEv) renderLive(liveEv); };
-    g.appendChild(cell);
-    /* 逐路上屏: 每路错开 350ms, 避免 4 路同时抢占上行 */
-    el.oncanplay = null;
-    setTimeout(() => { if (!el.getAttribute('src')) el.src = lvUrl(v.url); }, ix * 350);
-  });
-  /* 每秒对齐一次进度, 任一路拖进度条/暂停 → 其余跟随 */
-  if (liveSyncTimer) clearInterval(liveSyncTimer);
-  liveSyncTimer = setInterval(() => {
-    const vs = [...g.querySelectorAll('video')];
-    if (!vs.length) return;
-    const lead = vs.find(v => !v.paused && !v.seeking) || vs[0];
-    vs.forEach(v => {
-      if (v === lead) return;
-      if (Math.abs((v.currentTime || 0) - (lead.currentTime || 0)) > 0.45) v.currentTime = lead.currentTime;
-    });
-  }, 1000);
-}
-async function liveTick() {
-  if (liveBusy || !document.getElementById('livep').classList.contains('open')) return;
-  liveBusy = true;
-  const st = document.getElementById('lv-status');
-  if (!st.textContent) st.textContent = '正在检查…';   /* 首次进入先给占位, 不让状态栏空白 */
+
+async function liveTick(force = true) {
+  if (!liveMode) return;
+  if (editingSeek) { liveDirty = true; return; }
+  if (liveReading) { if (force) liveDirty = true; return; }
+  const ticket = sessionId;
+  liveReading = true;
   try {
-    /* 网络抖动/上行被视频占满时响应可能为空或迟迟不回, 6 秒超时后放行, 下轮再试 */
-    const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 6000);
-    let txt;
-    try { txt = await fetch('/api/live/status', { signal: ctrl.signal }).then(x => x.text()); }
-    finally { clearTimeout(to); }
-    let r = null;
-    try { r = JSON.parse(txt); } catch (e) {}
-    if (!r) { st.textContent = '检查暂时不可达, 下轮重试…'; return; }
-    /* 状态文字先更新: 下面的全量列表刷新可能很慢 (设备负载高时数秒), 不能让它挡住状态栏 */
-    if (!r.folder) st.textContent = '归档里还没有行车片段';
-    else {
-      /* age = 入库时刻 - 当前时刻 (负数), -1 表示目录里还没有可读文件 */
-      const ago = (typeof r.age === 'number' && r.age < -1) ? -r.age : 0;
-      st.textContent = !ago ? '' : ago < 60 ? '刚刚入库'
-        : ago < 3600 ? Math.round(ago / 60) + ' 分钟前入库'
-        : Math.round(ago / 3600) + ' 小时前入库';
+    const response = await fetch('/api/live/status', {signal:indexRequest.signal, cache:'no-store'});
+    if (!response.ok) throw Error('status');
+    const summary = await response.json();
+    if (ticket !== sessionId) return;
+    const signature = JSON.stringify([summary.folder, summary.oldest, summary.latest_cameras,
+                                     (summary.clips || []).map(e => [e.name,e.videos.length])]);
+    if (!force && signature === liveSignature) return;
+    const groups = await fetchTimeline('RecentClips', '', indexRequest.signal);
+    if (ticket === sessionId) liveSignature = signature;
+    if (ticket !== sessionId || !groups.length) return;
+    if (editingSeek) { liveDirty = true; return; }
+    const recentEvents = new Map(groups.map(c => [c.event.name, c.event]));
+    data.RecentClips = [...recentEvents.values()].reverse();
+    showLibrary(cur);
+    if (!curClips.length) {
+      curClips = groups; updateCameras();
+      if (!allCameras.includes(camSel) && camSel !== 'all') camSel = allCameras[0];
+      showClip(groups.length - 1, 0);
+      syncTimer = setInterval(tick, 100);
+      return;
     }
-    /* 列表刷新异步进行, 不阻塞轮询; 防止上一次还没完成又发起一次 */
-    if (r.folder && r.folder !== liveFolder && !liveLoading) {
-      liveFolder = r.folder;
-      liveLoading = true;
-      load().then(() => {
-        const ev = latestLiveEv();
-        if (ev && document.getElementById('livep').classList.contains('open')) renderLive(ev);
-      }).catch(() => {}).finally(() => { liveLoading = false; });
+    const current = currentClip();
+    const index = groups.findIndex(c => c.key === current.key);
+    const anchor = index >= 0 ? groups[index] : groups.find(c => c.sourceStart > current.sourceStart);
+    if (anchor) {
+      const fixedStart = index >= 0 ? current.start : current.start + current.length +
+        Math.max(0, anchor.sourceStart - current.sourceStart - current.length);
+      const shift = fixedStart - anchor.start;
+      groups.forEach(group => { group.start += shift; });
     }
-  } catch (e) { st.textContent = '检查暂时不可达, 下轮重试…'; }
-  finally { liveBusy = false; }
+    // A recording can expire while its last buffered frames are still playing.
+    if (index < 0) {
+      const newer = groups.filter(c => c.sourceStart > current.sourceStart);
+      curClips = [current, ...newer]; curClipIx = 0;
+    } else { curClips = groups; curClipIx = index; }
+    const addedCamera = allCameras.join(',');
+    updateCameras(); drawTimeline(); cameraBar(); updateControls();
+    if (prefetch?.nextKey && prefetch.nextKey !== current.key) {
+      const following = curClips[curClipIx + 1];
+      const nextPaths = following?.vids.filter(v => (camSel === 'all' || v.cam === camSel) &&
+        usesPreviewParts(v)).map(v => v.url).join();
+      if (following?.key !== prefetch.nextKey || nextPaths !== prefetch.nextPaths) dropPrefetch();
+    }
+    if (byId('ic-rows').classList.contains('open')) renderSegmentButtons();
+    if (atEnd && followLatest && curClips[curClipIx + 1]) {
+      wantedPlay = true; advanceClip();
+    } else {
+      const visibleFiles = clip => clip.vids.filter(v => camSel === 'all' || v.cam === camSel).map(v => v.url).join();
+      if ((camSel === 'all' && addedCamera !== allCameras.join(',')) || visibleFiles(current) !== visibleFiles(currentClip())) {
+        dropPrefetch();
+        if (!addLiveCameras(current)) showClip(curClipIx, playbackOffset());
+      }
+    }
+    loadGapEvidence();
+  } catch (error) {
+    if (ticket === sessionId) byId('lv-status').textContent = '更新暂不可用';
+  } finally {
+    if (ticket === sessionId) {
+      liveReading = false;
+      if (liveDirty) { liveDirty = false; liveTick(); }
+    }
+  }
 }
+
 function liveRestart() {
-  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
-  const iv = +document.getElementById('lv-iv').value;
-  if (iv > 0) liveTimer = setInterval(liveTick, iv * 1000);
+  clearInterval(liveTimer);
+  const seconds = Number(byId('lv-iv').value);
+  if (liveStream) liveStream.close();
+  liveStream = null;
+  if (!liveMode || !seconds) return;
+  liveTimer = setInterval(() => liveTick(false), seconds * 1000);
+  if (window.EventSource) {
+    const stream = liveStream = new EventSource('/api/live/ready');
+    stream.addEventListener('recent', () => { if (stream === liveStream) liveTick(); });
+  }
 }
 
 /* ---------- 导出 ---------- */
@@ -3177,6 +4247,7 @@ function toggleExpQ(e) {
 }
 function openExport() {
   if (!cur) return;
+  pauseAll();
   const box = document.getElementById('expchks'); box.innerHTML = '';
   camSort(curVids()).forEach(v => {
     const lb = document.createElement('label'); lb.className = 'expitem';
@@ -3262,6 +4333,18 @@ function uploadFont(inp) {
   }).catch(() => toast('上传失败')).finally(() => { inp.value = ''; loadFontInfo(true).then(paintFont); });
 }
 function expChk(on) { [...document.querySelectorAll('#expchks input')].forEach(c => c.checked = on); }
+async function downloadExport(url) {
+  try {
+    const response = await fetch(url, {method: 'HEAD', cache: 'no-store'});
+    if (!response.ok) {
+      toast(response.status === 503 ? '所选画质暂不可用' : '下载失败');
+      return;
+    }
+    location.href = url;
+  } catch (e) {
+    toast('下载失败');
+  }
+}
 function doExport() {
   if (!cur) return;
   const sel = [...document.querySelectorAll('#expchks input:checked')].map(c => c.value);
@@ -3275,7 +4358,10 @@ function doExport() {
   closeExport();
   if (sel.length === 1 && !wm) {
     const v = curVids().find(x => x.cam === sel[0]);
-    if (v) location.href = '/dl?path=' + encodeURIComponent('/archive/' + v.url.replace(/^\/media\//, '')) + (expQ !== 'orig' ? '&q=' + expQ : '');
+    if (v) {
+      const query = new URLSearchParams({path: v.url.replace(/^\/media\//, '/archive/'), q: expQ});
+      downloadExport('/dl?' + query);
+    }
     return;
   }
   // 带水印/多路一律交给设备端 ffmpeg: 直接出标准 H.264 mp4,
@@ -3459,123 +4545,284 @@ function doExportZip() {
   if (!cur) return;
   const sel = [...document.querySelectorAll('#expchks input:checked')].map(c => c.value);
   if (!sel.length) { toast('请至少选择一路'); return; }
+  const query = new URLSearchParams({cams: sel.join(','), clip: currentClip().key, q: expQ});
   closeExport();
-  location.href = '/api/export/' + encodeURIComponent(currentCat) + '/' + encodeURIComponent(cur.name) + '?cams=' + encodeURIComponent(sel.join(',')) + (expQ !== 'orig' ? '&q=' + expQ : '');
+  downloadExport('/api/export/' + encodeURIComponent(libraryCat) + '/' + encodeURIComponent(cur.name) + '?' + query);
 }
-document.getElementById('startmask').addEventListener('click', playAll);
-function tryPlay(v) { const p = v.play(); if (p && p.catch) p.catch(() => {}); }
-function playAll() {
-  const vs = [...document.querySelectorAll('#vgrid video')];
-  // iOS/微信只允许在用户手势里逐个调 play(); 同步循环内依次触发
-  vs.forEach(tryPlay);
-  const m = document.getElementById('startmask');
-  if (m) m.classList.remove('show');
-  const pp = document.getElementById('ppbtn'); if (pp) pp.textContent = '⏸';
+function updateControls() {
+  const playing = wantedPlay && !atEnd;
+  byId('ppicon').setAttribute('href', playing ? '#i-pause' : '#i-play');
+  byId('ppbtn').setAttribute('aria-label', playing ? '暂停' : '播放');
+  byId('spdbtn').textContent = baseRate + '×';
+  if (!curClips.length) return;
+  const wall = currentClip().start + clipOffset;
+  if (!editingSeek) {
+    byId('seek').value = wall - curClips[0].start;
+    byId('track-bands').style.setProperty('--played', byId('seek').value / byId('seek').max * 100 + '%');
+    const label = wallLabel(currentClip().sourceStart + clipOffset);
+    byId('ptime').textContent = label;
+    byId('seek').setAttribute('aria-valuetext', label);
+  }
+  if (liveMode) {
+    byId('lv-status').textContent = followLatest ? (atEnd ? '等待新录像' : '跟随最新') : '回看中';
+    byId('lv-back').disabled = followLatest && curClipIx === curClips.length - 1;
+  }
 }
-function pauseAll() {
-  document.querySelectorAll('#vgrid video').forEach(v => v.pause());
-  const pp = document.getElementById('ppbtn'); if (pp) pp.textContent = '▶';
+
+function seekWall(target, direction = 1) {
+  if (!curClips.length) return;
+  if (liveMode) followLatest = false;
+  let {ix, offset} = locateWall(target);
+  if (ix > 0 && curClips[ix].start > target) {
+    const previous = curClips[ix - 1];
+    const gap = timelineGapSummary(curClips[ix]);
+    if (gap) toast('跳过 ' + gap.label);
+    if (direction < 0) {
+      ix -= 1;
+      offset = Math.max(0, previous.length - 0.1);
+    }
+  }
+  const videos = activeVideos();
+  const group = curClips[ix];
+  const shown = camSel === 'all' ? group.vids : group.vids.filter(v => v.cam === camSel);
+  const available = shown.filter(v => !videoDuration(v) || offset < v.duration);
+  const canReuse = ix === curClipIx && videos.length && available.length === videos.length &&
+    videos.every(v => !v.error && !v.dataset.loadFailed && available.some(f => f.cam === v.dataset.cam));
+  if (canReuse) {
+    clipOffset = offset; atEnd = false; lastTick = performance.now();
+    resetPlaybackClock();
+    dropPrefetch();
+    videos.forEach(v => { v.dataset.previewLead = String(previewLeadForQuality()); });
+    const needsParts = videos.some(v => v.dataset.mse ? !hasPreviewLead(v, offset)
+      : v.dataset.parts && !hasBufferedTime(v, offset));
+    if (wantedPlay && camSel === 'all' && needsParts) {
+      overviewPosition = offset;
+      videos.forEach(v => v.pause());
+    }
+    if (camSel === 'all' && overviewPosition !== null) overviewPosition = offset;
+    videos.forEach(v => {
+      v.dataset.seekRevision = String((Number(v.dataset.seekRevision) || 0) + 1);
+      v.dataset.seekTarget = String(offset);
+      if (v.readyState < 1 || v.dataset.positioning) return;
+      const status = v.parentElement.querySelector('.cload');
+      if (v.dataset.mse && !hasPreviewLead(v, offset)) {
+        v.dataset.startBuffer = '1';
+        v.pause();
+        status.classList.add('buffering');
+        status.textContent = '缓冲中…';
+      } else delete v.dataset.startBuffer;
+      const target = bufferedPosition(v, Math.min(offset, v.duration));
+      v.dataset.seekTarget = String(target);
+      v.currentTime = target;
+      status.hidden = !v.dataset.startBuffer;
+      if (wantedPlay) tryPlay(v);
+    });
+    updateControls(); updateHud(offset);
+  } else showClip(ix, offset, false, true);
 }
-let baseRate = 1;
-/* 单格自救: 四格同播时偶尔有一格的连接在 frp 隧道里卡死 (readyState 长期为 1/0,
-   其余几格正常播放)。7 秒还拿不到数据就给这一格重发请求 —— 浏览器会换一条新连接,
-   卡死的旧连接由服务端的断开感知回收。每格每次渲染最多自救一次, 防止死循环。 */
-function kickStalled() {
-  const vs = [...document.querySelectorAll('#vgrid video')];
-  if (vs.length < 2) return;
-  if (!vs.some(v => v.readyState >= 3 && !v.paused)) {
-    vs.forEach(v => { v._st = 0; });      // 全体都没在播 (刚打开/暂停), 不算卡死
+
+function advanceClip() {
+  const old = currentClip(), next = curClips[curClipIx + 1];
+  if (!next) {
+    atEnd = true; clipOffset = old.length;
+    activeVideos().forEach(v => v.pause());
+    if (!(liveMode && followLatest)) wantedPlay = false;
+    updateControls(); return;
+  }
+  showClip(curClipIx + 1, 0, true);
+}
+
+function tick() {
+  if (!curClips.length || atEnd) return;
+  const now = performance.now(), elapsed = (now - lastTick) / 1000;
+  lastTick = now;
+  const videos = activeVideos();
+  if (wantedPlay && camSel === 'all' && !syncOverview(videos)) {
+    updateControls(); updateHud(clipOffset);
     return;
   }
-  const now = Date.now();
-  vs.forEach(v => {
-    if (v.readyState >= 2 || v.ended) { v._st = 0; return; }
-    if (!v._st) { v._st = now; return; }
-    if (now - v._st > 7000 && !v._re) {
-      v._re = 1;
-      const ct = vs[0].currentTime || v.currentTime || 0;
-      v.src = v.src;
-      v.addEventListener('loadedmetadata', () => {
-        try { if (ct) v.currentTime = Math.min(ct, Math.max(0, (v.duration || 0) - 0.4)); } catch (e) {}
-        tryPlay(v);
-      }, { once: true });
-      tryPlay(v);
+  const advancing = [];
+  for (const v of videos) {
+    if (v.dataset.startBuffer) tryPlay(v);
+    const previous = videoTimes.get(v), time = v.currentTime;
+    videoTimes.set(v, time);
+    if (wantedPlay && !v.paused && !v.ended && !v.error && !v.seeking && !v.dataset.positioning &&
+        v.readyState >= 2 && previous !== undefined && time > previous + 0.001 && time + 0.12 >= clipOffset) {
+      advancing.push(v);
     }
+  }
+  const lead = advancing.find(v => v === clockVideo) || advancing.find(v => v.readyState >= 3) || advancing[0];
+  if (lead) {
+    clockVideo = lead;
+    clipOffset = Math.max(clipOffset, lead.currentTime);
+    lead.playbackRate = baseRate;
+    for (const v of videos) {
+      if (v === lead || v.ended || v.error || v.seeking || v.readyState < 2 || v.dataset.positioning) continue;
+      const diff = v.currentTime - clipOffset;
+      if (Math.abs(diff) > 0.45) {
+        const target = Math.min(clipOffset, v.duration || clipOffset);
+        if (v.dataset.mse ? hasPreviewLead(v, target) : (!v.dataset.parts || hasBufferedTime(v, target))) {
+          v.currentTime = target;
+          v.dataset.seekTarget = String(target);
+        }
+      }
+      v.playbackRate = baseRate * (Math.abs(diff) > 0.06 && Math.abs(diff) <= 0.45 ? 1 - diff * 0.2 : 1);
+    }
+  } else if (wantedPlay) {
+    const ended = videos.filter(v => v.ended);
+    const endedAt = ended.reduce((pos, v) => Math.max(pos, v.currentTime), 0);
+    // The source and its 24 fps preview can end on different frames. A camera
+    // still waiting for its URL must not pin the clock at that last frame.
+    const onlyWaiting = videos.every(v => v.ended || v.error || v.dataset.positioning);
+    if (ended.length === videos.length || (onlyWaiting && ended.length && currentClip().length - endedAt <= 0.1)) {
+      clipOffset = Math.max(endedAt, clipOffset + elapsed * baseRate);
+    }
+  }
+  const remaining = currentClip().length - clipOffset;
+  if (wantedPlay && remaining <= 0.015) {
+    if (!editingSeek) advanceClip();
+    return;
+  }
+  if (wantedPlay) prepareNext();
+  updateControls(); updateHud(clipOffset);
+}
+
+function playAll() {
+  wantedPlay = true; lastTick = performance.now();
+  byId('startmask').classList.remove('show');
+  if (!curClips.length) { updateControls(); return; }
+  if (atEnd) { showClip(liveMode && followLatest ? curClips.length - 1 : 0, 0); return; }
+  activeVideos().forEach(tryPlay); updateControls();
+}
+
+function pauseAll() {
+  if (curClips.length) clipOffset = playbackOffset();
+  wantedPlay = false;
+  dropPrefetch();
+  updateDemand();
+  if (liveMode) followLatest = false;
+  activeVideos().forEach(v => {
+    v.pause();
+    if (v.dataset.startBuffer && v.readyState >= 2 && !v.seeking) v.parentElement.querySelector('.cload').hidden = true;
   });
+  updateControls();
 }
-function setSpeed(s) {
-  const r = parseFloat(s);
-  baseRate = r;
-  document.querySelectorAll('#vgrid video').forEach(v => v.playbackRate = r);
-  const b = document.getElementById('spdbtn'); if (b) b.textContent = r + 'x';
-}
-const SPEEDS = [0.5, 1, 2, 4];
+
 function cycleSpeed() {
-  const now = parseFloat(document.getElementById('spdbtn').textContent) || 1;
-  setSpeed(SPEEDS[(SPEEDS.indexOf(now) + 1) % SPEEDS.length]);
+  const speeds = [0.5, 1, 2, 4];
+  baseRate = speeds[(speeds.indexOf(baseRate) + 1) % speeds.length];
+  activeVideos().forEach(v => v.playbackRate = baseRate); updateControls();
 }
-function togglePlay() {
-  const vs = [...document.querySelectorAll('#vgrid video')];
-  if (!vs.length) return;
-  if (vs.some(v => v.paused)) playAll(); else pauseAll();
-}
-function tick() {
-  kickStalled();
-  const vs = [...document.querySelectorAll('#vgrid video')];
-  if (!vs.length || !vs[0].duration) return;
-  const t = vs[0].currentTime;
-  vs.forEach((v, i) => {
-    if (i && v.paused && !vs[0].paused && !v.ended) {
-      if (v.readyState >= 2) tryPlay(v);   // 还在缓冲(waiting)的视频不要反复强拉, 会卡
-      return;
-    }
-    if (vs[0].paused || v.paused || v.ended) return;
-    const d = v.currentTime - t;
-    if (Math.abs(d) > 1.2) { v.currentTime = t; }              // 大漂移才硬seek
-    else if (Math.abs(d) > 0.05) {                             // 小漂移: 微调倍速平滑收敛, 不跳帧不抽搐
-      const m = Math.min(1.12, Math.max(0.88, 1 - d / 2));
-      v.playbackRate = baseRate * m;
-    } else if (v.playbackRate !== baseRate) {
-      v.playbackRate = baseRate;
-    }
-  });
-  document.getElementById('seek').value = Math.round(t / vs[0].duration * 1000);
-  document.getElementById('ptime').textContent = fmtSec(t);
-  document.getElementById('ic-dur').textContent = fmtSec(vs[0].duration);
-  updateHud(t);
-}
+
 function fmtSec(x) {
-  x = Math.max(0, Math.floor(x || 0));
-  return String(Math.floor(x / 60)).padStart(2, '0') + ':' + String(x % 60).padStart(2, '0');
+  const seconds = Math.max(0, Math.floor(x || 0));
+  return String(Math.floor(seconds / 60)).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0');
 }
-let scrubT = 0;
-function applySeekAll(frac) {
-  const vs = [...document.querySelectorAll('#vgrid video')];
-  if (!vs.length || !vs[0].duration) return;
-  const tt = frac / 1000 * vs[0].duration;
-  vs.forEach(v => { try { v.currentTime = tt; } catch (e) {} });
+
+function closePlayback() {
+  ++sessionId; ++renderId;
+  releaseDemand();
+  if (liveStream) liveStream.close();
+  liveStream = null; liveDirty = false; liveSignature = '';
+  if (indexRequest) indexRequest.abort();
+  if (clipRequest) clipRequest.abort();
+  if (gapRequest) gapRequest.abort();
+  gapSignature = ''; gapEvidence.clear();
+  clearInterval(syncTimer); clearInterval(liveTimer);
+  liveReading = false; atEnd = false; wantedPlay = false; editingSeek = false; overviewPosition = null;
+  resetPlaybackClock();
+  activeVideos().forEach(v => { v.onended = v.onerror = null; releaseVideo(v); });
+  dropPrefetch();
+  cur = null; curClips = []; triggerTime = null; triggerSource = null; TEL = null;
+  playerRecording = null;
+  updateRecordingActions();
+  seekPointerStart = null; byId('seek').removeAttribute('title');
+  byId('cambar').replaceChildren(); byId('track-bands').replaceChildren();
+  byId('ic-rows').replaceChildren(); byId('ic-rows').classList.remove('open');
+  byId('tpanel').classList.remove('show'); byId('clipbar').replaceChildren();
+  byId('ptime').textContent = '--:--:--'; byId('track-end').textContent = '';
+  byId('ic-fold').textContent = '片段详情';
+  byId('startmask').classList.remove('show');
+  byId('ppbtn').disabled = true;
+  updateControls();
 }
-document.getElementById('seek').oninput = function () {
-  const now = Date.now();
-  if (now - scrubT < 250) return;   // 拖动时节流, 避免 4-6 路同时连发 seek 卡顿
-  scrubT = now;
-  applySeekAll(+this.value);
-};
-document.getElementById('seek').onchange = function () {
-  scrubT = 0;
-  applySeekAll(+this.value);   // 松手必须对齐全部, 否则节流会吞掉最后位置
-};
+
 function closePlayer() {
-  pauseAll();
-  if (syncTimer) clearInterval(syncTimer);
-  [...document.querySelectorAll('#vgrid .vcell')].forEach(c => { c.classList.remove('focused'); c.style.display = ''; });
-  document.getElementById('player').classList.remove('open');
+  closeExport(); closeQ();
+  if (!byId('player').classList.contains('open')) return;
+  if (document.fullscreenElement === document.documentElement) document.exitFullscreen().catch(() => {});
+  closePlayback(); liveMode = false;
+  byId('vgrid').replaceChildren();
+  byId('player').classList.remove('open', 'expanded', 'library-open');
+  byId('livep').hidden = true;
+  document.body.classList.remove('watching');
+  const liveTab = byId('tab-live');
+  if (liveTab && liveTab.classList.contains('active')) {
+    liveTab.classList.remove('active');
+    const ix = Object.keys(data).indexOf(currentCat);
+    if (ix >= 0) byId('tabs').children[ix].classList.add('active');
+  }
+  render(currentCat); window.scrollTo(0, listScroll);
 }
+
+byId('ppbtn').onclick = () => wantedPlay && !atEnd ? pauseAll() : playAll();
+byId('startmask').onclick = playAll;
+byId('skip-back').onclick = () => { if (cur) seekWall(currentClip().start + playbackOffset() - 10, -1); };
+byId('skip-next').onclick = () => { if (cur) seekWall(currentClip().start + playbackOffset() + 10); };
+byId('trigger-marker').onclick = () => { if (triggerTime !== null) seekWall(triggerTime); };
+byId('seek').onpointerdown = event => { seekPointerStart = event.clientX; editingSeek = true; dropPrefetch(); };
+byId('seek').onpointermove = function(event) {
+  this.title = timelineGapAt(event.clientX)?.title || '';
+};
+byId('seek').onpointerleave = function() { this.removeAttribute('title'); };
+byId('seek').onpointerup = event => {
+  if (seekPointerStart !== null && Math.abs(event.clientX - seekPointerStart) < 4) {
+    const gap = timelineGapAt(event.clientX);
+    if (gap) {
+      const label = gap.title;
+      // Native range controls can omit click on touch; wait until their change event finishes.
+      setTimeout(() => toast(label), 0);
+    }
+  }
+  seekPointerStart = null;
+};
+function finishSeek() {
+  editingSeek = false;
+  // Flush a refresh deferred during the gesture, including manual-only live mode.
+  setTimeout(() => { if (liveMode && liveDirty && !editingSeek) liveTick(); }, 0);
+}
+window.addEventListener('pointerup', finishSeek);
+window.addEventListener('pointercancel', () => { finishSeek(); seekPointerStart = null; });
+byId('seek').oninput = function() {
+  if (!curClips.length) return;
+  editingSeek = true;
+  byId('track-bands').style.setProperty('--played', this.value / this.max * 100 + '%');
+  const time = wallLabel(recordingTime(curClips[0].start + Number(this.value)));
+  byId('ptime').textContent = time; this.setAttribute('aria-valuetext', time);
+};
+byId('seek').onchange = function() {
+  editingSeek = false;
+  if (curClips.length) seekWall(curClips[0].start + Number(this.value));
+  finishSeek();
+};
+byId('seek').onblur = finishSeek;
+document.addEventListener('fullscreenchange', () => requestAnimationFrame(layoutPlayer));
+byId('screenbtn').onclick = async () => {
+  const player = byId('player');
+  if (document.fullscreenElement) { await document.exitFullscreen(); return; }
+  const root = document.documentElement;
+  if (root.requestFullscreen) {
+    try { await root.requestFullscreen(); return; } catch (e) {}
+  }
+  player.classList.toggle('expanded'); layoutPlayer();
+};
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  const f = document.querySelector('#vgrid .vcell.focused');
-  if (f) { focusCell(f); return; }
-  closeExport(); closePlayer(); closePanel();
+  if (storageHelpButton) { const button = storageHelpButton; storageHelpClose(); button.focus(); return; }
+  if (byId('expp').classList.contains('open')) { closeExport(); return; }
+  if (document.fullscreenElement) return;
+  if (byId('player').classList.contains('expanded')) { byId('player').classList.remove('expanded'); layoutPlayer(); return; }
+  closePlayer(); closePanel();
 });
 
 /* ---------- 设置面板 ---------- */
@@ -3589,17 +4836,188 @@ function doLogout() {
   location.href = '/logout';
 }
 function stab(which) {
-  ['files', 'audio', 'wraps', 'notify', 'auth', 'lang', 'skin', 'brand', 'update'].forEach(k => {
+  storageHelpClose();
+  document.getElementById('panel').classList.add('settings-detail');
+  document.getElementById('st-archive').classList.remove('active');
+  ['files', 'storage', 'audio', 'wraps', 'notify', 'auth', 'lang', 'skin', 'brand', 'update'].forEach(k => {
     const b = document.getElementById('st-' + k), t = document.getElementById('tab-' + k);
     if (b) b.classList.toggle('active', k === which);
     if (t) t.style.display = k === which ? '' : 'none';
   });
+  document.getElementById('settings-title').textContent = document.getElementById('st-' + which).textContent;
+  document.querySelector('.settings-content').scrollTop = 0;
+  if (which === 'audio') refreshAudio();
   if (which === 'update') { otaCheck(false); autoLoad(); }
   if (which === 'notify') ntLoad();
   if (which === 'auth') pwLoad();
   if (which === 'wraps') refreshWraps();
   if (which === 'brand') refreshBrand();
-  if (which === 'skin') applyStyle(localStorage.getItem(STYLE_KEY) || 'default');
+  if (which === 'skin') { applyStyle(localStorage.getItem(STYLE_KEY) || 'default'); refreshSkins(); }
+  if (which === 'storage') storageLoad();
+}
+
+const STORAGE_HELP = {
+  total: '设备识别到的文件系统容量。可分配空间已扣除其他文件和文件系统保留量。1 GiB = 1024³ 字节，通常小于存储卡包装上的 GB 数值。',
+  usb: '车机可用的录像 U 盘容量，支持 1～128 GiB。调整会清空车机 U 盘中的全部内容，盒子归档保留；期间车机暂停录像。',
+  archive: '哨兵、手动保存、最近一小时和行车记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。',
+  drive: '行车记录的容量上限，已包含在归档总容量内。超限时从最旧行程开始清理，保留最新片段。',
+  reserve: '空间不足时，希望清理后恢复的空闲容量，不创建独立分区。增大此值可能使旧归档更早被清理。',
+  minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间。这条保护线不另占容量，不能高于安全预留空间。'
+};
+let storageData = null, storageTimer = null, storageHelpButton = null, storageRequest = 0;
+function storageHelpClose() {
+  document.getElementById('storage-tip').hidden = true;
+  if (storageHelpButton) storageHelpButton.setAttribute('aria-expanded', 'false');
+  storageHelpButton = null;
+}
+document.querySelectorAll('.storage-help').forEach(button => button.addEventListener('click', () => {
+  const wasOpen = storageHelpButton === button;
+  storageHelpClose();
+  if (wasOpen) return;
+  const tip = document.getElementById('storage-tip');
+  tip.textContent = STORAGE_HELP[button.dataset.help];
+  tip.hidden = false;
+  const rect = button.getBoundingClientRect();
+  tip.style.left = Math.max(12, Math.min(rect.right - tip.offsetWidth, innerWidth - tip.offsetWidth - 12)) + 'px';
+  tip.style.top = Math.max(12, rect.bottom + tip.offsetHeight + 18 < innerHeight ? rect.bottom + 6 : rect.top - tip.offsetHeight - 6) + 'px';
+  button.setAttribute('aria-expanded', 'true');
+  storageHelpButton = button;
+}));
+document.addEventListener('click', event => {
+  if (!event.target.closest('.storage-help') && !document.getElementById('storage-tip').contains(event.target)) storageHelpClose();
+});
+window.addEventListener('resize', storageHelpClose);
+document.querySelector('.settings-content').addEventListener('scroll', storageHelpClose);
+function storageDisable(disabled) {
+  document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize').forEach(element => element.disabled = disabled);
+}
+function storageMessage(message, resize = false) {
+  const output = document.getElementById('storage-msg');
+  document.getElementById(resize ? 'storage-resize-status' : 'storage-quota-status').append(output);
+  output.textContent = message;
+}
+async function storageFetch(path, body) {
+  const options = body ? {method:'POST', headers:{'Content-Type':'application/json', 'X-TSF-Storage':'1'}, body:JSON.stringify(body)} : {cache:'no-store'};
+  const response = await fetch(path, options);
+  const result = await response.json();
+  if (!result.ok && !result.confirm) throw new Error(result.msg || '操作失败');
+  return result;
+}
+function storageRenderAllocation() {
+  const plan = document.getElementById('storage-plan');
+  const budgetText = document.getElementById('storage-budget');
+  plan.hidden = !storageData;
+  budgetText.textContent = '';
+  budgetText.dataset.error = 'false';
+  if (!storageData) return;
+  const values = {};
+  for (const name of ['usb', 'archive', 'drive', 'reserve', 'minimum']) {
+    const input = document.getElementById('storage-' + name);
+    if (!input.value || !input.validity.valid) {
+      plan.hidden = true;
+      budgetText.dataset.error = 'true';
+      budgetText.textContent = '请输入有效的整数容量';
+      return;
+    }
+    values[name] = Number(input.value);
+  }
+  const budget = storageData.disk.budget_bytes / 1073741824;
+  values.cache = storageData.disk.cache_gib;
+  const allocated = values.usb + values.archive + values.reserve + values.cache;
+  values.free = Math.max(0, budget - allocated);
+  const scale = Math.max(budget, allocated, 1);
+  document.getElementById('storage-available').textContent = budget.toFixed(1);
+  document.getElementById('storage-cache-legend').hidden = values.cache === 0;
+  for (const name of ['usb', 'archive', 'reserve', 'cache', 'free']) {
+    document.querySelector('[data-storage-segment="' + name + '"]').style.width = values[name] / scale * 100 + '%';
+    document.querySelector('[data-storage-value="' + name + '"]').textContent = values[name].toFixed(1) + ' GiB';
+  }
+  document.getElementById('storage-bar').setAttribute('aria-label', '容量分配：车机 U 盘 ' + values.usb + '，盒子归档 ' + values.archive + '，安全预留 ' + values.reserve + '，缓存预算 ' + values.cache + '，未分配 ' + values.free.toFixed(1) + ' GiB');
+  let message = '';
+  if (values.drive > values.archive) message = '行车记录上限不能超过归档总上限';
+  else if (values.minimum > values.reserve) message = '暂停同步保护线不能高于安全预留';
+  else if (allocated > budget) message = '超过可分配容量 ' + (allocated - budget).toFixed(1) + ' GiB';
+  budgetText.dataset.error = String(Boolean(message));
+  budgetText.textContent = message || '还可分配 ' + values.free.toFixed(1) + ' GiB';
+}
+function storageRenderUsage() {
+  const {disk, values, usb_gib} = storageData;
+  for (const [name, used, limit] of [['usb', disk.usb_used_bytes, usb_gib], ['archive', disk.archive_bytes, values.archive_gib], ['drive', disk.drive_bytes, values.drive_gib]]) {
+    const amount = used == null ? '—' : (used / 1073741824).toFixed(1);
+    document.getElementById('storage-used-' + name).textContent = amount + ' / ' + limit + ' GiB';
+    const meter = document.getElementById('storage-meter-' + name);
+    meter.hidden = used == null;
+    meter.value = limit > 0 ? Math.min(100, used / 1073741824 / limit * 100) : 0;
+  }
+  document.getElementById('storage-used-free').textContent = (disk.free_bytes / 1073741824).toFixed(1) + ' GiB';
+}
+document.querySelectorAll('#tab-storage input').forEach(input => input.addEventListener('input', storageRenderAllocation));
+async function storageLoad() {
+  const request = ++storageRequest;
+  clearTimeout(storageTimer);
+  storageDisable(true);
+  storageMessage('正在读取存储分配…');
+  try {
+    const data = await storageFetch('/api/storage');
+    if (request !== storageRequest) return;
+    storageData = data;
+    document.getElementById('storage-total').textContent = (data.disk.total_bytes / 1073741824).toFixed(1);
+    document.getElementById('storage-usb').value = data.usb_gib;
+    for (const [id, key] of [['archive','archive_gib'],['drive','drive_gib'],['reserve','free_target_gib'],['minimum','free_min_gib']]) document.getElementById('storage-' + id).value = data.values[key];
+    storageRenderAllocation();
+    storageRenderUsage();
+    storageShowJob(data.job);
+  } catch (error) { if (request === storageRequest) { storageData = null; storageRenderAllocation(); storageMessage(error.message); } }
+}
+function storageShowJob(job) {
+  const busy = ['running', 'recovery'].includes(job.state);
+  storageDisable(busy || !storageData);
+  storageMessage(job.state === 'running' ? job.message + ' ' + job.percent + '%' : job.message || '', true);
+  if (job.state === 'running') storageTimer = setTimeout(storagePoll, 1500);
+}
+async function storagePoll() {
+  if (!document.getElementById('panel').classList.contains('open') || !document.getElementById('st-storage').classList.contains('active')) return;
+  try {
+    const data = await storageFetch('/api/storage/job');
+    if (data.job.state === 'running') storageShowJob(data.job);
+    else await storageLoad();
+  } catch (error) { storageMessage(error.message, true); storageTimer = setTimeout(storagePoll, 3000); }
+}
+async function storageSave() {
+  if (!storageData) return;
+  const values = {};
+  for (const [id, key] of [['archive','archive_gib'],['drive','drive_gib'],['reserve','free_target_gib'],['minimum','free_min_gib']]) {
+    const input = document.getElementById('storage-' + id);
+    if (!input.reportValidity()) return;
+    values[key] = Number(input.value);
+  }
+  storageDisable(true);
+  storageMessage('正在保存…');
+  try {
+    const body = {values, revision:storageData.revision};
+    let result = await storageFetch('/api/storage', body);
+    if (result.confirm) {
+      let message = result.msg;
+      if (result.archive_over_gib || result.drive_over_gib) message += '\n当前总归档超出 ' + result.archive_over_gib + ' GiB，行车记录超出 ' + result.drive_over_gib + ' GiB（包含在总量内）。';
+      if (!confirm(message)) { storageMessage('已取消'); return; }
+      result = await storageFetch('/api/storage', {...body, confirmed:true});
+    }
+    storageData = result;
+    storageRenderAllocation();
+    storageRenderUsage();
+    storageMessage('归档设置已保存');
+  } catch (error) { storageMessage(error.message); }
+  finally { storageDisable(false); }
+}
+async function storageResize() {
+  if (!storageData || !document.getElementById('storage-usb').reportValidity()) return;
+  if (!confirm('调整容量将清空车机 U 盘中的全部录像和其他文件，无法撤销。盒子归档保留。\n调整期间车机暂停录像，请保持供电。确认清空并继续？')) return;
+  storageDisable(true);
+  storageMessage('正在调整容量…', true);
+  try {
+    const result = await storageFetch('/api/storage/resize', {usb_gib:Number(document.getElementById('storage-usb').value), revision:storageData.revision, clear_confirmed:true});
+    storageShowJob(result.job);
+  } catch (error) { storageMessage(error.message, true); storageDisable(false); }
 }
 
 /* ---------- 飞书推送 ---------- */
@@ -3882,15 +5300,28 @@ setTimeout(() => {
     }
   }).catch(() => {});
 }, 5000);
-document.getElementById('gear').onclick = () => {
+function openPanel(which) {
+  closePlayer();
   document.getElementById('mask').classList.add('open');
   document.getElementById('panel').classList.add('open');
-  stab('files');
-  refreshSkins(); refreshAudio(); refreshFiles();
-};
+  document.body.classList.add('settings-open');
+  document.getElementById('gear').setAttribute('aria-expanded', 'true');
+  stab(which || 'storage');
+  if (!which && matchMedia('(max-width:600px)').matches) settingsBack();
+}
+document.getElementById('gear').onclick = () => openPanel();
+function settingsBack() {
+  storageHelpClose();
+  document.getElementById('panel').classList.remove('settings-detail');
+}
 function closePanel() {
+  storageHelpClose();
+  clearTimeout(storageTimer);
+  ++storageRequest;
   document.getElementById('mask').classList.remove('open');
   document.getElementById('panel').classList.remove('open');
+  document.body.classList.remove('settings-open');
+  document.getElementById('gear').setAttribute('aria-expanded', 'false');
 }
 
 async function uploadFile(input, url, fields) {
@@ -4031,6 +5462,7 @@ let area = 'usb';  // 'usb' = 车机U盘镜像, 'archive' = 归档区
 let fmSel = new Set();      // 已勾选的完整路径
 let fmPending = null;       // 等待填目标目录的移动/复制任务
 let usbAttached = false;    // 车机U盘是否处于网页管理(已挂载)状态
+let browseRequest = 0;
 function fmtSize(n) {
   if (n < 1024) return n + ' B';
   if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
@@ -4210,6 +5642,9 @@ document.getElementById('wraps-file').onchange = async function () {
 };
 function switchArea(a) {
   area = a;
+  document.getElementById('st-files').classList.toggle('active', a === 'usb');
+  document.getElementById('st-archive').classList.toggle('active', a === 'archive');
+  document.getElementById('settings-title').textContent = document.getElementById(a === 'usb' ? 'st-files' : 'st-archive').textContent;
   document.getElementById('area-usb').classList.toggle('active', a === 'usb');
   document.getElementById('area-archive').classList.toggle('active', a === 'archive');
   document.getElementById('usb-hint').style.display = a === 'usb' ? '' : 'none';
@@ -4249,11 +5684,12 @@ function goDir(d) {
     refreshFiles(d);
   } else {
     d = (d || '').trim().replace(/\/+$/, '') || '/archive';
-    if (!d.startsWith('/archive')) { toast('❌ 仅支持 /archive 内的路径'); return; }
+    if (d !== '/archive' && !d.startsWith('/archive/')) { toast('❌ 仅支持 /archive 内的路径'); return; }
     refreshFiles(d);
   }
 }
 async function refreshFiles(dir) {
+  const request = ++browseRequest;
   if (dir !== undefined) curDir = dir;
   fmSel.clear();
   fmDestCancel();
@@ -4264,6 +5700,7 @@ async function refreshFiles(dir) {
   let j;
   if (area === 'usb') {
     j = await (await fetch('/api/usb/browse?dir=' + encodeURIComponent(curDir))).json();
+    if (request !== browseRequest) return;
     statusEl.style.display = 'block';
     statusEl.innerHTML = usbStatusHtml(j.attached, j.msg);
     usbAttached = !!j.attached;
@@ -4271,11 +5708,12 @@ async function refreshFiles(dir) {
     nav.style.display = 'block';
   } else {
     j = await (await fetch('/api/browse?dir=' + encodeURIComponent(curDir))).json();
+    if (request !== browseRequest) return;
     statusEl.style.display = 'none';
     if (!j.ok) { toast('❌ ' + (j.msg || '目录不可访问')); return; }
     nav.style.display = 'block';
   }
-  curDir = area === 'usb' ? j.dir : j.dir;
+  curDir = area === 'usb' ? j.dir : j.virtual_dir;
   document.getElementById('dest-dir').value = curDir;
   crumb.innerHTML = '';
   const mkLink = (label, target, folder) => {
@@ -4349,8 +5787,11 @@ async function refreshFiles(dir) {
 async function delFile(p) {
   if (!confirm('删除 ' + (area === 'usb' ? 'U盘/' : '') + p + ' ?')) return;
   const url = area === 'usb' ? '/api/usb?path=' : '/api/file?path=';
-  await fetch(url + encodeURIComponent(p), { method: 'DELETE' });
-  toast('已删除'); refreshFiles();
+  try {
+    const result = await (await fetch(url + encodeURIComponent(p), { method: 'DELETE' })).json();
+    toast(result.ok ? '已删除' : result.msg || '删除失败');
+    if (result.ok) refreshFiles();
+  } catch (error) { toast('删除结果未确认，请刷新后查看'); }
 }
 document.getElementById('anyfile-file').onchange = async function () {
   const url = area === 'usb' ? '/api/upload/usb' : '/api/upload/file';
@@ -4379,24 +5820,100 @@ def safe_name(name):
     return name if re.match(r'^[\w\-. ]{1,80}$', name) else None
 
 
-def list_events():
+@lru_cache(maxsize=4096)
+def movie_duration(path, size, mtime_ns):
+    """Read only MP4 box headers; size and modification time invalidate the cache."""
+    def box(stream, pos, limit):
+        stream.seek(pos)
+        length, kind = struct.unpack(">I4s", stream.read(8))
+        header = 8
+        if length == 1:
+            length, = struct.unpack(">Q", stream.read(8))
+            header = 16
+        if length == 0:
+            length = limit - pos
+        if length < header or pos + length > limit:
+            raise ValueError("invalid MP4 box")
+        return kind, pos + header, pos + length
+
+    try:
+        with open(path, "rb") as stream:
+            pos, end = 0, size
+            while pos + 8 <= end:
+                kind, payload, nxt = box(stream, pos, end)
+                if kind == b"moov":
+                    pos, end = payload, nxt
+                    while pos + 8 <= end:
+                        kind, payload, pos = box(stream, pos, end)
+                        if kind == b"mvhd":
+                            stream.seek(payload)
+                            version = stream.read(1)
+                            if version not in (b"\x00", b"\x01"):
+                                return None
+                            wide = version == b"\x01"
+                            stream.seek(payload + (20 if wide else 12))
+                            scale, count = struct.unpack(">IQ" if wide else ">II",
+                                                         stream.read(12 if wide else 8))
+                            if scale and 0 < count < (2 ** (64 if wide else 32) - 1):
+                                return count / scale
+                            return None
+                    return None
+                pos = nxt
+    except (OSError, ValueError, struct.error):
+        pass
+    return None
+
+
+def drive_groups(events):
+    """Group existing drive clips by recording continuity and starting date."""
+    groups = []
+    for event in sorted(events, key=lambda item: item["name"]):
+        start = _ev_dt(event["name"])
+        duration = max((video.get("duration") or 0 for video in event["videos"]), default=0) or 60
+        end = start + datetime.timedelta(seconds=duration) if start else None
+        previous = groups[-1] if groups else None
+        if (previous is None or start is None or previous["end"] is None
+                or event["name"][:10] != previous["events"][0]["name"][:10]
+                or start > previous["end"] + datetime.timedelta(seconds=DRIVE_MAX_GAP)):
+            groups.append({"events": [event], "end": end})
+        else:
+            previous["events"].append(event)
+            previous["end"] = max(previous["end"], end)
+    return list(reversed(groups))
+
+
+def list_events(category=None, event=None, durations=False, trips=False):
     out = {}
-    for cat in CATS:
+    try:
+        locks = recording_locks()
+        lock_unknown = False
+    except ValueError:
+        locks, lock_unknown = set(), True
+    for cat in ([category] if category in CATS else CATS):
         base = os.path.join(ARCHIVE, cat)
         events = []
         if os.path.isdir(base):
             for name in sorted(os.listdir(base), reverse=True):
                 d = os.path.join(base, name)
-                if not os.path.isdir(d):
+                if (event is not None and name != event) or not os.path.isdir(d):
                     continue
                 vids = []
                 total = 0
-                for f in sorted(os.listdir(d)):
+                try:
+                    names = sorted(os.listdir(d))
+                except OSError:
+                    continue
+                for f in names:
                     if f.lower().endswith(".mp4"):
                         cam = f.rsplit("-", 1)[-1][:-4] if "-" in f else f
                         vids.append({"url": f"/media/{cat}/{name}/{f}", "cam": cam, "f": f})
                         try:
-                            total += os.path.getsize(os.path.join(d, f))
+                            path = os.path.join(d, f)
+                            stat = os.stat(path)
+                            total += stat.st_size
+                            if durations or cat == "DriveClips":
+                                vids[-1]["duration"] = movie_duration(path, stat.st_size, stat.st_mtime_ns)
+                                vids[-1]["revision"] = "%d:%d" % (stat.st_size, stat.st_mtime_ns)
                         except OSError:
                             pass
                 meta = {}
@@ -4407,9 +5924,73 @@ def list_events():
                             meta = json.load(jf)
                     except Exception:
                         meta = {}
-                events.append({"name": name, "videos": vids, "size": total, "meta": meta})
+                events.append({"name": name, "videos": vids, "size": total, "meta": meta,
+                               "locked": cat + "/" + name in locks, "lock_unknown": lock_unknown})
+        if cat == "DriveClips" and trips:
+            summaries = []
+            for group in drive_groups(events):
+                members = group["events"]
+                summaries.append({"name": members[0]["name"], "meta": members[0]["meta"],
+                                  "videos": [video for member in members for video in member["videos"]],
+                                  "size": sum(member["size"] for member in members),
+                                  "clips": [member["name"] for member in members],
+                                  "locked": any(member["locked"] for member in members),
+                                  "lock_unknown": lock_unknown,
+                                  "end": group["end"].strftime("%Y-%m-%d_%H-%M-%S") if group["end"] else ""})
+            events = summaries
         out[cat] = events
     return out
+
+
+def recording_gap(before, after, interval, duration):
+    """Use a stable camera sequence, otherwise a conservative whole-second clock bound."""
+    if not duration or not math.isfinite(duration) or interval <= 0:
+        return {"basis": "unknown"}
+    clock_gap = interval - duration
+    if before and after:
+        missing = after["first"] - before["last"] - 1
+        first_step, last_step = after["head_step"], before["tail_step"]
+        if missing >= 0 and max(first_step, last_step) <= min(first_step, last_step) * 1.2:
+            seconds = missing * (first_step + last_step) / 2
+            # Filenames have one-second resolution. Reject resets, pauses and unrelated recordings.
+            if seconds <= 2 and abs(seconds - clock_gap) <= 1 + max(first_step, last_step) * 2:
+                minimum = max(0, missing * min(first_step, last_step) - 2 * max(first_step, last_step))
+                return {"basis": "sequence", "seconds": seconds, "minimum": minimum,
+                        "missing_frames": missing}
+    minimum = clock_gap - 1
+    if minimum > .5:
+        return {"basis": "clock", "seconds": clock_gap, "minimum": minimum}
+    return {"basis": "unknown"}
+
+
+TIMELINE_GAP_LOCK = threading.Lock()
+
+
+def annotate_timeline_gaps(events, connected=lambda: True):
+    previous = {}
+    videos = sorted((video for event in events for video in event["videos"]), key=lambda video: video["f"])
+    for video in videos:
+        if not connected():
+            return
+        key = video["f"][:19]
+        start = _ev_dt(key)
+        if not start:
+            continue
+        info = None
+        name = playback_archive_name(video["url"])
+        path = safe_archive_path(name) if name else None
+        if path:
+            try:
+                stat = os.stat(path)
+                info = clip_continuity(path, stat.st_size, stat.st_mtime_ns)
+            except OSError:
+                pass
+        prior = previous.get(video["cam"])
+        if prior:
+            prior_video, prior_start, prior_info = prior
+            gap = recording_gap(prior_info, info, (start - prior_start).total_seconds(), prior_video.get("duration"))
+            video["gap_before"] = dict(gap, previous=prior_video["f"][:19])
+        previous[video["cam"]] = (video, start, info)
 
 
 def _map_archive(p):
@@ -4426,7 +6007,7 @@ def safe_archive_dir(p):
         return None
     rp = os.path.realpath(p)
     root = os.path.realpath(ARCHIVE)
-    if rp != root and not rp.startswith(root + "/"):
+    if rp != root and not rp.startswith(root + os.sep):
         return None
     return rp
 
@@ -4437,7 +6018,7 @@ def safe_archive_path(p):
     if not p.startswith(ARCHIVE):
         return None
     rp = os.path.realpath(p)
-    if not rp.startswith(os.path.realpath(ARCHIVE) + "/") or not os.path.isfile(rp):
+    if not rp.startswith(os.path.realpath(ARCHIVE) + os.sep) or not os.path.isfile(rp):
         return None
     return rp
 
@@ -4500,6 +6081,9 @@ def _release_usb_flock():
 
 
 def _udc():
+    configured = os.environ.get("TSF_UDC", "").strip()
+    if configured:
+        return configured if os.path.isdir(os.path.join("/sys/class/udc", configured)) else None
     try:
         return os.listdir("/sys/class/udc")[0]
     except Exception:
@@ -4521,7 +6105,11 @@ def _gadget_rebind(bind):
 def usb_attach():
     """临时断开车机读取, 挂载镜像到 MNT (读写). 返回 (ok, msg)"""
     global usb_attached, usb_timer
+    if storage_busy():
+        return False, "正在调整 U 盘容量"
     with usb_lock:
+        if storage_busy():
+            return False, "正在调整 U 盘容量"
         if usb_attached and os.path.ismount(MNT):
             return True, "already"
         # 先拿跨进程锁再动 UDC: 归档/自愈正在操作镜像时直接让开, 不抢 loop 与挂载点。
@@ -4563,7 +6151,11 @@ def usb_attach():
 def usb_detach():
     """卸载镜像并恢复车机导出. 返回 (ok, msg)"""
     global usb_attached, usb_timer
+    if storage_busy():
+        return False, "正在调整 U 盘容量"
     with usb_lock:
+        if storage_busy():
+            return False, "正在调整 U 盘容量"
         if usb_timer:
             usb_timer.cancel()
             usb_timer = None
@@ -4799,7 +6391,7 @@ def _exf_orphan_count(bm_data, refs, g):
 
 def reclaim_ghost_allocations():
     """回收位图里的幽灵占用。返回释放的字节数 (0 = 本次没动手)。"""
-    if RECLAIM_MIN_MB <= 0 or not os.path.exists(IMG):
+    if storage_busy() or RECLAIM_MIN_MB <= 0 or not os.path.exists(IMG):
         return 0
     now = time.time()
     if now - _reclaim_ts[0] < RECLAIM_EVERY_S:
@@ -4826,7 +6418,7 @@ def reclaim_ghost_allocations():
     # 够门槛: 走与归档同步同款的安全窗口 (进程内互斥 + 跨进程排他锁 + 停止导出)
     _reclaim_ts[0] = now
     with usb_lock:
-        if os.path.ismount(MNT):
+        if storage_busy() or os.path.ismount(MNT):
             return 0
         for _ in range(6):
             if _acquire_usb_flock():
@@ -4887,24 +6479,49 @@ def reclaim_ghost_allocations():
 
 
 def live_latest():
-    """归档里最新的 RecentClips 片段组与其入库时间 (秒); 没有返回 ("", 0)。
-    片段由 tesla-live-sync.py 在后台持续只读同步进归档 (不打断车机), 延时约 1~2 分钟。"""
+    """只读取切换预览所需的最新片段和上一组完整片段。"""
     base = os.path.join(ARCHIVE, "RecentClips")
     try:
-        cands = sorted((n for n in os.listdir(base)
-                        if re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$", n)
-                        and os.path.isdir(os.path.join(base, n))), reverse=True)
+        with os.scandir(base) as dirs:
+            groups = sorted((d.name for d in dirs if d.is_dir(follow_symlinks=False)
+                             and re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}", d.name)),
+                            reverse=True)
     except OSError:
-        return "", 0.0
-    if not cands:
-        return "", 0.0
+        return "", 0.0, [], "", []
+    first = None
     newest = 0.0
-    try:
-        for f in os.listdir(os.path.join(base, cands[0])):
-            newest = max(newest, os.path.getmtime(os.path.join(base, cands[0], f)))
-    except OSError:
-        pass
-    return cands[0], newest
+    complete = []
+    for name in groups:
+        videos = []
+        modified = 0.0
+        try:
+            with os.scandir(os.path.join(base, name)) as files:
+                for entry in files:
+                    f = entry.name
+                    if not f.lower().endswith(".mp4") or not safe_name(f) or not entry.is_file(follow_symlinks=False):
+                        continue
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if st.st_size <= 0:
+                        continue
+                    modified = max(modified, st.st_mtime)
+                    videos.append({"url": f"/media/RecentClips/{name}/{f}", "cam": cam_of(f), "f": f})
+        except OSError:
+            continue
+        if not videos:
+            continue
+        clip = {"name": name, "videos": sorted(videos, key=lambda v: v["f"])}
+        if first is None:
+            first, newest = clip, modified
+        if set(CAM_ORDER4).issubset(v["cam"] for v in videos):
+            complete.append(clip)
+            if len(complete) == 2:
+                break
+    if first:
+        return first["name"], newest, complete or [first], groups[-1], [v["cam"] for v in first["videos"]]
+    return "", 0.0, [], "", []
 
 
 def usb_real(p):
@@ -4919,6 +6536,112 @@ def usb_real(p):
 
 
 # ---------- 文件管理器: 批量操作 (多选删除/移动/复制/重命名) ----------
+def recording_locks():
+    try:
+        with open(os.path.join(ARCHIVE, ".recording-locks.json"), encoding="utf-8") as stream:
+            values = json.load(stream)
+        if not isinstance(values, list) or not all(
+                isinstance(key, str) and len(key.split('/')) == 2
+                and key.split('/')[0] in ("SentryClips", "SavedClips", "DriveClips")
+                and _fm_name(key.split('/')[1]) for key in values):
+            raise ValueError()
+        return set(values)
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError):
+        raise ValueError("无法读取录像锁定状态")
+
+
+def recording_action(body):
+    """Manage the exact event/trip the user saw, serialized with quota cleanup."""
+    if not isinstance(body, dict):
+        raise ValueError("参数错误")
+    cat, name, action = (body.get(key) for key in ("cat", "event", "action"))
+    if cat not in ("SentryClips", "SavedClips", "DriveClips") or action not in ("lock", "delete"):
+        raise ValueError("此录像不支持该操作")
+    if not isinstance(name, str) or not _fm_name(name):
+        raise ValueError("录像无效")
+    with _storage_edit_lock:
+        if storage_busy():
+            raise ValueError("正在调整存储容量，请稍后重试")
+        events = list_events(cat, trips=True)[cat]
+        event = next((item for item in events if item["name"] == name), None)
+        if not event:
+            raise ValueError("录像不存在，请刷新列表")
+        names = event.get("clips", [name])
+        if body.get("clips") != names:
+            raise ValueError("录像片段已变化，请重新打开后操作")
+        paths = [os.path.join(ARCHIVE, cat, item) for item in names]
+        if any(os.path.realpath(path) != os.path.abspath(path) for path in paths):
+            raise ValueError("录像路径无效")
+        keys = {cat + '/' + item for item in names}
+        locks = recording_locks()
+        if action == "lock":
+            locked = body.get("locked")
+            if not isinstance(locked, bool):
+                raise ValueError("锁定参数错误")
+            locks = locks | keys if locked else locks - keys
+            storage_allocation.save(sorted(locks), os.path.join(ARCHIVE, ".recording-locks.json"))
+            return dict(ok=True, locked=locked, msg="已锁定" if locked else "已解锁")
+        if locks & keys:
+            raise ValueError("请先解锁录像")
+        # The synchronizer reads tombstones inside its shared USB lock. Taking
+        # the exclusive lock prevents an in-flight copy from reviving deletion.
+        with usb_lock:
+            if usb_attached or _usb_flock_fd is not None or not _acquire_usb_flock():
+                raise ValueError("录像正在同步，请稍后重试")
+            done = 0
+            try:
+                for item in names:
+                    if not _tombstone(cat, item):
+                        raise OSError("无法保存删除状态")
+                for path in paths:
+                    shutil.rmtree(path)
+                    done += 1
+                storage_allocation.sync_directory(os.path.join(ARCHIVE, cat))
+                return dict(ok=True, done=done, msg="已删除")
+            except OSError:
+                return dict(ok=False, done=done, msg="删除未完成，请刷新后重试")
+            finally:
+                _release_usb_flock()
+
+
+def check_recording_write(paths):
+    """Shared by all archive file mutations; callers hold _storage_edit_lock."""
+    protected = [os.path.realpath(os.path.join(ARCHIVE, key)) for key in recording_locks()]
+    protected.extend(os.path.realpath(os.path.join(ARCHIVE, name)) for name in ('.recording-locks.json', '.pruned'))
+    for path in paths:
+        source = os.path.realpath(path)
+        if any(source == locked or source.startswith(locked + os.sep) or locked.startswith(source + os.sep)
+               for locked in protected):
+            raise ValueError("请先解锁录像")
+
+
+def archive_upload(directory, name, data):
+    with _storage_edit_lock:
+        destination = os.path.join(directory, name)
+        check_recording_write([destination])
+        os.makedirs(directory, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix='.upload-', dir=directory)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # Do not truncate an inode also linked from a protected drive trip.
+            os.replace(temporary, destination)
+            storage_allocation.sync_directory(directory)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+
+def archive_delete_file(path):
+    with _storage_edit_lock:
+        check_recording_write([path])
+        os.remove(path)
+
+
 # 清空 TeslaCam 时保留这几个直属目录, 车机继续录制时会直接往里写
 FM_KEEP_ROOTS = ("RecentClips", "SavedClips", "SentryClips")
 
@@ -5042,6 +6765,11 @@ def fm_action(area, op, items, dest, name):
         srcs.append(rp)
     # 父目录先于子项处理时子项会消失, 按深度降序删更稳
     srcs.sort(key=lambda x: x.count(os.sep), reverse=True)
+    if area == "archive" and op in ("delete", "move", "rename"):
+        try:
+            check_recording_write(srcs)
+        except ValueError as exc:
+            return False, str(exc), 0, [], {}
     done, failed = 0, []
 
     def fail(s, why):
@@ -5088,6 +6816,11 @@ def fm_action(area, op, items, dest, name):
         dd = _fm_dest_dir(area, dest, root)
         if not dd:
             return False, "目标目录不存在或不在允许范围内", 0, [], {}
+        if area == "archive":
+            try:
+                check_recording_write([os.path.join(dd, os.path.basename(source)) for source in srcs])
+            except ValueError as exc:
+                return False, str(exc), 0, [], {}
         verb = "移动" if op == "move" else "复制"
         for s in srcs:
             d = os.path.join(dd, os.path.basename(s))
@@ -5136,6 +6869,13 @@ def _range_bounds(hdr, size):
     if end < start:
         return "UNSAT"
     return (start, min(end, size - 1))
+
+
+def _export_variant(fp, quality):
+    if quality not in RES_SCALE:
+        return fp
+    variant = get_variant(fp, quality)
+    return variant if variant != fp else None
 
 
 def serve_file(self, fp, head_only=False):
@@ -5190,6 +6930,47 @@ def serve_file(self, fp, head_only=False):
 
 
 LIVE_SCRIPT = "tesla-live-sync.py"
+LIVE_READY_SOCKET = "/root/.tesla-live-ready.sock"
+_live_ready = threading.Condition()
+_live_ready_notice = None
+_live_ready_listening = threading.Event()
+_live_ready_slots = threading.BoundedSemaphore(6)
+
+
+def listen_live_ready():
+    global _live_ready_notice
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+        try:
+            try:
+                st = os.lstat(LIVE_READY_SOCKET)
+            except FileNotFoundError:
+                pass
+            else:
+                if not stat.S_ISSOCK(st.st_mode) or st.st_uid != os.getuid():
+                    raise OSError("live ready socket path already in use")
+                os.unlink(LIVE_READY_SOCKET)
+            sock.bind(LIVE_READY_SOCKET)
+            os.chmod(LIVE_READY_SOCKET, 0o600)
+        except OSError as exc:
+            print("live ready notifications unavailable: %s" % exc)
+            return
+        _live_ready_listening.set()
+        try:
+            while True:
+                raw = sock.recv(256)
+                try:
+                    msg = json.loads(raw)
+                    clip, ready_at = msg["clip"], float(msg["ready_at"])
+                    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}", clip) or not math.isfinite(ready_at):
+                        continue
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    continue
+                with _live_ready:
+                    if _live_ready_notice is None or clip > _live_ready_notice[0]:
+                        _live_ready_notice = (clip, ready_at)
+                        _live_ready.notify_all()
+        finally:
+            _live_ready_listening.clear()
 LIVE_LOG = "/root/tesla-live.log"
 LIVE_STATE = "/root/.tesla-live-state.json"
 
@@ -5307,7 +7088,7 @@ def archive_size():
     now = time.time()
     if _ARC_SIZE_CACHE["t"] and now - _ARC_SIZE_CACHE["t"] < 60:
         return _ARC_SIZE_CACHE["v"]
-    sz = _dir_size(ARCHIVE) if os.path.isdir(ARCHIVE) else 0
+    sz = _dir_size(ARCHIVE, deduplicate=True) if os.path.isdir(ARCHIVE) else 0
     _ARC_SIZE_CACHE.update(t=now, v=sz)
     return sz
 
@@ -5326,9 +7107,9 @@ def sys_status():
     d = {"cpu_temp": None, "cpu_pct": None, "mem_total": 0, "mem_used": 0}
     # CPU 温度: thermal_zone 里取读数合理的热区最大值 (SoC 通常只有一两个)
     temps = []
-    for i in range(8):
+    for thermal_file in glob.glob('/sys/class/thermal/thermal_zone*/temp'):
         try:
-            with open("/sys/class/thermal/thermal_zone%d/temp" % i) as f:
+            with open(thermal_file) as f:
                 v = int(f.read().strip())
         except (OSError, ValueError):
             continue
@@ -5373,7 +7154,7 @@ def disk_usage():
     三者口径不同, 不能相加:
       虚拟U盘 = 镜像内部已分配空间 / 镜像标称容量 (镜像文件在宿主盘上是整份预分配的,
                 用宿主占用来画会永远是 100%)
-      归档区  = 盒子上的历史副本 / (副本 + 宿主盘剩余)
+      归档区  = 盒子上的历史副本 / 配置的归档总量上限
       总占用  = 整块宿主盘已用 / 容量"""
     d = {}
     # 虚拟U盘: 稀疏镜像文件在宿主盘上的真实占用; 标称容量另给 (两者通常不等)
@@ -5412,6 +7193,8 @@ def disk_usage():
         break
     # 归档区剩余空间 = 整盘剩余 (同分区)
     d["arc_free"] = d["disk_free"]
+    # 页面展示和清理策略使用同一个归档总量上限
+    d["arc_limit"] = ARCHIVE_TOTAL_GB * (1 << 30) if ARCHIVE_TOTAL_GB > 0 else d["arc_used"] + d["arc_free"]
     # 兼容旧字段: 挂载时 = 车载U盘 (exFAT) 内部用量, 否则 = 整盘
     d["src"], d["used"], d["total"] = "loop", d["disk_used"], d["disk_total"]
     for p, usb in ((MNT, True), (ARCHIVE, False)):
@@ -5547,7 +7330,7 @@ try:
     os.makedirs(RES_DIR, exist_ok=True)
 except OSError:
     pass
-Q_SEM = threading.BoundedSemaphore(int(os.environ.get("TSF_TR_CODES", "2")))  # 并发转码上限: 8核允许2个×4线程, 多路点开排队时间减半
+Q_SEM = threading.BoundedSemaphore(1)
 USER_TRANS = [0]      # 正在排队/占用转码槽的用户请求数; 后台预热看到 >0 就让位
 RES_MAX = 2 * 1024 * 1024 * 1024  # 清晰度缓存总量上限 2GB, 超了从最旧开始删
 
@@ -5562,7 +7345,7 @@ def res_cleanup():
                 except OSError:
                     pass
         files = [os.path.join(RES_DIR, f) for f in os.listdir(RES_DIR)
-                 if f.endswith(".mp4")]
+                 if f.endswith(".mp4") or (f.startswith("sentry-") and f.endswith(".ts"))]
         total = sum(os.path.getsize(f) for f in files if os.path.isfile(f))
         if total <= RES_MAX:
             return
@@ -5591,17 +7374,327 @@ FREE_TARGET_MB = int(os.environ.get("TSF_FREE_TARGET_MB", "10240"))   # 兜底�
 RECENT_KEEP_MIN = int(os.environ.get("TSF_RECENT_KEEP_MIN", "60"))    # 兜底清理时最近 N 分钟必留
 # 盒子侧 SentryClips / SavedClips 定期清理 (方案B):
 # 哨兵开着时 4 路约 8.4GB/小时, 哨兵事件 + 手动保存的录像只增不删, 盘迟早被吃满。
-# 车机 U 盘那份永远不碰, 这里只清盒子归档副本。两个维度独立生效:
+# 车机 U 盘那份永远不碰, 这里只清盒子归档副本。三个维度独立生效:
 #   1) 按天数: 只保留最新事件往前 N 天内的归档 (锚点是最新事件而不是当前时间,
 #      停车几天没新事件不会被误清空);
 #   2) 按体积: 单个分类超过 MAX_GB 就从最旧的开始删, 直到回到上限以内。
-#      teslacam.img 高水位约 170G, loop 盘 207.7G, 盒子归档预算约 12G/类比较安全。
+#   3) 按总量: SentryClips / SavedClips / RecentClips 合计不超过 ARCHIVE_TOTAL_GB。
+#      64GB 卡 + 40GB 镜像时，录像归档总量控制在 6GB 左右并保留 10GB 可用余量。
 # 同步进行中的目录 (1 小时内有改动) 跳过, 非时间戳命名的目录一律不动。
 # 清掉的分类/事件会记入 /archive/.pruned 墓碑文件, 同步端读到就跳过 —— 否则车机 U 盘上
 # 还留着的旧事件会被当成新片段重抄回来, 形成 删除→重抄 的死循环 (和 RecentClips 同理)。
 BOX_KEEP_DAYS = int(os.environ.get("TSF_BOX_KEEP_DAYS", "14"))        # 盒子侧哨兵/手动保存保留天数, 0=不按天数清
 BOX_MAX_GB = int(os.environ.get("TSF_BOX_MAX_GB", "12"))              # 盒子侧单个分类体积上限(GB), 0=不按体积清
+ARCHIVE_TOTAL_GB = int(os.environ.get("TSF_ARCHIVE_TOTAL_GB", "6"))   # 所有录像归档总量上限(GB), 0=不按总量清
+DISK_GUARD_INTERVAL = max(30, int(os.environ.get("TSF_DISK_GUARD_INTERVAL", "60")))
 PRUNED_FILE = os.path.join(ARCHIVE, ".pruned")                        # 墓碑: 每行 "分类/事件名", 同步端跳过
+DRIVE_STATE = os.path.join(ARCHIVE, ".drive-retention.json")
+DRIVE_CAMERAS = ("front", "back", "left_repeater", "right_repeater")
+DRIVE_PARK_SECONDS = 300
+DRIVE_MAX_GAP = 10
+DRIVE_MAX_GB = int(os.environ.get("TSF_DRIVE_MAX_GB", "12"))
+
+_storage_edit_lock = threading.RLock()
+_storage_job_lock = threading.Lock()
+_storage_job = {"state": "idle", "message": "", "percent": 0}
+if storage_resize.pending_recovery(IMG):
+    _storage_job.update(state='recovery', message='发现未完成的容量调整，请检查恢复文件')
+
+
+def refresh_storage_settings():
+    global ARCHIVE_TOTAL_GB, DRIVE_MAX_GB, FREE_MIN_MB, FREE_TARGET_MB
+    try:
+        values = storage_allocation.load()
+    except (OSError, ValueError, TypeError):
+        return
+    ARCHIVE_TOTAL_GB = values['archive_gib']
+    DRIVE_MAX_GB = values['drive_gib']
+    FREE_MIN_MB = int(values['free_min_gib'] * 1024)
+    FREE_TARGET_MB = int(values['free_target_gib'] * 1024)
+
+
+refresh_storage_settings()
+
+
+def storage_job():
+    with _storage_job_lock:
+        return dict(_storage_job)
+
+
+def storage_busy():
+    return storage_job()['state'] in ('running', 'recovery')
+
+
+def storage_status():
+    values = storage_allocation.load()
+    disk = storage_allocation.snapshot(IMG, ARCHIVE, os.environ.get('TSF_CACHE', '/opt/mu300'))
+    disk['usb_used_bytes'] = _exfat_used(IMG)
+    return dict(ok=True, values=values, disk=disk, revision=storage_allocation.revision(values, IMG),
+                job=storage_job(), usb_gib=disk['usb_bytes'] / storage_allocation.GIB)
+
+
+def storage_apply(body):
+    if not isinstance(body, dict) or not isinstance(body.get('values'), dict):
+        raise ValueError('存储参数不完整')
+    if storage_busy():
+        raise ValueError('正在调整 U 盘容量')
+    with _storage_edit_lock:
+        if storage_busy():
+            raise ValueError('正在调整 U 盘容量')
+        current = storage_status()
+        if body.get('revision') != current['revision']:
+            return dict(ok=False, msg='存储配置已变化，请重新加载', conflict=True)
+        values = storage_allocation.validate_values(body['values'], current['usb_gib'])
+        storage_allocation.check_budget(values, current['usb_gib'], current['disk'])
+        old = current['values']
+        affects_old = (values['archive_gib'] < old['archive_gib'] or values['drive_gib'] < old['drive_gib']
+                       or values['free_target_gib'] > old['free_target_gib'] or values['free_min_gib'] > old['free_min_gib'])
+        if affects_old and body.get('confirmed') is not True:
+            over = max(0, current['disk']['archive_bytes'] / storage_allocation.GIB - values['archive_gib'])
+            drive_over = max(0, current['disk']['drive_bytes'] / storage_allocation.GIB - values['drive_gib'])
+            return dict(ok=False, confirm=True, msg='保存后可能按原清理规则淘汰旧录像，是否继续？',
+                        archive_over_gib=round(over, 2), drive_over_gib=round(drive_over, 2))
+        storage_allocation.save(values)
+        refresh_storage_settings()
+        return storage_status()
+
+
+def storage_start_resize(body):
+    # Old pages only acknowledged pausing recording and must never authorize erasure.
+    if not isinstance(body, dict) or body.get('clear_confirmed') is not True:
+        raise ValueError('请确认清空车机 U 盘中的全部内容后再调整容量')
+    if storage_busy():
+        raise ValueError('已有容量调整任务')
+    with _storage_edit_lock:
+        if storage_busy():
+            raise ValueError('已有容量调整任务')
+        current = storage_status()
+        if body.get('revision') != current['revision']:
+            raise ValueError('存储配置已变化，请重新加载')
+        size = body.get('usb_gib')
+        storage_allocation.validate_values(current['values'], size)
+        storage_allocation.check_budget(current['values'], size, current['disk'])
+        if size * storage_allocation.GIB == current['disk']['usb_bytes']:
+            raise ValueError('U 盘容量未改变')
+        if usb_attached or os.path.ismount(MNT):
+            raise ValueError('请先结束 U 盘文件管理并恢复车机导出')
+        with _storage_job_lock:
+            _storage_job.update(state='running', message='准备调整容量', percent=0)
+        def update(message, percent):
+            with _storage_job_lock:
+                _storage_job.update(message=message, percent=percent)
+        def work():
+            recovery = False
+            try:
+                with _storage_edit_lock, usb_lock:
+                    if usb_attached or os.path.ismount(MNT) or not _acquire_usb_flock():
+                        raise ValueError('U 盘正被其他任务占用，请稍后重试')
+                    try:
+                        script = os.path.join(os.path.dirname(__file__), 'mkexfat.py')
+                        if not os.path.isfile(script):
+                            script = os.path.join(os.path.dirname(__file__), 'scripts', 'mkexfat.py')
+                        storage_resize.resize(IMG, int(size), GADGET_DIR, _udc(), script, update)
+                    except storage_resize.ResizeError as exc:
+                        recovery = getattr(exc, 'needs_recovery', False)
+                        raise
+                    finally:
+                        if not recovery:
+                            _release_usb_flock()
+                with _storage_job_lock:
+                    _storage_job.update(state='done', message='容量调整完成', percent=100)
+            except Exception as exc:
+                recovery = recovery or storage_resize.pending_recovery(IMG)
+                with _storage_job_lock:
+                    _storage_job.update(state='recovery' if recovery else 'error', message=str(exc))
+        try:
+            threading.Thread(target=work, daemon=True, name='storage-resize').start()
+        except Exception:
+            with _storage_job_lock:
+                _storage_job.update(state='error', message='无法启动容量调整，请稍后重试')
+            raise
+        return dict(ok=True, job=storage_job())
+
+
+def drive_classify(start, duration, gears, previous):
+    """按录像时间衔接挡位。返回整组分类、片尾时刻及后续片段需要的挡位状态。"""
+    end = start + duration
+    prior_end, driving, parked_at = previous
+    if prior_end is None or start > prior_end + DRIVE_MAX_GAP:
+        driving = parked_at = None
+
+    def status(t):
+        if parked_at is not None and t - parked_at >= DRIVE_PARK_SECONDS:
+            return "parked"
+        return "drive" if driving else "unknown"
+
+    seen = set()
+    cursor = start
+    for offset, gear in gears:
+        at = start + offset
+        if at > cursor:
+            seen.add(status(cursor))
+        if gear in (1, 2):
+            driving, parked_at = True, None
+        elif gear == 0 and parked_at is None:
+            parked_at = at
+        cursor = at
+    seen.add(status(cursor))
+    kind = "drive" if "drive" in seen else ("unknown" if "unknown" in seen else "parked")
+    return kind, (max(end, prior_end or end), driving, parked_at)
+
+
+class DriveArchive:
+    def __init__(self):
+        try:
+            with open(DRIVE_STATE, encoding="utf-8") as stream:
+                self.records = json.load(stream)
+            if not isinstance(self.records, dict):
+                self.records = {}
+        except (OSError, ValueError):
+            self.records = {}
+        self.limit_reported = False
+
+    def rotate(self, retained, used):
+        """优先整段行程淘汰；单次长行程超过配额时，从最早的分钟片段开始清理。"""
+        locks = recording_locks()
+        if any(key.startswith('DriveClips/') for key in locks):
+            expanded = set(locks)
+            for trip in drive_groups(list_events("DriveClips")["DriveClips"]):
+                keys = {'DriveClips/' + event['name'] for event in trip['events']}
+                if keys & locks:
+                    expanded.update(keys)
+            if expanded != locks:
+                storage_allocation.save(sorted(expanded), os.path.join(ARCHIVE, '.recording-locks.json'))
+                locks = expanded
+        limit = DRIVE_MAX_GB * (1 << 30)
+        if limit <= 0 or used <= limit:
+            return used
+        events = [event for event in list_events("DriveClips")["DriveClips"]
+                  if re.fullmatch(r"\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d", event["name"])
+                  and _ev_dt(event["name"])
+                  and not os.path.islink(os.path.join(retained, event["name"]))]
+        trips = list(reversed(drive_groups(events)))
+        removed = 0
+        for index, trip in enumerate(trips):
+            if used <= limit:
+                break
+            newest_trip = index == len(trips) - 1
+            # 永远保留最新片段；正常写入前已排除单片超过配额的情况。
+            candidates = trip["events"][:-1] if newest_trip else trip["events"]
+            for event in candidates:
+                name = event["name"]
+                if "DriveClips/" + name in locks:
+                    continue
+                path = os.path.join(retained, name)
+                size = _dir_size(path)
+                if not _tombstone("DriveClips", name):
+                    raise OSError("无法记录行车记录清理状态")
+                shutil.rmtree(path)
+                used -= size
+                removed += 1
+                if newest_trip and used <= limit:
+                    break
+        if removed:
+            print("行车记录已清理 %d 个旧片段" % removed, flush=True)
+        return used
+
+    def review(self):
+        recent = os.path.join(ARCHIVE, "RecentClips")
+        retained = os.path.join(ARCHIVE, "DriveClips")
+        try:
+            with open(PRUNED_FILE, encoding="utf-8") as stream:
+                pruned = {line.strip() for line in stream}
+        except FileNotFoundError:
+            pruned = set()
+        os.makedirs(retained, exist_ok=True)
+        names = sorted(n for n in os.listdir(recent)
+                       if re.fullmatch(r"\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d", n) and _ev_dt(n))
+        previous = (None, None, None)
+        seed = max((name for name in self.records if not names or name < names[0]), default=None)
+        records = {seed: self.records[seed]} if seed else {}
+        if seed:
+            previous = records[seed]["end"]
+        used = _dir_size(retained)
+        changed = False
+        full = False
+        for name in names:
+            files = [os.path.join(recent, name, "%s-%s.mp4" % (name, cam)) for cam in DRIVE_CAMERAS]
+            try:
+                stats = [os.stat(p) for p in files]
+            except FileNotFoundError:
+                continue
+            if not all(stat.S_ISREG(st.st_mode) and st.st_size > 0 for st in stats):
+                continue
+            signature = [[st.st_mtime_ns, st.st_size] for st in stats]
+            cached = self.records.get(name)
+            if cached and cached["files"] == signature:
+                duration, gears = cached["info"]
+            else:
+                duration, gears = drive_clip_gears(files[0])
+            start = (_ev_dt(name) - datetime.datetime(1970, 1, 1)).total_seconds()
+            kind, previous = drive_classify(start, duration, gears, previous)
+            records[name] = {"files": signature, "info": [duration, gears], "end": list(previous), "kind": kind}
+            if (kind != "drive" or "DriveClips/" + name in pruned
+                    or os.path.exists(os.path.join(retained, name))):
+                continue
+            size = sum(st.st_size for st in stats)
+            if size > DRIVE_MAX_GB * (1 << 30):
+                full = True
+                continue
+            staging = tempfile.mkdtemp(dir=ARCHIVE, prefix=".drive-link-")
+            try:
+                for p in files:
+                    target = os.path.join(staging, os.path.basename(p))
+                    os.link(p, target)
+                for p, source_stat in zip(files, stats):
+                    target = os.path.join(staging, os.path.basename(p))
+                    linked_stat = os.stat(target)
+                    if (not os.path.samestat(linked_stat, source_stat)
+                            or (linked_stat.st_size, linked_stat.st_mtime_ns)
+                            != (source_stat.st_size, source_stat.st_mtime_ns)):
+                        raise OSError("行车片段正在更新")
+                fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                os.rename(staging, os.path.join(retained, name))
+            finally:
+                if os.path.isdir(staging):
+                    shutil.rmtree(staging)
+            used += size
+            changed = True
+        if changed:
+            fd = os.open(retained, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        # 四路新文件已完整链接并发布后，才允许清理旧归档。失败后的超额也会在下次检查重试。
+        remaining = self.rotate(retained, used)
+        changed = changed or remaining != used
+        if changed:
+            fd = os.open(retained, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        if full and not self.limit_reported:
+            print("行车记录片段超过容量限制", flush=True)
+        self.limit_reported = full
+        if records == self.records:
+            return
+        fd, tmp = tempfile.mkstemp(dir=ARCHIVE, prefix=".drive-state-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(records, stream, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, DRIVE_STATE)
+        finally:
+            if os.path.isfile(tmp):
+                os.unlink(tmp)
+        self.records = records
 
 
 def free_mb(p):
@@ -5639,19 +7732,30 @@ def roll_recent():
     n = 0
     for dt, e in evs:
         if dt < cutoff:
-            shutil.rmtree(os.path.join(rd, e), ignore_errors=True)
-            n += 1
+            p = os.path.join(rd, e)
+            if _tombstone("RecentClips", e):
+                shutil.rmtree(p, ignore_errors=True)
+                if not os.path.isdir(p):
+                    n += 1
     return n
 
 
-def _dir_size(p):
+def _dir_size(p, deduplicate=False):
     sz = 0
+    seen = set()
     for root, _, files in os.walk(p):
         for f in files:
             try:
-                sz += os.path.getsize(os.path.join(root, f))
+                st = os.stat(os.path.join(root, f))
             except OSError:
                 pass
+            else:
+                if deduplicate and st.st_nlink > 1:
+                    inode = (st.st_dev, st.st_ino)
+                    if inode in seen:
+                        continue
+                    seen.add(inode)
+                sz += st.st_size
     return sz
 
 
@@ -5660,13 +7764,17 @@ def _tombstone(cat, ev):
     try:
         with open(PRUNED_FILE, "a", encoding="utf-8") as f:
             f.write("%s/%s\n" % (cat, ev))
+            f.flush()
+            os.fsync(f.fileno())
+        return True
     except OSError:
-        pass
+        return False
 
 
 def roll_box():
     """盒子侧 SentryClips / SavedClips 定期清理 (按天数 + 按体积), 只删盒子归档, 不碰车机 U 盘"""
     n = 0
+    locks = recording_locks()
     for cat in ("SentryClips", "SavedClips"):
         base = os.path.join(ARCHIVE, cat)
         if not os.path.isdir(base):
@@ -5693,11 +7801,11 @@ def roll_box():
         if BOX_KEEP_DAYS > 0:
             cutoff = evs[-1][0] - datetime.timedelta(days=BOX_KEEP_DAYS)
             for dt, e, p, _sz in sized:
-                if dt < cutoff and os.path.isdir(p):
-                    shutil.rmtree(p, ignore_errors=True)
-                    if not os.path.isdir(p):
-                        _tombstone(cat, e)
-                        n += 1
+                if dt < cutoff and os.path.isdir(p) and cat + '/' + e not in locks:
+                    if _tombstone(cat, e):
+                        shutil.rmtree(p, ignore_errors=True)
+                        if not os.path.isdir(p):
+                            n += 1
         # 2) 按体积: 超出 BOX_MAX_GB 从最旧开始删
         if BOX_MAX_GB > 0:
             left = [(dt, e, p, sz) for dt, e, p, sz in sized if os.path.isdir(p)]
@@ -5707,11 +7815,71 @@ def roll_box():
             for dt, e, p, sz in left:
                 if total <= budget:
                     break
+                if cat + '/' + e in locks:
+                    continue
+                if not _tombstone(cat, e):
+                    continue
                 shutil.rmtree(p, ignore_errors=True)
-                total -= sz
                 if not os.path.isdir(p):
-                    _tombstone(cat, e)
+                    total -= sz
                     n += 1
+    return n
+
+
+def roll_archive_total(recent_ready=True):
+    """按所有录像分类的总量清理; 空间低于目标时跨分类删除最旧事件。"""
+    if ARCHIVE_TOTAL_GB <= 0:
+        return 0
+    rows = []
+    locks = recording_locks()
+    now = time.time()
+    for cat in ("SentryClips", "SavedClips", "RecentClips"):
+        base = os.path.join(ARCHIVE, cat)
+        if not os.path.isdir(base):
+            continue
+        for e in os.listdir(base):
+            dt = _ev_dt(e)
+            p = os.path.join(base, e)
+            if not dt or not os.path.isdir(p):
+                continue
+            try:
+                if now - os.path.getmtime(p) < 300:
+                    continue
+            except OSError:
+                continue
+            sz = 0
+            partial = False
+            for root, _, files in os.walk(p):
+                for f in files:
+                    if f.endswith(".part"):
+                        partial = True
+                    try:
+                        st = os.stat(os.path.join(root, f))
+                        if cat != "RecentClips" or st.st_nlink == 1:
+                            sz += st.st_size
+                    except OSError:
+                        pass
+            if not partial:
+                rows.append((dt, cat, e, p, sz))
+    rows.sort(key=lambda x: x[0])
+    total = sum(x[4] for x in rows) + _dir_size(os.path.join(ARCHIVE, "DriveClips"))
+    budget = ARCHIVE_TOTAL_GB * (1 << 30)
+    n = 0
+    for _, cat, e, p, sz in rows:
+        available = free_mb(ARCHIVE)
+        if total <= budget and available >= FREE_TARGET_MB:
+            break
+        if cat + '/' + e in locks:
+            continue
+        # 最近一小时独立滚动，实际可用空间不足时仍允许原有空间兜底。
+        if cat == "RecentClips" and (not recent_ready or not sz or available >= FREE_TARGET_MB):
+            continue
+        if not _tombstone(cat, e):
+            continue
+        shutil.rmtree(p, ignore_errors=True)
+        if not os.path.isdir(p):
+            total -= sz
+            n += 1
     return n
 
 
@@ -5758,37 +7926,37 @@ def health_logger():
         time.sleep(60)
 
 
-def disk_guard():
-    rd = os.path.join(ARCHIVE, "RecentClips")
-    while True:
+def disk_guard_cycle(drive):
+    with _storage_edit_lock:
+        if storage_busy() or os.environ.get('TSF_ARCHIVE_MAINTENANCE') == '1':
+            return
+        refresh_storage_settings()
+        recent_ready = False
         try:
+            drive.review()
+            recent_ready = True
             roll_recent()
-        except Exception:
-            pass
+        except Exception as ex:
+            print("行车记录检查失败: %s" % ex, flush=True)
         try:   # 盒子侧哨兵/手动保存归档定期清理 (方案B)
             roll_box()
+        except Exception:
+            pass
+        try:   # 所有录像分类合计的总量上限与空间兜底
+            roll_archive_total(recent_ready)
         except Exception:
             pass
         try:   # 车机U盘幽灵占用回收 (位图自愈, 空闲窗口内才动手)
             reclaim_ghost_allocations()
         except Exception:
             pass
-        try:   # 兜底: 万一别的数据把盘吃满, 再按空间淘汰最旧的
-            if free_mb(ARCHIVE) < FREE_MIN_MB and os.path.isdir(rd):
-                cutoff = time.time() - RECENT_KEEP_MIN * 60
-                for e in sorted(os.listdir(rd)):   # 目录名即时间戳, 天然按时间排序
-                    if free_mb(ARCHIVE) >= FREE_TARGET_MB:
-                        break
-                    p = os.path.join(rd, e)
-                    try:
-                        if not os.path.isdir(p) or os.path.getmtime(p) > cutoff:
-                            continue
-                    except OSError:
-                        continue
-                    shutil.rmtree(p, ignore_errors=True)
-        except Exception:
-            pass
-        time.sleep(300)
+
+
+def disk_guard():
+    drive = DriveArchive()
+    while True:
+        disk_guard_cycle(drive)
+        time.sleep(DISK_GUARD_INTERVAL)
 
 
 # ---------- 飞书推送: 哨兵触发时把信息和触发画面推到群里 ----------
@@ -5816,6 +7984,7 @@ REASON_DETAIL = {
     "user_interaction_honk": "按喇叭保存",
     "user_interaction_dashcam_saved": "手动保存",
     "user_interaction_dashcam_menu": "行车记录仪菜单保存",
+    "user_interaction_dashcam_icon_tapped": "点击行车记录仪图标",
 }
 
 
@@ -6955,7 +9124,193 @@ def _variant_ready(fp, qv):
         return False
 
 
-def get_variant(fp, qv, slot=True):
+_thermal_lock = threading.Lock()
+_thermal_files = glob.glob('/sys/class/thermal/thermal_zone*/temp')
+_thermal_last = 0
+_thermal_value = None
+_thermal_mode = 0
+_thermal_hold = False
+_thermal_recovering = False
+_thermal_cool_since = None
+
+
+def preview_cores():
+    global _thermal_last, _thermal_value, _thermal_mode, _thermal_hold, _thermal_recovering, _thermal_cool_since
+    with _thermal_lock:
+        now = time.monotonic()
+        elapsed = now - _thermal_last
+        if elapsed < .4:
+            return _thermal_mode
+        readings = []
+        for path in _thermal_files:
+            try:
+                with open(path) as f:
+                    value = int(f.read()) / 1000
+                if 0 < value < 150:
+                    readings.append(value)
+            except (ValueError, OSError):
+                continue
+        hot = max(readings, default=None)
+        rising = (hot is not None and _thermal_value is not None and elapsed <= 2
+                  and hot >= 65 and hot - _thermal_value >= 3 * elapsed)
+        if hot is None or hot >= 78:
+            _thermal_hold = True
+            _thermal_recovering = False
+        if _thermal_hold:
+            if hot is not None and hot < 70:
+                if _thermal_cool_since is None:
+                    _thermal_cool_since = now
+                if now - _thermal_cool_since >= 3:
+                    _thermal_hold = False
+                    _thermal_recovering = True
+                    _thermal_cool_since = None
+            else:
+                _thermal_cool_since = None
+        if _thermal_hold:
+            _thermal_mode = 0
+        elif _thermal_recovering:
+            # Resume at reduced load; require a second stable cool interval before
+            # returning to normal throughput and the existing startup boost.
+            _thermal_mode = 2
+            if hot < 65:
+                if _thermal_cool_since is None:
+                    _thermal_cool_since = now
+                if now - _thermal_cool_since >= 3:
+                    _thermal_recovering = False
+                    _thermal_cool_since = None
+                    _thermal_mode = 3
+            else:
+                _thermal_cool_since = None
+        elif hot >= 70 or rising or (_thermal_mode == 2 and hot >= 67):
+            _thermal_mode = 2
+        else:
+            _thermal_mode = 3
+        _thermal_last, _thermal_value = now, hot
+        return _thermal_mode
+
+
+def preview_memory_available():
+    try:
+        with open("/proc/meminfo") as info:
+            for line in info:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) >= 180000
+    except (OSError, ValueError):
+        pass
+    return True
+
+
+def preview_event(key):
+    fp, quality = key
+    return os.path.dirname(fp), quality
+
+
+class SentryPreviewJobs:
+    """Only the demand worker owns these stopped encoders. Q_SEM still limits running encoders."""
+    def __init__(self):
+        self.stopped = {}
+
+    def discard(self, key):
+        proc, tmp, _mask, _deadline = self.stopped.pop(key)
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+    def prune(self, keys):
+        events = {preview_event(key) for key in keys}
+        now = time.monotonic()
+        for key, (proc, tmp, _, deadline) in list(self.stopped.items()):
+            out = _variant_path(*key)
+            if (preview_event(key) not in events or now >= deadline or proc.poll() is not None
+                    or not out or not tmp.startswith(out + ".") or _variant_ready(*key)):
+                self.discard(key)
+        while self.stopped and not preview_memory_available():
+            self.discard(next(iter(self.stopped)))
+
+    def park(self, key, proc, tmp, mask, deadline):
+        if not any(preview_event(k) == preview_event(key) for k in live_keys()):
+            return False
+        if not preview_memory_available():
+            return False
+        proc.send_signal(signal.SIGSTOP)
+        self.stopped[key] = (proc, tmp, mask, deadline)
+        return True
+
+
+def run_variant(cmd, wanted, jobs=None, key=None, preferred=None, hd_preview=False, startup_boost=False):
+    count = preview_cores()
+    if wanted is not None and (not count or not wanted()):
+        return False
+    available = sorted(os.sched_getaffinity(0))
+    target = [n for n in (preferred or (4, 5, 6)) if n in available] or available
+    def cpu_mask(core_count):
+        if hd_preview and len(target) == 4 and _thermal_value is not None:
+            if startup_boost and core_count == 3 and _thermal_value < 65:
+                return target[:4]
+            if core_count in (2, 3) and _thermal_value < 70:
+                # Prefer the other middle core within the ordinary thermal budget.
+                return [target[0], target[3], *target[1:core_count - 1]]
+        return target[:core_count or 2]
+
+    mask = cpu_mask(count)
+    launcher = 'import os,sys;os.sched_setaffinity(0,set(map(int,sys.argv[1].split(","))));os.execvp(sys.argv[2],sys.argv[2:])'
+    if jobs is not None and key in jobs.stopped and jobs.stopped[key][1] != cmd[-1]:
+        jobs.discard(key)
+    saved = jobs.stopped.pop(key, None) if jobs is not None else None
+    if saved:
+        proc, _tmp, mask, deadline = saved
+    else:
+        if jobs is not None:
+            # Allow all six cameras to swap places. Evict only when starting a seventh job.
+            if len(jobs.stopped) >= 6:
+                requested = set(live_keys())
+                victim = next((k for k in jobs.stopped if k not in requested), next(iter(jobs.stopped)))
+                jobs.discard(victim)
+            # A stopped child must also exit if the viewer is killed or restarted.
+            launcher = ("import ctypes,os,signal\n"
+                        "if ctypes.CDLL(None).prctl(1,signal.SIGKILL,0,0,0) or os.getppid()!=%d: raise SystemExit(1)\n"
+                        % os.getpid()) + launcher
+        cpu_list = ','.join(map(str, mask))
+        pin = [sys.executable, '-c', launcher, cpu_list]
+        if preferred and not jobs and shutil.which('taskset'):
+            pin = ['taskset', '-c', cpu_list]
+        proc = subprocess.Popen(pin + cmd,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 900
+    parked = False
+    try:
+        if saved:
+            proc.send_signal(signal.SIGCONT)
+        while time.monotonic() < deadline:
+            try:
+                return proc.wait(timeout=.45) == 0
+            except subprocess.TimeoutExpired:
+                count = preview_cores()
+                if wanted is not None and (not count or not wanted()):
+                    # A thermal hold must stop CPU use without erasing the partial Sentry preview.
+                    if jobs is not None:
+                        parked = jobs.park(key, proc, cmd[-1], mask, deadline)
+                    return False
+                new_mask = cpu_mask(count)
+                if new_mask != mask:
+                    for tid in os.listdir('/proc/%d/task' % proc.pid):
+                        try:
+                            os.sched_setaffinity(int(tid), new_mask)
+                        except ProcessLookupError:
+                            continue
+                    mask = new_mask
+        return False
+    finally:
+        if not parked and proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def get_variant(fp, qv, slot=True, wanted=None, jobs=None):
     """返回 qv 清晰度的缓存文件路径; 没有就排队转码一份 (最多2个并发), 失败回退原文件。
     slot=False 表示调用方自己已持有 Q_SEM 名额 (后台预热用, 免得跟用户请求抢两个槽)"""
     out = _variant_path(fp, qv)
@@ -6977,40 +9332,33 @@ def get_variant(fp, qv, slot=True):
     try:
         if os.path.isfile(out) and os.path.getsize(out) > 0:  # 别人刚转完
             return out
-        try:  # 内存保护: 可用 <180MB 不转, 回退原文件
-            with open("/proc/meminfo") as mf:
-                for line in mf:
-                    if line.startswith("MemAvailable"):
-                        if int(line.split()[1]) < 180000:
-                            return fp
-                        break
-        except Exception:
-            pass
+        if not preview_memory_available():
+            return fp
         w, h, kbps = RES_SCALE[qv]
         tmp = out + ".%d_%d.tmp" % (os.getpid(), threading.get_ident())
         # 子进程把 oom_score_adj 调回正数 (父进程是 -300 会被继承), OOM 时优先杀转码而不是主服务
         cmd = ["sh", "-c",
                'echo 300 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
                FFMPEG_BIN, "-nostdin", "-hide_banner", "-loglevel", "error",
-               "-threads", "4", "-i", fp,
+               "-filter_threads", "1", "-threads", "2", "-i", fp,
                "-vf", "scale=%d:%d,fps=24" % (w, h),
-               "-c:v", "libx264", "-preset", "superfast",
+               "-c:v", "libx264", "-threads:v", "2", "-preset", "superfast",
                "-b:v", "%dk" % kbps, "-maxrate", "%dk" % (kbps * 3 // 2),
                "-bufsize", "%dk" % (kbps * 3),
                "-c:a", "copy", "-movflags", "+faststart", "-f", "mp4", "-y", tmp]
         try:
-            r = subprocess.run(cmd, capture_output=True, timeout=900)
-            if r.returncode == 0 and os.path.isfile(tmp) and os.path.getsize(tmp) > 0:
+            if run_variant(cmd, wanted, jobs, (fp, qv)) and os.path.isfile(tmp) and os.path.getsize(tmp) > 0:
                 os.replace(tmp, out)
                 res_cleanup()
                 return out
         except Exception:
             pass
         finally:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+            if jobs is None or (fp, qv) not in jobs.stopped:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
         return fp
     finally:
         if slot:
@@ -7023,8 +9371,271 @@ def get_variant(fp, qv, slot=True):
 _VARIANT_JOBS = set()
 _VARIANT_JOBS_LOCK = threading.Lock()
 
+_live_changed = threading.Condition()
+_live_clients = {}
+_live_worker_started = False
 
-def spawn_variant(fp, qv):
+
+def live_keys():
+    now = time.monotonic()
+    with _live_changed:
+        sessions = sorted((s for s in _live_clients.values() if s[1] > now and s[2]),
+                          key=lambda s: (len(s[2]) != 1, -s[1]))
+        return list(dict.fromkeys(key for session in sessions for key in session[2]))
+
+
+def preheat_allowed():
+    with _live_changed:
+        if any(s[3] and s[1] > time.monotonic() for s in _live_clients.values()):
+            return False
+    return preview_cores() == 3
+
+
+def live_worker():
+    retry = {}
+    jobs = SentryPreviewJobs()
+    while True:
+        delay = .5
+        try:
+            keys = live_keys()
+            jobs.prune(keys)
+            now = time.monotonic()
+            retry = {k: t for k, t in retry.items() if k in keys and t > now}
+            key = next((k for k in keys if k not in retry and not _variant_ready(*k)), None)
+            if key is None:
+                delay = 5 if not retry else 1
+            elif not USER_TRANS[0] and preview_cores() and Q_SEM.acquire(blocking=False):
+                try:
+                    sentry = os.path.basename(os.path.dirname(os.path.dirname(key[0]))) == 'SentryClips'
+                    get_variant(*key, slot=False, wanted=lambda: key in live_keys() and not USER_TRANS[0],
+                                jobs=jobs if sentry else None)
+                    if key not in jobs.stopped and not _variant_ready(*key):
+                        retry[key] = time.monotonic() + 3
+                finally:
+                    Q_SEM.release()
+                continue
+        except Exception as exc:
+            print("preview worker:", type(exc).__name__, flush=True)
+            delay = 2
+        with _live_changed:
+            _live_changed.wait(timeout=delay)
+
+
+def playback_archive_name(url):
+    parts = url.split("/")
+    if (len(parts) != 5 or parts[:2] != ["", "media"] or parts[2] not in CATS
+            or not all(safe_name(p) == p and p not in (".", "..") for p in parts[3:])
+            or not parts[-1].lower().endswith(".mp4")):
+        return None
+    return "/archive/" + "/".join(parts[2:])
+
+
+def live_demand(body):
+    global _live_worker_started
+    if not isinstance(body, dict):
+        return None
+    client, rev, paths, qv = (body.get(k) for k in ('client', 'rev', 'paths', 'q'))
+    if not isinstance(client, str) or not re.fullmatch('[0-9a-f]{32}', client):
+        return None
+    if type(rev) is not int or not isinstance(paths, list) or len(paths) > 8 or qv not in (*RES_SCALE, 'orig'):
+        return None
+    keys, files = [], {}
+    for url in paths:
+        if not isinstance(url, str):
+            return None
+        path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
+        name = playback_archive_name(path)
+        if not name:
+            return None
+        fp = safe_archive_path(name)
+        if not fp or qv == 'orig':
+            continue
+        keys.append((fp, qv))
+        variant = next((q for q in dict.fromkeys((qv,'480p','360p','720p')) if _variant_ready(fp,q)), None)
+        files[url] = url + '?livefile=' + variant if variant else url
+    with _live_changed:
+        now = time.monotonic()
+        for old in [k for k, s in _live_clients.items() if s[1] <= now]:
+            del _live_clients[old]
+        prev = _live_clients.get(client)
+        if prev and rev < prev[0]:
+            return {}
+        if not prev and len(_live_clients) >= 128:
+            return {}
+        _live_clients[client] = (rev, now + 24, keys, not body.get('closed'))
+        if keys and not _live_worker_started:
+            threading.Thread(target=live_worker, daemon=True).start()
+            _live_worker_started = True
+        _live_changed.notify()
+    return files
+
+
+def playback_variant_state(fp, qv):
+    if _variant_ready(fp, qv):
+        return "ready"
+    if not os.access(FFMPEG_BIN, os.X_OK):
+        return "failed"
+    return "pending" if preview_cores() else "cooling"
+
+
+PREVIEW_PART_SECONDS = 1
+_part_cleanup_at = 0
+_part_queue_changed = threading.Condition()
+_part_waiters = []
+
+
+def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead, connected, warm=False, startup_boost=False):
+    seconds = PREVIEW_PART_SECONDS
+    end = max(1, math.ceil((duration - .08) / seconds))
+    fast_hd = quality == '720p'
+    # The HTTP response is released when the batch finishes. A short first batch
+    # supplies the seek target and runway without delaying other visible cameras.
+    batch_size = 3 if startup_boost else (6 if fast_hd else 4)
+    count = min(batch_size if ahead and not warm else 1, end - index)
+    for step in range(1, count):
+        if os.path.isfile("%s%d.%s" % (prefix, index + step, transport)):
+            count = step
+            break
+    length = duration - index * seconds if index + count == end else count * seconds
+    width, height, bitrate = RES_SCALE[quality]
+    level = "3.1" if quality == "720p" else "3.0"
+    scale = "scale=%d:%d" % (width, height)
+    if fast_hd:
+        scale += ':flags=fast_bilinear'
+    tmp = prefix + "%d-%d-%%d.tmp" % (os.getpid(), threading.get_ident())
+    cmd = ["sh", "-c", 'echo 300 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+           FFMPEG_BIN, "-nostdin", "-loglevel", "error", "-ss", str(index * seconds), "-threads", "2", "-i", fp,
+           "-frames:v", str(max(1, math.ceil(length * 24 - .0001))), "-map", "0:v:0", "-an", "-filter_threads", "1",
+           "-vf", "setpts=PTS-STARTPTS,fps=24:start_time=0," + scale + ",tpad=stop_mode=clone:stop_duration=0.1",
+           "-c:v", "libx264", "-pix_fmt", "yuv420p",
+           "-profile:v", "baseline", "-level", level, "-threads:v", "2", "-preset", "ultrafast" if fast_hd else "superfast",
+           "-b:v", "%dk" % bitrate, "-maxrate", "%dk" % (bitrate * 3 // 2), "-bufsize", "%dk" % (bitrate * 3),
+           "-g", str(24 * seconds), "-sc_threshold", "0", "-force_key_frames", "expr:gte(t,n_forced*%d)" % seconds,
+           "-f", "segment", "-segment_time_delta", "0.020833", "-segment_start_number", str(index)]
+    if count > 1:
+        cmd += ["-segment_times", ",".join(str(i * seconds) for i in range(1, count))]
+    else:
+        cmd += ["-segment_time", "86400"]
+    if transport == "ts":
+        cmd += ["-initial_offset", str(index * seconds), "-segment_format", "mpegts",
+                "-segment_format_options", "mpegts_copyts=1:mpegts_flags=+initial_discontinuity"]
+    else:
+        cmd += ["-reset_timestamps", "1", "-segment_format", "mp4",
+                "-segment_format_options", "movflags=+empty_moov+default_base_moof+frag_keyframe"]
+    try:
+        # Spread successive cuts across the middle cores. Use the same thermal
+        # core count as the existing worker, including its full cooling stop.
+        cam = cam_of(os.path.basename(fp))
+        camera_index = CAM_ORDER6.index(cam) if cam in CAM_ORDER6 else 0
+        middle_cores = (4, 5, 6)
+        middle_index = (index + camera_index) % len(middle_cores)
+        middle = middle_cores[middle_index]
+        next_middle = middle_cores[(middle_index + 1) % len(middle_cores)]
+        complete = run_variant(cmd + ["-y", tmp], connected, preferred=(middle, 0, 1, next_middle), hd_preview=fast_hd,
+                               startup_boost=fast_hd and startup_boost)
+        for part in range(index, index + count):
+            # FFmpeg closes a segment before opening its successor. On cancellation
+            # only those closed files can safely enter the cache.
+            if (complete or os.path.exists(tmp % (part + 1))) and os.path.isfile(tmp % part) and os.path.getsize(tmp % part):
+                os.replace(tmp % part, "%s%d.%s" % (prefix, part, transport))
+    finally:
+        for part in range(index, index + count):
+            try:
+                os.unlink(tmp % part)
+            except FileNotFoundError:
+                pass
+
+
+def preview_part(fp, quality, index, duration, transport, ahead, connected, warm=False, prime=False, cache_only=False):
+    """Encode the requested time window in the same thermal and CPU slot as full previews."""
+    global _part_cleanup_at
+    key = os.path.basename(_variant_path(fp, quality))
+    if not key:
+        return None
+    prefix = os.path.join(RES_DIR, "sentry-3-%s-" % key[:-4])
+    target = "%s%d.%s" % (prefix, index, transport)
+
+    def cached():
+        if cache_only:
+            total = max(1, math.ceil((duration - .08) / PREVIEW_PART_SECONDS))
+            missing = index
+            while missing < total:
+                try:
+                    if not os.path.getsize("%s%d.%s" % (prefix, missing, transport)):
+                        break
+                except FileNotFoundError:
+                    break
+                missing += 1
+            return missing if missing > index else None
+        try:
+            with open(target, "rb") as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+    data = cached()
+    if data:
+        return data
+    deadline = time.monotonic() + 24
+    priority = 3 if cache_only else (0 if not ahead else (1 if prime else 2))
+    ticket = (priority, object())
+    with _part_queue_changed:
+        # Visible frames and player read-ahead outrank cache-only work.
+        place = next((i for i, (queued_priority, _) in enumerate(_part_waiters) if queued_priority > priority), len(_part_waiters))
+        _part_waiters.insert(place, ticket)
+        _part_queue_changed.notify_all()
+
+    def first_in_queue():
+        with _part_queue_changed:
+            return _part_waiters[0] == ticket
+
+    def still_needed():
+        return connected() and time.monotonic() < deadline and first_in_queue()
+
+    USER_TRANS[0] += 1
+    try:
+        while time.monotonic() < deadline and connected():
+            with _part_queue_changed:
+                if _part_waiters[0] != ticket:
+                    _part_queue_changed.wait(.35)
+                    continue
+            if not preview_cores() or not preview_memory_available():
+                time.sleep(.25)
+                continue
+            if not Q_SEM.acquire(timeout=.25):
+                continue
+            try:
+                if not first_in_queue():
+                    continue
+                data = cached()
+                if data:
+                    return data
+                cancelled = False
+                def encoding_needed():
+                    nonlocal cancelled
+                    if not still_needed():
+                        cancelled = True
+                    return not cancelled
+                _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead or prime or cache_only,
+                                      encoding_needed, warm, startup_boost=prime)
+                data = cached()
+                if data:
+                    if time.monotonic() >= _part_cleanup_at:
+                        _part_cleanup_at = time.monotonic() + 30
+                        res_cleanup()
+                    return data
+                if not cancelled and preview_cores() and still_needed():
+                    raise ValueError("preview encoding failed")
+            finally:
+                Q_SEM.release()
+    finally:
+        USER_TRANS[0] -= 1
+        with _part_queue_changed:
+            _part_waiters.remove(ticket)
+            _part_queue_changed.notify_all()
+    return None
+
+
+def spawn_variant(fp, qv, preheat=False):
     """后台生成 qv 缓存 (同一文件同一档位只起一个作业); 无需等待。"""
     if qv not in RES_SCALE or qv == "orig":
         return False
@@ -7045,7 +9656,7 @@ def spawn_variant(fp, qv):
             # prewarm_loop 会一直误判「用户正在等转码」而无限让位
             if Q_SEM.acquire(timeout=600):
                 try:
-                    get_variant(fp, qv, slot=False)
+                    get_variant(fp, qv, slot=False, wanted=preheat_allowed if preheat else lambda: True)
                 finally:
                     Q_SEM.release()
         finally:
@@ -7181,7 +9792,7 @@ def prewarm_loop():
             if not PREWARM["on"]:
                 time.sleep(600)
                 continue
-            if MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0:
+            if MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0 or not preheat_allowed():
                 time.sleep(15)                 # 有人在用, 别抢
                 continue
             job = _prewarm_pick()
@@ -7196,7 +9807,7 @@ def prewarm_loop():
                 if not Q_SEM.acquire(blocking=False):
                     break                      # 转码槽被用户占着, 让位
                 try:
-                    get_variant(fp, PREWARM_Q, slot=False)
+                    get_variant(fp, PREWARM_Q, slot=False, wanted=preheat_allowed)
                     if _variant_ready(fp, PREWARM_Q):
                         n += 1
                 finally:
@@ -7206,7 +9817,7 @@ def prewarm_loop():
                 PREWARM["done"] += n
                 PREWARM["last"] = "%s/%s · %d 路" % (cat, name, n)
                 PREWARM["skip"].pop(cat + "/" + name, None)
-            else:
+            elif preheat_allowed():
                 key = cat + "/" + name
                 PREWARM["skip"][key] = PREWARM["skip"].get(key, 0) + 1
                 time.sleep(30)
@@ -7350,6 +9961,20 @@ def _stitch_worker(job_id, paths, out_path, total):
                 job["err"] = str(e)[:300]
 
 
+def _queue_stitch_job(job_id, job, worker, args, busy_message):
+    with STITCH_LOCK:
+        if any(j.get("state") == "running" for j in STITCH_JOBS.values()):
+            return None, busy_message
+        STITCH_JOBS[job_id] = job
+    try:
+        threading.Thread(target=worker, args=(job_id, *args), daemon=True).start()
+    except RuntimeError:
+        with STITCH_LOCK:
+            STITCH_JOBS.pop(job_id, None)
+        return None, "合成任务启动失败"
+    return job_id, None
+
+
 def start_stitch(cat, name, cams):
     """创建合成任务, 返回 (job_id, 错误信息)"""
     # 本机 (F50) 整个系统跑在 loop 镜像上, 实测 ffmpeg 多路 1080p 解码+编码会触发
@@ -7372,10 +9997,10 @@ def start_stitch(cat, name, cams):
     paths = [os.path.join(evdir, f) for f in files]
     os.makedirs(STITCH_DIR, exist_ok=True)
     # 内存与并发保护: 设备只有 1.4G, 同时跑两个合成会直接 OOM 拖垮整机
+    busy_message = "已有合成任务在进行, 请等待完成后再试"
     with STITCH_LOCK:
-        running = [j for j in STITCH_JOBS.values() if j.get("state") == "running"]
-    if running:
-        return None, "已有合成任务在进行, 请等待完成后再试"
+        if any(j.get("state") == "running" for j in STITCH_JOBS.values()):
+            return None, busy_message
     avail = mem_available_mb()
     if 0 < avail < 300:
         return None, "设备可用内存不足(%dMB), 暂停合成以免影响录像同步" % avail
@@ -7390,11 +10015,9 @@ def start_stitch(cat, name, cams):
     job_id = "%s-%d" % (name.replace(":", "-"), int(time.time() * 1000) % 1000000)
     out_path = os.path.join(STITCH_DIR, job_id + ".mp4")
     total = probe_duration(paths[0])
-    with STITCH_LOCK:
-        STITCH_JOBS[job_id] = {"state": "running", "pct": 0, "path": None,
-                               "name": "%s_%d路.mp4" % (name, len(files)), "total": total}
-    threading.Thread(target=_stitch_worker, args=(job_id, paths, out_path, total), daemon=True).start()
-    return job_id, None
+    job = {"state": "running", "pct": 0, "path": None,
+           "name": "%s_%d路.mp4" % (name, len(files)), "total": total}
+    return _queue_stitch_job(job_id, job, _stitch_worker, (paths, out_path, total), busy_message)
 
 
 # ---------- 服务端"带水印导出": 给 iOS / 微信 一份标准 H.264 mp4 ----------
@@ -7626,9 +10249,10 @@ def start_export(cat, name, cams, wm=True, q="720p", files=None):
         files = order_files(files)
     if not files:
         return None, "没有可导出的片段"
+    busy_message = "已有导出/合成任务在进行, 请等它完成"
     with STITCH_LOCK:
         if any(j.get("state") == "running" for j in STITCH_JOBS.values()):
-            return None, "已有导出/合成任务在进行, 请等它完成"
+            return None, busy_message
     avail = mem_available_mb()
     if 0 < avail < 260:
         return None, "设备可用内存不足(%dMB), 稍后再试" % avail
@@ -7645,12 +10269,9 @@ def start_export(cat, name, cams, wm=True, q="720p", files=None):
     job_id = "%s-ex%d" % (name.replace(":", "-"), int(now * 1000) % 1000000)
     out_path = os.path.join(STITCH_DIR, job_id + ".mp4")
     total = probe_duration(paths[0]) or 60
-    with STITCH_LOCK:
-        STITCH_JOBS[job_id] = {"state": "running", "pct": 0, "path": None, "size": 0,
-                               "name": "%s_%d路.mp4" % (name, len(files))}
-    threading.Thread(target=_export_worker,
-                     args=(job_id, paths, out_path, total, bool(wm), q), daemon=True).start()
-    return job_id, None
+    job = {"state": "running", "pct": 0, "path": None, "size": 0,
+           "name": "%s_%d路.mp4" % (name, len(files))}
+    return _queue_stitch_job(job_id, job, _export_worker, (paths, out_path, total, bool(wm), q), busy_message)
 
 
 # ---------- 行车遥测: 解码视频 SEI 里的 SeiMetadata protobuf ----------
@@ -7716,7 +10337,7 @@ def _strip_emulation(b):
     return bytes(out)
 
 
-def _mp4_video_samples(fp, max_samples=4000):
+def _mp4_video_samples(fp, max_samples=4000, with_duration=False, with_timing=False):
     """解析 moov, 返回 [(offset, size), ...] 与 lenSize; 失败返回 None"""
     with open(fp, "rb") as f:
         d = f.read(4096)
@@ -7779,6 +10400,18 @@ def _mp4_video_samples(fp, max_samples=4000):
                 return cs, ce
         return None
 
+    duration = 0.0
+    if with_duration:
+        mvhd = find1(b"mvhd", mv_s, mv_e)
+        if mvhd:
+            start = mvhd[0]
+            if moov[start] == 0:
+                scale, ticks = struct.unpack_from(">II", moov, start + 12)
+            else:
+                scale, ticks = struct.unpack_from(">IQ", moov, start + 20)
+            if scale and 0 < ticks <= scale * 120:
+                duration = ticks / scale
+
     stbl = None
     for typ, ts, te in boxes(moov, mv_s, mv_e):
         if typ != b"trak":
@@ -7797,7 +10430,9 @@ def _mp4_video_samples(fp, max_samples=4000):
             stbl = r3
             break
     if not stbl:
-        return None
+        if with_timing:
+            return None
+        return ([], 0, duration) if with_duration else None
     s, e = stbl
     stsd = find1(b"stsd", s, e)
     avc = moov.find(b"avcC", stsd[0], stsd[1])
@@ -7832,7 +10467,154 @@ def _mp4_video_samples(fp, max_samples=4000):
             offs.append((o, sizes[si]))
             o += sizes[si]
             si += 1
-    return offs, len_size
+    if with_timing:
+        # A truncated sample index, reordered frames or trimmed media cannot establish an edge sequence.
+        mdhd, stts, ctts = find1(b"mdhd", r[0], r[1]), find1(b"stts", s, e), find1(b"ctts", s, e)
+        if len(offs) != n or not mdhd or not stts or ctts or moov[mdhd[0]] not in (0, 1):
+            return None
+        scale = struct.unpack_from(">I", moov, mdhd[0] + (20 if moov[mdhd[0]] else 12))[0]
+        if not scale:
+            return None
+        edts = find1(b"edts", ts, te)
+        elst = find1(b"elst", *edts) if edts else None
+        if elst:
+            version = moov[elst[0]]
+            entries = struct.unpack_from(">I", moov, elst[0] + 4)[0]
+            if version not in (0, 1) or entries != 1:
+                return None
+            media_time = struct.unpack_from(">q" if version else ">i", moov, elst[0] + (16 if version else 12))[0]
+            if media_time != 0:
+                return None
+        deltas = []
+        count = struct.unpack_from(">I", moov, stts[0] + 4)[0]
+        for index in range(count):
+            samples, ticks = struct.unpack_from(">II", moov, stts[0] + 8 + index * 8)
+            if samples > n - len(deltas):
+                return None
+            deltas.extend([ticks / scale] * samples)
+        if len(deltas) != n:
+            return None
+        return offs, len_size, deltas
+    return (offs, len_size, duration) if with_duration else (offs, len_size)
+
+
+def _tesla_sei(nal):
+    if not nal or nal[0] & 31 != 6:
+        return None
+    for i in range(3, min(len(nal), 100)):
+        if nal[i] == 0x42:
+            continue
+        if nal[i] == 0x69:
+            return _pb_decode(_strip_emulation(nal[i + 1:-1]))
+        break
+    return None
+
+
+@lru_cache(maxsize=4096)
+def clip_continuity(path, size, mtime_ns):
+    """Read original edge SEI and sample timing, without decoding or transcoding."""
+    try:
+        indexed = _mp4_video_samples(path, with_timing=True)
+        if not indexed:
+            return None
+        offsets, prefix, deltas = indexed
+        if len(offsets) < 8:
+            return None
+        edges = []
+        with open(path, "rb") as stream:
+            for indexes in (range(min(32, len(offsets))), range(max(0, len(offsets) - 32), len(offsets))):
+                sequences = []
+                for index in indexes:
+                    pos, length = offsets[index]
+                    end = pos + length
+                    sequence = None
+                    while pos + prefix < end:
+                        stream.seek(pos)
+                        header = stream.read(prefix + 1)
+                        if len(header) != prefix + 1:
+                            return None
+                        length = int.from_bytes(header[:prefix], "big")
+                        payload = pos + prefix
+                        pos = payload + length
+                        if not length or pos > end:
+                            return None
+                        if header[-1] & 31 != 6 or length > 65536:
+                            continue
+                        stream.seek(payload)
+                        message = _tesla_sei(stream.read(length))
+                        if message and message.get(1) == 1:
+                            sequence = message.get(3, 0)
+                            break
+                    if not isinstance(sequence, int) or sequence < 0:
+                        return None
+                    sequences.append(sequence)
+                if any(b != a + 1 for a, b in zip(sequences, sequences[1:])):
+                    return None
+                steps = [deltas[i] for i in indexes if deltas[i] > 0]
+                if len(steps) < 7:
+                    return None
+                step = statistics.median(steps)
+                if not .005 <= step <= 1:
+                    return None
+                edges.append((sequences[0], sequences[-1], step))
+        return {"first": edges[0][0], "last": edges[1][1],
+                "head_step": edges[0][2], "tail_step": edges[1][2]}
+    except (OSError, IndexError, TypeError, ValueError, struct.error):
+        return None
+
+
+def drive_clip_gears(path):
+    """从前视原片采样 SEI，无需启动解码器。只保存时间和挡位变化。"""
+    try:
+        indexed = _mp4_video_samples(path, with_duration=True)
+        if not indexed:
+            return 60, []
+        offsets, prefix, duration = indexed
+        gears = []
+        if not duration or not offsets:
+            return duration or 60, gears
+        stride = max(1, int(len(offsets) / duration / 4))
+        indexes = list(range(0, len(offsets) - 1, stride)) + [len(offsets) - 1]
+        with open(path, "rb") as stream:
+            for i in indexes:
+                start, size = offsets[i]
+                stop = start + size
+                pos = start
+                stream.seek(start)
+                head = stream.read(min(1024, size))
+                while pos + prefix < stop:
+                    idx = pos - start
+                    if idx + prefix + 1 <= len(head):
+                        length = int.from_bytes(head[idx:idx + prefix], "big")
+                        nal_type = head[idx + prefix] & 31
+                    else:
+                        stream.seek(pos)
+                        header = stream.read(prefix + 1)
+                        if len(header) != prefix + 1:
+                            break
+                        length = int.from_bytes(header[:-1], "big")
+                        nal_type = header[-1] & 31
+                    payload = pos + prefix
+                    pos = payload + length
+                    if not length or pos > stop:
+                        break
+                    if nal_type != 6 or length > 4096:
+                        continue
+                    if pos - start <= len(head):
+                        nal = head[payload - start:pos - start]
+                    else:
+                        stream.seek(payload)
+                        nal = stream.read(length)
+                    msg = _tesla_sei(nal)
+                    if msg and 3 in msg:
+                        # Proto3 省略零值，只有确认是 Tesla SEI 后才将缺省值解释为 P。
+                        gear = msg.get(2, 0)
+                        if gear in (0, 1, 2) and (not gears or gears[-1][1] != gear):
+                            gears.append([round(i * duration / len(offsets), 3), gear])
+                        break
+        return round(duration, 3), gears
+    except (IndexError, TypeError, ValueError, struct.error):
+        return 60, []
 
 
 def parse_telemetry(fp, stride=3):
@@ -7862,20 +10644,7 @@ def parse_telemetry(fp, stride=3):
                     break
                 nal = data[pos + len_size:pos + len_size + n2]
                 pos += len_size + n2
-                if nal[0] & 0x1F != 6:
-                    continue
-                # 找 magic: 连续的 0x42 之后遇到 0x69
-                pi = None
-                for i in range(3, min(len(nal), 100)):
-                    if nal[i] == 0x42:
-                        continue
-                    if nal[i] == 0x69:
-                        pi = i + 1
-                    break
-                if pi is None:
-                    continue
-                payload = _strip_emulation(nal[pi:len(nal) - 1])
-                msg = _pb_decode(payload)
+                msg = _tesla_sei(nal)
                 if not msg:
                     continue
                 spd = msg.get(4, 0.0) * 3.6
@@ -8118,6 +10887,72 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    def _playback_preview(self, path):
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        url = query.get("file", [""])[0]
+        name = playback_archive_name(url)
+        quality = query.get("q", [""])[0]
+        if not name or quality not in RES_SCALE:
+            return self._send(400, b"invalid preview", "text/plain")
+        fp = safe_archive_path(name)
+        if not fp:
+            return self._send(404, b"missing", "text/plain")
+        try:
+            st = os.stat(fp)
+        except FileNotFoundError:
+            return self._send(404, b"missing", "text/plain")
+        duration = movie_duration(fp, st.st_size, st.st_mtime_ns)
+        if not duration or not 0 < duration <= 3600:
+            return self._send(422, b"invalid duration", "text/plain")
+        seconds = PREVIEW_PART_SECONDS
+        total = max(1, math.ceil((duration - .08) / seconds))
+        if path.endswith("/index.m3u8"):
+            try:
+                at = max(0, min(float(query.get("at", [0])[0]), duration))
+            except ValueError:
+                return self._send(400, b"invalid offset", "text/plain")
+            playlist = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-PLAYLIST-TYPE:VOD",
+                        "#EXT-X-TARGETDURATION:%d" % seconds, "#EXT-X-MEDIA-SEQUENCE:0",
+                        "#EXT-X-START:TIME-OFFSET=%.4f,PRECISE=YES" % at]
+            params = urllib.parse.urlencode({"file": url, "q": quality})
+            for index in range(total):
+                length = duration - index * seconds if index + 1 == total else seconds
+                ahead = int(index != min(total - 1, int(at / seconds)))
+                playlist.extend(("#EXTINF:%.6f," % length, "part.ts?" + params + "&part=%d&ahead=%d" % (index, ahead)))
+            playlist.append("#EXT-X-ENDLIST")
+            return self._send(200, ("\n".join(playlist) + "\n").encode(), "application/vnd.apple.mpegurl")
+        index = query.get("part", [""])[0]
+        if not re.fullmatch(r"[0-9]{1,4}", index) or int(index) >= total:
+            return self._send(400, b"invalid part", "text/plain")
+        def connected():
+            try:
+                readable = select.select([self.connection], [], [], 0)[0]
+                return not readable or bool(self.connection.recv(1, socket.MSG_PEEK))
+            except OSError:
+                return False
+        transport = "ts" if path.endswith(".ts") else "mp4"
+        ahead = query.get("ahead") == ["1"]
+        prime = transport == "mp4" and query.get("prime") == ["1"]
+        cache_only = query.get("cache_only") == ["1"]
+        try:
+            data = preview_part(fp, quality, int(index), duration, transport, ahead, connected,
+                                warm=ahead and not prime and query.get("warm") == ["1"], prime=prime,
+                                cache_only=cache_only)
+        except (OSError, ValueError):
+            return self._send(422, b"preview encoding failed", "text/plain")
+        if not connected():
+            return
+        if data is None:
+            return self._send(503, b"preview unavailable", "text/plain")
+        if cache_only:
+            # The next clip will request these bytes when its decoder is attached.
+            self.send_response(204)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Preview-Next-Part", str(data))
+            self.end_headers()
+            return
+        self._send(200, data, "video/mp2t" if transport == "ts" else "video/mp4")
+
     # ---- 认证 ----
     def _cookie(self, name):
         for part in (self.headers.get("Cookie") or "").split(";"):
@@ -8286,29 +11121,98 @@ class Handler(BaseHTTPRequestHandler):
                 fields[nm.group(1)] = data.decode("utf-8", "replace").strip()
         return file_fn, file_data, fields
 
+    def _serve_archive_download(self, head_only=False):
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        fp = safe_archive_path(query.get("path", [""])[0])
+        if not fp:
+            return self._send(404, b"" if head_only else b"not found", "text/plain")
+        out = _export_variant(fp, query.get("q", [""])[0])
+        if not out:
+            return self._send(503, b"" if head_only else "所选画质暂不可用".encode(), "text/plain; charset=utf-8")
+        serve_file(self, out, head_only=head_only)
+
+    def _serve_zip_download(self, path, head_only=False):
+        route = re.fullmatch(r"/api/export/([\w-]+)/([\w\-. ]+)/?", path)
+        if not route:
+            return self._send(404, b"" if head_only else b"not found", "text/plain")
+        cat, event = route.groups()
+        archive_event = os.path.join(ARCHIVE, cat, event)
+        evdir = safe_archive_dir(archive_event)
+        if not evdir or not os.path.isdir(evdir):
+            return self._send(404, b"" if head_only else b"not found", "text/plain")
+
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
+        cams = [c.strip() for c in query.get("cams", [""])[0].split(",") if c.strip()]
+        quality = query.get("q", [""])[0]
+        try:
+            filenames = sorted(f for f in os.listdir(evdir) if f.lower().endswith(".mp4"))
+        except FileNotFoundError:
+            return self._send(404, b"" if head_only else b"not found", "text/plain")
+        if "clip" in query:
+            clip = query["clip"][0]
+            filenames = [f for f in filenames if clip_key(f) == clip]
+        else:
+            filenames = latest_group(filenames)
+        filenames = [f for f in filenames if not cams or cam_of(f) in cams]
+        if not filenames:
+            return self._send(404, b"" if head_only else b"no matching videos", "text/plain")
+
+        files = []
+        for name in filenames:
+            fp = safe_archive_path(os.path.join(archive_event, name))
+            if not fp:
+                return self._send(404, b"" if head_only else b"not found", "text/plain")
+            out = _export_variant(fp, quality)
+            if not out:
+                return self._send(503, b"" if head_only else "所选画质暂不可用".encode(), "text/plain; charset=utf-8")
+            files.append((out, event + "/" + name))
+
+        suffix = "_" + "-".join(cams) if cams and len(cams) < 6 else ""
+        attachment = 'attachment; filename="%s"' % urllib.parse.quote(event + suffix + ".zip")
+        if head_only:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", attachment)
+            self.end_headers()
+            return
+
+        metadata = safe_archive_path(os.path.join(archive_event, "event.json"))
+        if metadata:
+            files.append((metadata, event + "/event.json"))
+        with tempfile.TemporaryFile() as tmp:
+            try:
+                with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as archive:
+                    for fp, name in files:
+                        archive.write(fp, arcname=name)
+            except FileNotFoundError:
+                return self._send(404, b"not found", "text/plain")
+            size = tmp.tell()
+            tmp.seek(0)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", attachment)
+            self.end_headers()
+            try:
+                shutil.copyfileobj(tmp, self.wfile, length=262144)
+            except ConnectionError:
+                return
+
     def do_HEAD(self):
         """只回头部: iOS/安卓下载器在真正下载前常先 HEAD 探大小, 不支持会退化成"边播边存"的残缺文件"""
         def hdr_only(code, extra=None):
             self.send_response(code)
-            for k, v in (extra or []):
+            headers = dict(extra or [])
+            headers.setdefault("Content-Length", "0")
+            for k, v in headers.items():
                 self.send_header(k, v)
-            self.send_header("Content-Length", "0")
             self.end_headers()
 
         if not self._gate():
             return
         path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         if path == "/dl":
-            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            fp = safe_archive_path(q.get("path", [""])[0])
-            if not fp:
-                hdr_only(404)
-                return
-            out = fp
-            qv = q.get("q", [""])[0]
-            if qv in RES_SCALE:
-                out = get_variant(fp, qv)
-            serve_file(self, out, head_only=True)
+            self._serve_archive_download(head_only=True)
             return
         m = re.match(r"^/media/([\w-]+)/([\w\-. ]+)/([\w\-. ]+)$", path)
         if m:
@@ -8316,6 +11220,13 @@ class Handler(BaseHTTPRequestHandler):
             if not fp.startswith(ARCHIVE) or not os.path.isfile(fp):
                 hdr_only(404)
                 return
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            quality = query.get("q", ["orig"])[0]
+            if quality in RES_SCALE and "exact" in query:
+                if not _variant_ready(fp, quality):
+                    hdr_only(409)
+                    return
+                fp = _variant_path(fp, quality)
             try:
                 size = str(os.path.getsize(fp))
             except OSError:
@@ -8324,8 +11235,11 @@ class Handler(BaseHTTPRequestHandler):
             hdr_only(200, [("Content-Type", "video/mp4"), ("Content-Length", size),
                            ("Accept-Ranges", "bytes")])
             return
-        if path.startswith("/api/export/"):
+        if path == "/api/export/burn/dl":
             hdr_only(200, [("Content-Type", "video/mp4"), ("Accept-Ranges", "bytes")])
+            return
+        if path.startswith("/api/export/"):
+            self._serve_zip_download(path, head_only=True)
             return
         hdr_only(405)
 
@@ -8350,7 +11264,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/ver":
             # 版本探针: 前端刷新时对比, 服务端升级了就自动重载, 不用手动清缓存
-            body = json.dumps({"v": APP_VERSION}).encode()
+            body = json.dumps({"v": VIEWER_BUILD}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -8365,7 +11279,7 @@ class Handler(BaseHTTPRequestHandler):
             sponsor_ver = hashlib.md5(b"".join(SPONSOR_BYTES[k] for k in sorted(SPONSOR_BYTES))).hexdigest()[:10]
             html = (HTML.replace("__CAT_NAMES__", json.dumps(CAT_NAMES, ensure_ascii=False))
                     .replace("__I18N__", I18N_JS).replace("__LANGS__", LANG_JS)
-                    .replace("__APP_VER__", APP_VERSION)
+                    .replace("__APP_VER__", VIEWER_BUILD)
                     .replace("__SPONSOR_VER__", sponsor_ver))
             self._send(200, html.encode())
         elif path.startswith("/sponsor/"):
@@ -8456,11 +11370,63 @@ class Handler(BaseHTTPRequestHandler):
                 os.unlink(fp)
             except OSError:
                 pass
+        elif path == "/api/timeline":
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            cat = query.get("cat", [""])[0]
+            event = query.get("event", [""])[0]
+            if cat not in CATS or (cat != "RecentClips" and not event):
+                self._json({"error": "invalid category or event"}, 400)
+                return
+            events = list_events(cat, None if cat in ("RecentClips", "DriveClips") else event, True)[cat]
+            if cat == "DriveClips":
+                selected = next((group for group in drive_groups(events)
+                                 if any(member["name"] == event for member in group["events"])), None)
+                events = ([dict(member, trip=selected["events"][0]["name"]) for member in selected["events"]]
+                          if selected else [])
+            if query.get("gaps", ["1"])[0] != "0":
+                if not TIMELINE_GAP_LOCK.acquire(blocking=False):
+                    self._json({"pending": True}, 202)
+                    return
+                def connected():
+                    try:
+                        readable = select.select([self.connection], [], [], 0)[0]
+                        return not readable or bool(self.connection.recv(1, socket.MSG_PEEK))
+                    except OSError:
+                        return False
+                try:
+                    annotate_timeline_gaps(events, connected)
+                finally:
+                    TIMELINE_GAP_LOCK.release()
+            self._json(events)
+        elif re.fullmatch(r"/api/(?:playback-preview|sentry-preview)/(?:part\.mp4|part\.ts|index\.m3u8)", path):
+            try:
+                self._playback_preview(path)
+            except ConnectionError:
+                pass  # A seek or camera change cancels the obsolete HTTP response.
+        elif path == "/api/playback-source":
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            name = playback_archive_name(query.get("file", [""])[0])
+            quality = query.get("q", [""])[0]
+            if not name or quality not in RES_SCALE:
+                self._json({"state": "missing"}, 400)
+                return
+            fp = safe_archive_path(name)
+            if not fp:
+                self._json({"state": "missing"}, 404)
+                return
+            state = playback_variant_state(fp, quality)
+            if state in ("pending", "cooling") and query.get("parts") == ["1"]:
+                self._json({"state": "parts", "seconds": PREVIEW_PART_SECONDS})
+            else:
+                self._json({"state": state})
         elif path == "/api/events":
-            self._json(list_events())
+            self._json(list_events(trips=True))
+        elif path == "/api/live/ready":
+            self._serve_live_ready()
         elif path == "/api/live/status":
-            folder, newest = live_latest()
-            self._json({"ok": True, "folder": folder,
+            folder, newest, clips, oldest, latest_cameras = live_latest()
+            self._json({"ok": True, "folder": folder, "clips": clips, "oldest": oldest,
+                        "latest_cameras": latest_cameras,
                         "age": round(newest - time.time(), 1) if newest else -1,
                         "car_age": round(usb_img_age(), 1)})
         elif path == "/api/telemetry":
@@ -8484,6 +11450,11 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/ota/check":
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             self._json(ota_check(force=q.get("force", ["0"])[0] == "1"))
+        elif path in ("/api/storage", "/api/storage/job"):
+            try:
+                self._json(dict(ok=True, job=storage_job()) if path.endswith('/job') else storage_status())
+            except (OSError, ValueError, TypeError) as exc:
+                self._json(dict(ok=False, msg='无法读取存储分配：' + str(exc)), 400)
         elif path == "/api/settings":
             self._json({"ok": True, "auto_update": load_settings().get("auto_update", True),
                         "ui_style": load_settings().get("ui_style", "default"),
@@ -8550,7 +11521,9 @@ class Handler(BaseHTTPRequestHandler):
                     dirs.append(e)
                 elif os.path.isfile(ep):
                     files.append({"name": e, "size": os.path.getsize(ep)})
-            self._json({"ok": True, "dir": d, "dirs": dirs, "files": files})
+            relative = os.path.relpath(d, os.path.realpath(ARCHIVE))
+            virtual_dir = "/archive" if relative == "." else "/archive/" + relative.replace(os.sep, "/")
+            self._json({"ok": True, "dir": d, "virtual_dir": virtual_dir, "dirs": dirs, "files": files})
         elif path == "/api/usb/browse":
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             fp = usb_real(q.get("dir", [""])[0])
@@ -8578,71 +11551,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             serve_file(self, fp)
         elif path == "/dl":
-            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            fp = safe_archive_path(q.get("path", [""])[0])
-            if not fp:
-                self._send(404, b"not found")
-                return
-            out = fp
-            qv = q.get("q", [""])[0]
-            if qv in RES_SCALE:  # 下载也支持清晰度: 转码缓存副本, 失败回退原文件
-                out = get_variant(fp, qv)
-            serve_file(self, out)
+            self._serve_archive_download()
         elif path.startswith("/api/export/"):
-            m2 = re.match(r"^/api/export/([\w-]+)/([\w\-. ]+)/?$", path)
-            if not m2:
-                self._send(404, b"not found")
-                return
-            q2 = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            cams = [c.strip() for c in (q2.get("cams", [""])[0] or "").split(",") if c.strip()]
-            evdir = safe_archive_dir(ARCHIVE + "/" + m2.group(1) + "/" + m2.group(2))
-            if not evdir or not os.path.isdir(evdir):
-                self._send(404, b"not found")
-                return
-            vids = []
-            allf = latest_group(sorted(f for f in os.listdir(evdir) if f.endswith(".mp4")))
-            for f in allf:
-                cam = f.rsplit("-", 1)[-1][:-4] if "-" in f else f
-                if not cams or cam in cams:
-                    vids.append(f)
-            if not vids:
-                self._send(404, b"no matching videos")
-                return
-            evname = m2.group(2)
-            zname = evname + (("_" + "-".join(cams)) if cams and len(cams) < 6 else "") + ".zip"
-            qv = q2.get("q", [""])[0]  # 打包zip也支持清晰度: 每路先取转码副本 (串行转码), 失败回退原文件
-            if qv not in RES_SCALE:
-                qv = ""
-            tmp = tempfile.NamedTemporaryFile(prefix="exp_", suffix=".zip", delete=False)
-            tmp.close()
-            try:
-                with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_STORED) as z:
-                    for f in vids:
-                        ffp = os.path.join(evdir, f)
-                        if qv:
-                            ffp = get_variant(ffp, qv)
-                        z.write(ffp, arcname=evname + "/" + f)
-                    ej = os.path.join(evdir, "event.json")
-                    if os.path.isfile(ej):
-                        z.write(ej, arcname=evname + "/event.json")
-                zsize = os.path.getsize(tmp.name)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/zip")
-                self.send_header("Content-Length", str(zsize))
-                self.send_header("Content-Disposition",
-                                 'attachment; filename="%s"' % urllib.parse.quote(zname))
-                self.end_headers()
-                with open(tmp.name, "rb") as zf:
-                    while True:
-                        chunk = zf.read(262144)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-            finally:
-                try:
-                    os.unlink(tmp.name)
-                except OSError:
-                    pass
+            self._serve_zip_download(path)
         elif path.startswith("/thumb/"):
             self._serve_thumb(path)
         else:
@@ -8655,11 +11566,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, b"not found")
                 return
             # 清晰度: ?q=360p/480p/720p 时返回按需转码的缓存副本 (失败回退原文件)
-            qv = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("q", ["orig"])[0]
+            params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            qv = params.get("q", ["orig"])[0]
             variant_note = ""
-            if qv in RES_SCALE and qv != "orig":
+            if "livefile" in params:
+                variant = params["livefile"][0]
+                if variant not in RES_SCALE or not _variant_ready(fp, variant):
+                    self._send(410, b"expired")
+                    return
+                fp = _variant_path(fp, variant)
+            elif qv in RES_SCALE and qv != "orig":
                 if _variant_ready(fp, qv):
                     fp = _variant_path(fp, qv)
+                elif "exact" in urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query):
+                    self._send(409, b"preview unavailable")
+                    return
                 else:
                     # 缓存还没生成: 立即发首帧, 转码交给后台。
                     # 不能在这里 get_variant() —— 那会同步等 ffmpeg 转完(10~25s)
@@ -8763,6 +11684,42 @@ class Handler(BaseHTTPRequestHandler):
                 MEDIA_ACTIVE[0] = max(0, MEDIA_ACTIVE[0] - 1)
                 MEDIA_SEM.release()
 
+    def _serve_live_ready(self):
+        if not _live_ready_listening.is_set() or not _live_ready_slots.acquire(blocking=False):
+            self._send(204, b"")
+            return
+        try:
+            self.close_connection = True
+            self.connection.settimeout(5)
+            with _live_ready:
+                seen = _live_ready_notice
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, no-transform")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(b"retry: 3000\n: connected\n\n")
+            self.wfile.flush()
+            while True:
+                with _live_ready:
+                    changed = _live_ready.wait_for(lambda: _live_ready_notice != seen, timeout=10)
+                    payload = _live_ready_notice
+                if not _live_ready_listening.is_set() or not self._authed():
+                    return
+                if changed:
+                    clip, ready_at = payload
+                    body = json.dumps({"clip": clip, "ready_at": ready_at}).encode("ascii")
+                    self.wfile.write(b"event: recent\ndata: " + body + b"\n\n")
+                    seen = payload
+                else:
+                    self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+        except OSError:
+            pass
+        finally:
+            _live_ready_slots.release()
+
     def _serve_thumb(self, path):
         """列表缩略图: 用 ffmpeg 抽指定秒数一帧 (?t=秒, 默认 1), 结果按 (路径+大小+mtime+t) 哈希缓存在 eMMC"""
         parts = path[len("/thumb/"):].split("/")
@@ -8815,6 +11772,35 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._gate():
             return
+        if p == "/api/recording":
+            origin = self.headers.get('Origin')
+            if (self.headers.get('X-TSF-Recording') != '1' or
+                    self.headers.get('Sec-Fetch-Site') == 'cross-site' or
+                    (origin and urllib.parse.urlsplit(origin).netloc != self.headers.get('Host'))):
+                self._json(dict(ok=False, msg='请求来源校验失败'), 403)
+                return
+            try:
+                result = recording_action(self._read_json())
+                self._json(result, 200 if result['ok'] else 409)
+            except (OSError, ValueError, TypeError) as exc:
+                # Validations have stable, user-facing messages; filesystem
+                # failures must not expose device paths or implementation data.
+                self._json(dict(ok=False, msg=str(exc) if isinstance(exc, ValueError) else '操作失败，请稍后重试'), 409)
+            return
+        if p in ("/api/storage", "/api/storage/resize"):
+            origin = self.headers.get('Origin')
+            if (self.headers.get('X-TSF-Storage') != '1' or
+                    self.headers.get('Sec-Fetch-Site') == 'cross-site' or
+                    (origin and urllib.parse.urlsplit(origin).netloc != self.headers.get('Host'))):
+                self._json(dict(ok=False, msg='请求来源校验失败'), 403)
+                return
+            try:
+                body = self._read_json()
+                result = storage_start_resize(body) if p.endswith('/resize') else storage_apply(body)
+                self._json(result, 200 if result['ok'] else 409)
+            except (OSError, ValueError, TypeError) as exc:
+                self._json(dict(ok=False, msg=str(exc)), 400)
+            return
         path = urllib.parse.unquote(self.path)
         if p == "/api/fm":
             body = self._read_json()
@@ -8825,15 +11811,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "msg": "参数错误"}, 400)
                 return
             try:
-                ok, msg, done, failed, extra = fm_action(
-                    str(body.get("area") or ""), str(body.get("op") or ""),
-                    body.get("items") or [], body.get("dest") or "", body.get("name") or "")
+                with _storage_edit_lock:
+                    ok, msg, done, failed, extra = fm_action(
+                        str(body.get("area") or ""), str(body.get("op") or ""),
+                        body.get("items") or [], body.get("dest") or "", body.get("name") or "")
             except Exception as ex:
                 self._json({"ok": False, "msg": "操作失败: %s" % ex}, 500)
                 return
             j = {"ok": ok, "msg": msg, "done": done, "failed": failed}
             j.update(extra)
             self._json(j)
+            return
+        if path == "/api/live/demand":
+            files = live_demand(self._read_json())
+            self._json({"files": files or {}}, 400 if files is None else 200)
             return
         if path == "/api/kick":
             # 前端播到当前段一半/打开事件时, 让服务端把相邻段的当前清晰度先转好。
@@ -8875,7 +11866,7 @@ class Handler(BaseHTTPRequestHandler):
                         skipped += 1
                         continue
                     # 后台排队生成, 同一个文件只排一次; 请求立刻返回, 不占用连接
-                    if spawn_variant(fp, qv):
+                    if spawn_variant(fp, qv, preheat=True):
                         started += 1
                     else:
                         skipped += 1
@@ -9194,9 +12185,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not dest_dir:
                 dest_dir = FILES_DIR
-            os.makedirs(dest_dir, exist_ok=True)
-            with open(os.path.join(dest_dir, fn), "wb") as f:
-                f.write(data)
+            try:
+                archive_upload(dest_dir, fn, data)
+            except (OSError, ValueError) as exc:
+                self._json(dict(ok=False, msg=str(exc) if isinstance(exc, ValueError) else '上传失败'), 409)
+                return
             self._json({"ok": True, "msg": f"已上传到 {dest_dir}/{fn} ({len(data)//1024} KB)"})
         elif path == "/api/skin/activate":
             body = self._read_json()
@@ -9268,7 +12261,11 @@ class Handler(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             fp = safe_archive_path(q.get("path", [""])[0])
             if fp:
-                os.remove(fp)
+                try:
+                    archive_delete_file(fp)
+                except (OSError, ValueError) as exc:
+                    self._json(dict(ok=False, msg=str(exc) if isinstance(exc, ValueError) else '删除失败'), 409)
+                    return
                 self._json({"ok": True})
             else:
                 self._json({"ok": False, "msg": "not found"}, 404)
@@ -9337,6 +12334,8 @@ if __name__ == "__main__":
     # 启动自愈: 若上次退出时镜像仍处于管理挂载状态, 恢复导出。
     # 短暂重试拿锁, 避免与正在进行的归档/同步互相拆台; 拿不到就完全不碰 U 盘。
     for _ in range(6):
+        if storage_busy():
+            break
         if _acquire_usb_flock():
             break
         time.sleep(0.4)
@@ -9357,4 +12356,5 @@ if __name__ == "__main__":
     threading.Thread(target=notify_loop, daemon=True).start()
     threading.Thread(target=auto_update_loop, daemon=True).start()
     threading.Thread(target=prewarm_loop, daemon=True).start()
+    threading.Thread(target=listen_live_ready, daemon=True).start()
     srv.serve_forever()

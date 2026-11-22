@@ -13,3 +13,14 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Device-specific settings and recordings
+auth.conf
+settings.json
+storage.json
+.env
+.env.*
+*.mp4
+*.key
+*.pem
+runtime/

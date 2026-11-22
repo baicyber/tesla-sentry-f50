@@ -28,9 +28,12 @@ import fcntl
 import json
 import os
 import re
+import socket
 import struct
 import sys
 import time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import storage_allocation
 
 # 配置兜底: procd 不把 init.d 的 export 传给服务进程, 这里自己读 conf
 # (优先级: 显式环境变量 > /etc/tesla-sentry.conf > 代码默认值; 空值视为用默认)
@@ -57,12 +60,34 @@ MNT = os.environ.get("TSF_MNT", "/tmp/teslamnt")
 LOG = os.environ.get("TSF_LIVE_LOG", "/root/tesla-live.log")
 STATE = os.environ.get("TSF_LIVE_STATE", "/root/.tesla-live-state.json")
 INTERVAL = int(os.environ.get("TSF_LIVE_INTERVAL", "15"))
+RECENT_INTERVAL = 5
+RECENT_SEGMENT_SECONDS = 60
+RECENT_FAST_BEFORE = 5
+RECENT_FAST_AFTER = 8
+RECENT_STABLE_SECONDS = 3
+RECENT_CAMERAS = ("front", "back", "left_repeater", "right_repeater")
+LIVE_READY_SOCKET = "/root/.tesla-live-ready.sock"
 # 与网页 U盘管理 / 定时归档 / U盘自愈共用的跨进程锁 (那边持排他, 这里持共享)
 USB_LOCK = os.environ.get("TSF_USB_LOCK", "/tmp/tsf-usb.lock")
 # 归档滚动窗口(分钟), 与 sentry-viewer.py 的 TSF_RECENT_ROLL_MIN 保持一致;
 # 窗口外的 RecentClips 根本不再抄进归档 —— 否则清掉的片段会被当成"新片段"重抄一遍,
 # 形成 删除→重抄 的死循环, 既拖慢新片段落地又白写 eMMC
 ROLL_MIN = int(os.environ.get("TSF_RECENT_ROLL_MIN", "60"))
+FREE_MIN_MB = int(os.environ.get("TSF_FREE_MIN_MB", "4096"))
+
+
+def refresh_storage_settings():
+    global FREE_MIN_MB
+    try:
+        FREE_MIN_MB = int(storage_allocation.load()['free_min_gib'] * 1024)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+refresh_storage_settings()
+FREE_LOG_INTERVAL = int(os.environ.get("TSF_SYNC_FREE_LOG_INTERVAL", "300"))
+FAIL_RETRY_BASE = int(os.environ.get("TSF_SYNC_FAIL_RETRY_SEC", "300"))
+FAIL_RETRY_MAX = int(os.environ.get("TSF_SYNC_FAIL_RETRY_MAX_SEC", "1800"))
 CATS = ("SentryClips", "SavedClips", "RecentClips")
 TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})-")
 
@@ -77,12 +102,23 @@ def log(msg):
         pass
 
 
+def archive_free_mb():
+    try:
+        st = os.statvfs(ARCHIVE)
+        return st.f_bavail * st.f_frsize // 1048576
+    except OSError:
+        return -1
+
+
 def usb_shared_lock():
     """拿共享锁; 别人(网页挂载/归档/自愈)持排他锁时返回 None, 本轮直接跳过"""
     fd = None
     try:
         fd = os.open(USB_LOCK, os.O_CREAT | os.O_RDWR, 0o644)
         fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        if any(os.path.exists(IMG + suffix) for suffix in ('.resize-state', '.resize-new', '.resize-backup')):
+            os.close(fd)
+            return None
         return fd
     except OSError:
         if fd is not None:
@@ -310,21 +346,87 @@ def same_file(path, size):
         return False
 
 
-def copy_entry(exfat, entry, dest_path):
+class ClipNotReady(Exception):
+    pass
+
+
+def mp4_has_index(read_at, size):
+    """检查 MP4 的媒体数据与索引箱已写齐，兼容索引放在文件头或尾。"""
+    media = index = False
+    offset = 0
+    for _ in range(128):
+        if offset + 8 > size:
+            return False
+        head = read_at(offset, 8)
+        if len(head) != 8:
+            return False
+        length, kind = struct.unpack(">I4s", head)
+        header_size = 8
+        if length == 1:
+            extended = read_at(offset + 8, 8)
+            if len(extended) != 8:
+                return False
+            length = struct.unpack(">Q", extended)[0]
+            header_size = 16
+        elif length == 0:
+            length = size - offset
+        if length < header_size or offset + length > size:
+            return False
+        if kind == b"moov" and length >= header_size + 8:
+            index = True
+        if kind == b"mdat" and length > header_size:
+            media = True
+        if index and media:
+            return True
+        offset += length
+    return False
+
+
+def source_has_mp4_index(exfat, entry):
+    clusters = exfat.clusters_for(entry)
+
+    def read_at(offset, count):
+        data = bytearray()
+        while len(data) < count:
+            block, within = divmod(offset + len(data), exfat.cluster_size)
+            if block >= len(clusters):
+                break
+            length = min(count - len(data), exfat.cluster_size - within)
+            chunk = exfat.pread(length, exfat.cluster_off(clusters[block]) + within)
+            data.extend(chunk)
+            if len(chunk) != length:
+                break
+        return data
+
+    return mp4_has_index(read_at, entry.size)
+
+
+def copy_entry(exfat, entry, dest_path, require_index=False):
     """把镜像里的文件写到归档区, 返回写入字节数"""
+    if require_index and not source_has_mp4_index(exfat, entry):
+        raise ClipNotReady
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     tmp = dest_path + ".part"
     written = 0
-    with open(tmp, "wb") as f:
-        for chunk in exfat.read_file(entry):
-            f.write(chunk)
-            written += len(chunk)
-        f.flush()
-        os.fsync(f.fileno())
-    if written != entry.size:
-        os.unlink(tmp)
-        raise IOError("读取不完整 %d/%d" % (written, entry.size))
-    os.replace(tmp, dest_path)
+    try:
+        with open(tmp, "w+b") as f:
+            for chunk in exfat.read_file(entry):
+                f.write(chunk)
+                written += len(chunk)
+            if written != entry.size:
+                raise IOError("读取不完整 %d/%d" % (written, entry.size))
+            f.flush()
+            if require_index:
+                def read_at(pos, count):
+                    f.seek(pos)
+                    return f.read(count)
+                if not mp4_has_index(read_at, written):
+                    raise ClipNotReady
+            os.fsync(f.fileno())
+        os.replace(tmp, dest_path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     return written
 
 
@@ -363,7 +465,7 @@ def save_state(st):
         pass
 
 
-def scan(exfat):
+def scan(exfat, cats=CATS):
     """返回 {(分类, 事件名, 文件名): Entry}"""
     found = {}
     try:
@@ -375,7 +477,7 @@ def scan(exfat):
     if not cam or not cam.is_dir:
         return found
     cat_list = exfat.list_dir(cam.cluster, cam.size)
-    for cat in CATS:
+    for cat in cats:
         catdir = exfat.find(cat_list, cat)
         if not catdir or not catdir.is_dir:
             continue
@@ -418,9 +520,107 @@ def load_pruned():
         return set()
 
 
-def do_sync(exfat, state, quiet=False):
+class RecentSchedule:
+    """从新一组车机源文件首次扫齐的时刻预测下一次检查窗口。"""
+
+    def __init__(self):
+        self.group = ""
+        self.anchor = None
+        self.candidate = None
+        self.phase = "waiting"
+        self.pending_since = {}
+        self.published_group = ""
+
+    def publish_archived(self, cur, group):
+        if group == "_misc" or group <= self.published_group:
+            return
+        for camera in RECENT_CAMERAS:
+            name = "%s-%s.mp4" % (group, camera)
+            entry = cur.get(("RecentClips", group, name))
+            if entry is None or entry.vdl < entry.size:
+                return
+            try:
+                dest = safe_dest("RecentClips", group, name)
+            except ValueError:
+                return
+            if not same_file(dest, entry.size):
+                return
+        self.published_group = group
+        body = json.dumps({"clip": group, "ready_at": time.time()}).encode("ascii")
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+                sock.setblocking(False)
+                sock.sendto(body, LIVE_READY_SOCKET)
+        except OSError:
+            pass  # 网页的定时检查可以补上丢失的通知。
+
+    def window(self):
+        if self.anchor is None:
+            return None
+        predicted = self.anchor + RECENT_SEGMENT_SECONDS
+        return predicted - RECENT_FAST_BEFORE, predicted + RECENT_FAST_AFTER
+
+    def next_check(self, now):
+        fallback = now + RECENT_INTERVAL
+        window = self.window()
+        if window is None or now >= window[1]:
+            return fallback
+        start, end = window
+        if now < start:
+            return min(fallback, start)
+        return min(now + 1, end)
+
+    def observe(self, exfat, scanned, now):
+        window = self.window()
+        if window and self.phase == "waiting" and window[0] <= now < window[1]:
+            self.phase = "fast"
+            log("行车加速检查: %s 后的窗口，每秒一次" % self.group)
+        if window and self.phase != "expired" and now >= window[1]:
+            self.phase = "expired"
+            log("行车窗口未命中: %s 后恢复每 %d 秒检查" % (self.group, RECENT_INTERVAL))
+
+        groups = {}
+        for (cat, group, name), entry in scanned.items():
+            if cat != "RecentClips" or group == "_misc" or group <= self.group or entry.vdl < entry.size:
+                continue
+            camera = name[len(group) + 1:-4].lower()
+            if camera in RECENT_CAMERAS:
+                groups.setdefault(group, {})[camera] = entry
+        group = max((name for name, cameras in groups.items() if len(cameras) == len(RECENT_CAMERAS)), default="")
+        if not group:
+            self.candidate = None
+            return
+        entries = [groups[group][c] for c in RECENT_CAMERAS]
+        signatures = tuple((e.cluster, e.size, e.vdl, e.mtime) for e in entries)
+        key = (group, signatures)
+        if self.candidate is None or self.candidate[0] != key:
+            self.candidate = (key, now) if all(source_has_mp4_index(exfat, e) for e in entries) else None
+            return
+        first_seen = self.candidate[1]
+        if now - first_seen < RECENT_STABLE_SECONDS:
+            return
+        if not all(source_has_mp4_index(exfat, e) for e in entries):
+            self.candidate = None
+            return
+        self.group, self.anchor = group, first_seen
+        self.candidate = None
+        self.phase = "waiting"
+        wall = time.time() - (time.monotonic() - first_seen)
+        def clock(ts):
+            return time.strftime("%H:%M:%S", time.localtime(ts))
+        log("行车同步校准: %s 四路首次扫齐 %s，下次加速 %s–%s" % (
+            group, clock(wall),
+            clock(wall + RECENT_SEGMENT_SECONDS - RECENT_FAST_BEFORE),
+            clock(wall + RECENT_SEGMENT_SECONDS + RECENT_FAST_AFTER)))
+
+
+def do_sync(exfat, state, quiet=False, cats=CATS, recent=None):
     """跑一轮; 返回 (新增文件数, 字节数)"""
-    cur = scan(exfat)
+    cur = scan(exfat, cats)
+    recent_check = recent is not None and "RecentClips" in cats
+    if recent_check:
+        observed = time.monotonic()
+        recent.observe(exfat, cur, observed)
     pruned = load_pruned()
     # 只收滚动窗口内的 RecentClips: 以车机 U 盘上最新的片段为锚点
     cut = None
@@ -434,8 +634,11 @@ def do_sync(exfat, state, quiet=False):
         if newest:
             cut = newest - datetime.timedelta(minutes=ROLL_MIN)
     pending_key = "__pending__"
+    failures_key = "__failures__"
     pending = state.get(pending_key, {})
-    new_pending = {}
+    failures = state.get(failures_key, {})
+    new_pending = {k: v for k, v in pending.items() if k.split("/", 1)[0] not in cats}
+    new_failures = {k: v for k, v in failures.items() if k.split("/", 1)[0] not in cats}
     copied = 0
     bytes_ = 0
     for (cat, ev, name), e in cur.items():
@@ -450,22 +653,50 @@ def do_sync(exfat, state, quiet=False):
         dest = safe_dest(cat, ev, name)
         if same_file(dest, e.size):
             continue
-        # 需要连续两轮签名一致才认为写完
-        if pending.get(key) != sig:
+        if cat == "RecentClips" and e.vdl < e.size:
+            continue
+        old_fail = failures.get(key)
+        if (old_fail and old_fail.get("sig") == sig and
+                time.time() < old_fail.get("next", 0)):
             new_pending[key] = sig
-            if not quiet:
+            new_failures[key] = old_fail
+            continue
+        # 保留两轮确认；高频检查时也要经过实际的稳定时间。
+        matches = pending.get(key) == sig
+        stable = matches
+        if recent_check and cat == "RecentClips":
+            cluster, since = recent.pending_since.get(key, (None, observed))
+            if not matches or cluster != e.cluster:
+                since = observed
+            recent.pending_since[key] = (e.cluster, since)
+            stable = matches and observed - since >= RECENT_STABLE_SECONDS
+        if not stable:
+            new_pending[key] = sig
+            if not quiet and not matches:
                 log("发现新片段(待确认): %s (%d bytes)" % (key, e.size))
             continue
         try:
-            n = copy_entry(exfat, e, dest)
+            n = copy_entry(exfat, e, dest, require_index=cat == "RecentClips")
             copied += 1
             bytes_ += n
+            if recent_check and cat == "RecentClips":
+                recent.publish_archived(cur, ev)
             log("已同步 %s (%d KB)" % (key, n // 1024))
-        except Exception as ex:
-            log("同步失败 %s: %s" % (key, ex))
+        except ClipNotReady:
             new_pending[key] = sig
-    state[pending_key] = new_pending
-    save_state(state)
+        except Exception as ex:
+            prev_count = int(old_fail.get("fail_count", 0)) if old_fail and old_fail.get("sig") == sig else 0
+            fail_count = prev_count + 1
+            delay = min(FAIL_RETRY_MAX, FAIL_RETRY_BASE * (1 << min(fail_count - 1, 8)))
+            log("同步失败 %s: %s；%d 秒后重试" % (key, ex, delay))
+            new_pending[key] = sig
+            new_failures[key] = {"sig": sig, "fail_count": fail_count, "next": time.time() + delay}
+    if recent_check:
+        recent.pending_since = {k: v for k, v in recent.pending_since.items() if k in new_pending}
+    if pending != new_pending or failures != new_failures:
+        state[pending_key] = new_pending
+        state[failures_key] = new_failures
+        save_state(state)
     return copied, bytes_
 
 
@@ -496,6 +727,8 @@ def main():
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--interval", type=int, default=INTERVAL)
     args = ap.parse_args()
+    if args.interval < 1:
+        ap.error("--interval must be at least 1 second")
 
     if not os.path.exists(IMG):
         log("镜像不存在: %s" % IMG)
@@ -511,7 +744,7 @@ def main():
         exfat.close()
         return 0
 
-    log("在线同步启动: %s (簇 %dB, %d 簇)" % (IMG, exfat.cluster_size, exfat.cluster_count))
+    log("在线同步启动: 行车 %d 秒（窗口内 1 秒），事件 %d 秒" % (RECENT_INTERVAL, args.interval))
     state = load_state()
     if args.once:
         n, b = do_sync(exfat, state)
@@ -520,7 +753,28 @@ def main():
         return 0
 
     lock_miss = 0
+    free_log_at = 0
+    intervals = {"RecentClips": RECENT_INTERVAL, "SentryClips": args.interval, "SavedClips": args.interval}
+    next_scan = dict.fromkeys(intervals, 0)
+    recent = RecentSchedule()
     while True:
+        delay = min(next_scan.values()) - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        now = time.monotonic()
+        cats = tuple(cat for cat, tick in next_scan.items() if tick <= now)
+        if not cats:
+            continue
+        for cat in cats:
+            next_scan[cat] = recent.next_check(now) if cat == "RecentClips" else now + intervals[cat]
+        refresh_storage_settings()
+        free_mb = archive_free_mb()
+        if free_mb < FREE_MIN_MB:
+            now = time.time()
+            if now >= free_log_at:
+                log("归档空间不足 (%s MB)，暂停本轮同步" % free_mb)
+                free_log_at = now + FREE_LOG_INTERVAL
+            continue
         lk = usb_shared_lock()
         if lk is None:
             # 网页正在管理U盘 / 定时归档正在挂载: 跳过本轮。
@@ -528,13 +782,11 @@ def main():
             lock_miss += 1
             if lock_miss in (1, 20, 80):
                 log("跳过本轮: U盘被网页管理/归档占用, 或锁文件不可写 (%s), 连续 %d 轮" % (USB_LOCK, lock_miss))
-            time.sleep(args.interval)
             continue
         lock_miss = 0
         try:
             # 网页正在管理U盘(已挂载)时跳过, 避免与挂载视图不一致
             if os.path.ismount(MNT):
-                time.sleep(args.interval)
                 continue
             # 镜像被重建/替换时 fd 会指向旧 inode, 需要重开
             try:
@@ -543,16 +795,17 @@ def main():
                     log("镜像 inode 变化, 重新打开")
                     exfat.close()
                     exfat = ExFat(IMG)
+                    recent = RecentSchedule()
             except OSError as ex:
                 log("镜像不可读: %s" % ex)
-                time.sleep(args.interval)
                 continue
-            do_sync(exfat, state)
+            do_sync(exfat, state, cats=cats, recent=recent)
+            if "RecentClips" in cats:
+                next_scan["RecentClips"] = recent.next_check(now)
         except Exception as e:
             log("轮询异常: %s" % e)
         finally:
             usb_unlock(lk)
-        time.sleep(args.interval)
 
 
 if __name__ == "__main__":

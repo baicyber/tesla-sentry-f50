@@ -16,6 +16,12 @@ IMG="$TSF_IMG"
 LOG="$TSF_LOG_DIR/tesla-gadget.log"
 CONF_NAME="${TSF_GADGET_CONFIG:-c.1}"
 
+if [ "$1" != status ]; then
+    for tsf_pending in "$IMG.resize-state" "$IMG.resize-new" "$IMG.resize-backup"; do
+        [ ! -e "$tsf_pending" ] || { echo "ERROR: 容量调整未完成，请检查恢复文件"; exit 1; }
+    done
+fi
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
 
 # --- 自动探测 ---
@@ -28,7 +34,8 @@ find_gadget() {
 }
 
 GADGET=$(find_gadget) || { echo "ERROR: 找不到 USB gadget (configfs 未挂载?)"; exit 1; }
-UDC=$(ls /sys/class/udc/ 2>/dev/null | head -1)
+UDC=${TSF_UDC:-$(ls /sys/class/udc/ 2>/dev/null | head -1)}
+[ -d "/sys/class/udc/$UDC" ] || { echo "ERROR: USB Device 控制器不可用"; exit 1; }
 [ -z "$UDC" ] && { echo "ERROR: 没有 USB Device 控制器 (UDC)"; exit 1; }
 
 # configfs 里的配置名可能不叫 c.1
@@ -66,8 +73,15 @@ do_on() {
 
     bind; sleep 3
     st=$(state)
+    bound=$(cat "$GADGET/UDC" 2>/dev/null)
     log "state after bind: $st"
-    if [ "$st" != "configured" ] && [ "$st" != "addressed" ]; then
+    bad=0
+    [ "$bound" = "$UDC" ] || bad=1
+    case "$st" in
+        configured|addressed|"not attached") ;;
+        *) bad=1 ;;
+    esac
+    if [ "$bad" = "1" ]; then
         log "BIND FAILED, rolling back"
         unbind 2>/dev/null
         rm -f "$LINK" 2>/dev/null
@@ -76,7 +90,7 @@ do_on() {
         bind; sleep 2
         echo "ERROR: 绑定失败已回滚, state=$(state)"; exit 1
     fi
-    echo "TESLA-GADGET-ON (state=$st)"
+    echo "TESLA-GADGET-ON (state=$st, bound=$bound, waiting-for-host=$([ "$st" = "not attached" ] && echo yes || echo no))"
 }
 
 do_off() {

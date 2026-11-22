@@ -1,0 +1,16 @@
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+start_service() {
+    set -a; [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf; set +a
+    if [ -n "${TSF_CARD_UUID:-}" ]; then
+        . "$TSF_DIR/tsf-storage.sh" || return 1
+        tsf_storage_ready || return 1
+    fi
+    procd_open_instance
+    procd_set_param command "${TSF_PYTHON:-/usr/bin/python3}" "$TSF_DIR/tesla-live-sync.py"
+    procd_set_param respawn 3600 5 0
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}

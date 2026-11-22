@@ -2,6 +2,8 @@
 
 [中文](README.md) | **English**
 
+This branch adds continuous playback, driving recordings, recording protection/deletion, storage allocation and a revised UI. See the [change and compatibility notes](docs/PLAYBACK-STORAGE-UI.md) and the separate [fresh F50 installation guide](docs/INSTALL-F50.md). The contribution has not been retested against upstream; older Python versions, six-camera playback and native Safari HLS remain unverified.
+
 **A virtual Sentry USB drive · multi-camera synchronized playback · SEI driving telemetry · watermarked export — running on any USB Gadget device.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
