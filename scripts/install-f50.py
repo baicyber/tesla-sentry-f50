@@ -45,6 +45,8 @@ def arguments(argv=None):
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--ffmpeg')
     parser.add_argument('--ffprobe')
+    parser.add_argument('--install-deps', action='store_true',
+                        help='缺少 ffmpeg/ffprobe 时用固件的包管理器安装，并写回配置（可单独用于修复已安装设备）')
     return parser.parse_args(argv)
 
 
@@ -72,6 +74,7 @@ class Installer:
         self.args = args
         self.root = Path(root)
         self.device = {}
+        self.repaired = False
         self.runtime = self.source / 'runtime' if (self.source / 'runtime').is_dir() else None
 
     def python(self):
@@ -224,6 +227,94 @@ class Installer:
                 '*/10 * * * * ' + prefix + 'tsf-maintenance.sh audio >/dev/null 2>&1\n' +
                 end + '\n')
 
+    def resolve_binary(self, name):
+        """按 --ffmpeg/--ffprobe -> PATH -> /opt/mu300/ffmpeg 的顺序找可执行文件。"""
+        binary = getattr(self.args, name) or self.tool(name)
+        if not binary and self.path('/opt/mu300/ffmpeg/' + name).is_file():
+            binary = '/opt/mu300/ffmpeg/' + name
+        if not binary or not re.fullmatch(r'/[A-Za-z0-9_./-]+', binary):
+            return None
+        return binary
+
+    def package_install(self):
+        """缺依赖时按固件自带的包管理器装; 装不上的原因原样告诉用户。"""
+        tried = []
+        managers = []
+        if shutil.which('apk'):
+            managers.append((['apk', 'add', '--no-cache', 'ffmpeg'], None))
+        if shutil.which('opkg'):
+            managers.append((['opkg', 'install', 'ffmpeg'], ['opkg', 'update']))
+        if not managers:
+            raise InstallError('缺少 ffmpeg/ffprobe，且系统没有 apk/opkg；'
+                               '请把 ARM64 版放到 /opt/mu300/ffmpeg/{ffmpeg,ffprobe}，'
+                               '或用 --ffmpeg/--ffprobe 指定绝对路径')
+        for command, prepare in managers:
+            if prepare:
+                try:
+                    run(prepare, timeout=180)
+                except InstallError as exc:
+                    print('软件源刷新失败（继续尝试安装）：%s' % exc, flush=True)
+            print('正在安装 FFmpeg：%s' % ' '.join(command), flush=True)
+            try:
+                run(command, timeout=600)
+            except InstallError as exc:
+                tried.append(str(exc))
+                continue
+            if self.resolve_binary('ffmpeg') and self.resolve_binary('ffprobe'):
+                return
+            tried.append('%s 安装后仍找不到 ffmpeg/ffprobe' % command[0])
+        raise InstallError('自动安装 FFmpeg 失败：%s；请手动放置 ARM64 版到 /opt/mu300/ffmpeg/'
+                           '或用 --ffmpeg/--ffprobe 指定' % '；'.join(tried))
+
+    def provision_ffmpeg(self):
+        """--install-deps: 先补齐依赖, 再按 libx264/滤镜/实际编码一帧做完整校验。
+        校验比"文件存在"更重要 —— OpenWrt 自带的精简 ffmpeg 通常没有 libx264。"""
+        if not (self.resolve_binary('ffmpeg') and self.resolve_binary('ffprobe')):
+            self.package_install()
+        resolved = {}
+        for name in ('ffmpeg', 'ffprobe'):
+            binary = self.resolve_binary(name)
+            if not binary:
+                raise InstallError('缺少 %s：请放到 /opt/mu300/ffmpeg/%s，或用 --%s 指定绝对路径'
+                                   % (name, name, name))
+            run([binary, '-version'], timeout=30)
+            resolved[name] = binary
+        filters = run([resolved['ffmpeg'], '-hide_banner', '-filters'], timeout=60)
+        for required in ('scale', 'pad', 'fps', 'xstack', 'setsar', 'subtitles'):
+            if not re.search(r'\s' + required + r'\s', filters):
+                raise InstallError('FFmpeg 缺少滤镜：%s。系统自带的精简 ffmpeg 往往没有 libx264 和 '
+                                   'subtitles，请换用完整构建（放进 /opt/mu300/ffmpeg 或 --ffmpeg 指定）'
+                                   % required)
+        run([resolved['ffmpeg'], '-v', 'error', '-f', 'lavfi', '-i',
+             'color=size=64x64:rate=1', '-frames:v', '1', '-c:v', 'libx264',
+             '-f', 'null', '-'], timeout=120)
+        return resolved
+
+    def update_dependency_paths(self, resolved):
+        """已安装设备只修依赖: 把 TSF_FFMPEG/TSF_FFPROBE 写回 conf, 不动录像和其他配置。"""
+        conf = self.path(CONF)
+        try:
+            original = conf.read_text(encoding='utf-8')
+        except OSError as exc:
+            raise InstallError('读取 %s 失败：%s' % (CONF, exc)) from exc
+        lines, seen = [], set()
+        for line in original.splitlines():
+            key = line.split('=', 1)[0].strip()
+            if key in ('TSF_FFMPEG', 'TSF_FFPROBE'):
+                seen.add(key)
+                lines.append('%s=%s' % (key, resolved['ffmpeg' if key == 'TSF_FFMPEG' else 'ffprobe']))
+            else:
+                lines.append(line)
+        for key, name in (('TSF_FFMPEG', 'ffmpeg'), ('TSF_FFPROBE', 'ffprobe')):
+            if key not in seen:
+                lines.append('%s=%s' % (key, resolved[name]))
+        backup = conf.with_name(conf.name + '.bak-' + secrets.token_hex(3))
+        shutil.copy2(conf, backup)
+        temporary = conf.with_name('.tsf-conf-' + secrets.token_hex(6))
+        write(temporary, '\n'.join(lines) + '\n', 0o644)
+        temporary.replace(conf)
+        print('已更新 %s（备份 %s）' % (CONF, backup))
+
     def preflight(self):
         self.validate_options()
         if platform.system() != 'Linux' or platform.machine() not in ('aarch64', 'arm64'):
@@ -233,7 +324,23 @@ class Installer:
         if not self.path('/etc/rc.common').is_file() or not self.path('/etc/init.d/cron').is_file():
             raise InstallError('需要 OpenWrt procd 与 cron；本安装器不安装系统固件')
         runtime_files = self.runtime_files()
+        resolved = None
+        repair = self.args.install_deps and self.args.apply
+        if self.args.install_deps and not self.args.apply:
+            print('提示：--install-deps 只在 --apply 时真正安装；检查模式不会改动系统', flush=True)
+        if repair:
+            # 先把 FFmpeg 配好再谈安装: 这不是"用到时才发现"的可选项
+            resolved = self.provision_ffmpeg()
+            print('FFmpeg 就绪：%s / %s' % (resolved['ffmpeg'], resolved['ffprobe']), flush=True)
         if self.existing_install():
+            if resolved:
+                self.update_dependency_paths(resolved)
+                try:
+                    run([str(self.path('/etc/init.d/tesla-viewer')), 'restart'], timeout=90)
+                    print('已重启 tesla-viewer，缩略图与转码恢复')
+                except InstallError as exc:
+                    print('重启服务失败，请手动执行 /etc/init.d/tesla-viewer restart：%s' % exc)
+                self.repaired = True
             return False
         for name in ('blkid', 'flock', 'mount', 'umount', 'readlink', 'setsid'):
             if not self.tool(name):
@@ -300,11 +407,10 @@ class Installer:
         self.device = dict(uuid=uuid, gadget='/' + gadget.relative_to(self.root).as_posix(),
                            gadget_config=configs[0], udc=udc, losetup=losetup, loop=loop)
         for name in ('ffmpeg', 'ffprobe'):
-            binary = getattr(self.args, name) or self.tool(name)
-            if not binary and self.path('/opt/mu300/ffmpeg/' + name).is_file():
-                binary = '/opt/mu300/ffmpeg/' + name
-            if not binary or not re.fullmatch(r'/[A-Za-z0-9_./-]+', binary):
-                raise InstallError('缺少 %s；可用 --%s 指定绝对路径' % (name, name))
+            binary = (resolved or {}).get(name) or self.resolve_binary(name)
+            if not binary:
+                raise InstallError('缺少 %s；可用 --%s 指定绝对路径，或加 --install-deps 让安装器尝试安装'
+                                   % (name, name))
             run([binary, '-version'])
             self.device[name] = binary
         filters = run([self.device['ffmpeg'], '-hide_banner', '-filters'])
@@ -326,7 +432,8 @@ class Installer:
 
     def install(self):
         if not self.preflight():
-            print('相同版本已安装，未改动配置、凭据、录像或服务。')
+            print('依赖已修复并重启服务，录像、凭据与容量设置未改动。' if self.repaired
+                  else '相同版本已安装，未改动配置、凭据、录像或服务。')
             return False
         lock = self.path('/tmp/tsf-install.lock')
         try:

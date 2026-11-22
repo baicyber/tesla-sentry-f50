@@ -181,6 +181,26 @@ class DriveRetentionTest(unittest.TestCase):
         self.viewer.DriveArchive().review()
         self.assertEqual(self.names(), [old])
 
+    def test_six_camera_clip_keeps_pillar_streams(self):
+        """HW4 车型会录 6 路; 归档只拷 4 路会把左右翼的片段悄悄丢掉。"""
+        name = self.clip("11-00-00")
+        folder = self.recent / name
+        for camera in ("left_pillar", "right_pillar"):
+            (folder / ("%s-%s.mp4" % (name, camera))).write_bytes(b"v" * 64)
+        self.viewer.DriveArchive().review()
+        kept = sorted(path.name for path in (self.retained / name).iterdir())
+        self.assertEqual(len(kept), 6)
+        self.assertIn(name + "-left_pillar.mp4", kept)
+        self.assertIn(name + "-right_pillar.mp4", kept)
+
+    def test_incomplete_minute_is_not_archived(self):
+        name = "2026-11-20_12-00-00"
+        folder = self.recent / name
+        folder.mkdir()
+        (folder / (name + "-front.mp4")).write_bytes(b"v" * 64)
+        self.viewer.DriveArchive().review()
+        self.assertFalse((self.retained / name).exists())
+
 
 if __name__ == "__main__":
     unittest.main()

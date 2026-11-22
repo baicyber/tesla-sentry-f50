@@ -24,13 +24,25 @@ class StorageTest(unittest.TestCase):
             storage.check_budget(self.values, 64, {'budget_bytes': 111 * storage.GIB})
 
     def test_invalid_values_cannot_reach_storage(self):
-        for value in (True, 0, -1, 1.5, float('nan'), float('inf'), '12'):
+        for value in (True, -1, 1.5, float('nan'), float('inf'), '12'):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 storage.validate_values(dict(self.values, drive_gib=value), 64)
+        for zero_field in ('free_min_gib', 'free_target_gib'):
+            with self.subTest(field=zero_field), self.assertRaises(ValueError):
+                storage.validate_values(dict(self.values, **{zero_field: 0}), 64)
         with self.assertRaisesRegex(ValueError, '归档总容量'):
             storage.validate_values(dict(self.values, drive_gib=35), 64)
         with self.assertRaisesRegex(ValueError, '最低空闲'):
             storage.validate_values(dict(self.values, free_min_gib=11), 64)
+
+    def test_zero_archive_means_unlimited(self):
+        unlimited = dict(self.values, archive_gib=0)
+        self.assertEqual(storage.validate_values(unlimited, 64)['archive_gib'], 0)
+        # 归档无上限时不参与预留预算, 空间交给空闲保护线兜底
+        self.assertEqual(storage.required_bytes(unlimited, 64), 78 * storage.GIB)
+        # 归档无上限时行车记录上限不再受它约束
+        self.assertEqual(storage.validate_values(dict(unlimited, drive_gib=12), 64)['drive_gib'], 12)
+        storage.check_budget(dict(unlimited, drive_gib=12), 64, {'budget_bytes': 78 * storage.GIB})
 
     def test_atomic_save_and_failure_keep_previous_settings(self):
         path = self.root / 'storage.json'
@@ -56,7 +68,7 @@ class StorageTest(unittest.TestCase):
 
     def test_malformed_saved_settings_are_not_silently_applied(self):
         path = self.root / 'storage.json'
-        path.write_text(json.dumps(dict(self.values, drive_gib=0)), encoding='utf-8')
+        path.write_text(json.dumps(dict(self.values, free_min_gib=0)), encoding='utf-8')
         with self.assertRaises(ValueError):
             storage.load(path)
 

@@ -111,6 +111,20 @@ sh install-f50.sh --apply --start --size-gb 16 --archive-gb 12 --drive-gb 4 \
   --ffmpeg /opt/ffmpeg/ffmpeg --ffprobe /opt/ffmpeg/ffprobe
 ```
 
+### FFmpeg 在安装阶段配好
+
+缩略图、清晰度转码、导出合成都依赖 `ffmpeg`/`ffprobe`，安装检查会实际编码一帧、核对 `libx264` 与 `scale/pad/fps/xstack/setsar/subtitles` 滤镜，缺任何一项都会在安装阶段直接失败，不会等到网页里点开视频才发现。
+
+设备上已经有安装、但依赖后来丢了（固件升级常把 `/opt/mu300` 冲掉），用同一条命令补：
+
+```sh
+sh install-f50.sh --apply --install-deps
+```
+
+`--install-deps` 会先按固件的包管理器（`apk` / `opkg`）尝试安装 FFmpeg，再做完整校验；已安装的设备只更新 `/etc/tesla-sentry.conf` 里的 `TSF_FFMPEG`/`TSF_FFPROBE` 并重启服务，不动录像和其他配置。装不上的原因（例如系统仓库里的精简版没有 `libx264`）会原样报出来。
+
+运行期也有一层兜底：主程序启动时检查两个二进制，缺失会在页面顶部显示「FFmpeg 未配置」红条，`/thumb` 请求返回 503 并带 `X-TSF-Reason: ffmpeg-missing`，不会再静默变成空白缩略图。
+
 其他参数：`--data-mount /mnt/mmc`、`--port 8080`。安装目录固定为 `/opt/tesla-sentry`。检查过程读取设备能力并执行短暂编码探测，不挂载磁盘、不加载内核模块、不修改 USB 或服务。
 
 安装生成：

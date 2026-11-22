@@ -1,3 +1,4 @@
+import errno
 from pathlib import Path
 import sys
 import tempfile
@@ -23,9 +24,10 @@ class ResizeTest(unittest.TestCase):
         self.commands = []
         # Small fake capacities avoid allocating GiB-sized files on Windows.
         self.enterContext(patch.object(resize, 'GIB', 1 << 20))
+        self.enterContext(patch.object(resize, 'RETRY_DELAY', 0))
         self.enterContext(patch.object(resize, 'command', side_effect=self.command))
 
-    def command(self, args):
+    def command(self, args, **kwargs):
         args = [str(arg) for arg in args]
         self.commands.append(args)
         if any(arg.endswith('mkexfat.py') for arg in args):
@@ -54,14 +56,30 @@ class ResizeTest(unittest.TestCase):
 
     def test_failed_creation_keeps_old_image_and_restores_usb(self):
         with patch.object(resize, 'command', side_effect=OSError('No space left on device')):
-            with self.assertRaisesRegex(OSError, 'No space'):
+            with self.assertRaisesRegex(resize.ResizeError, 'No space'):
                 self.run_resize()
         self.assertEqual(self.image.read_bytes(), b'original-image')
         self.assertEqual(self.binding.read_text().strip(), 'controller')
         self.assertFalse(Path(str(self.image) + '.resize-new').exists())
+        # 导出已恢复就不该再留着恢复标记, 否则存储页会永远卡在「检查恢复文件」
+        self.assertFalse(resize.pending_recovery(self.image))
+
+    def test_transient_enodev_is_retried(self):
+        original = Path.write_text
+        seen = {'n': 0}
+        def flaky(path, data, *args, **kwargs):
+            if path == self.binding and data.strip() == 'controller' and seen['n'] < 2:
+                seen['n'] += 1
+                raise OSError(errno.ENODEV, 'No such device')
+            return original(path, data, *args, **kwargs)
+        with patch.object(Path, 'write_text', flaky):
+            self.run_resize()
+        self.assertEqual(seen['n'], 2)
+        self.assertEqual(self.binding.read_text().strip(), 'controller')
+        self.assertEqual(self.image.stat().st_size, resize.GIB)
 
     def test_creation_runs_with_empty_lun_and_connected_other_usb_functions(self):
-        def check_and_create(args):
+        def check_and_create(args, **kwargs):
             self.assertEqual(self.binding.read_text().strip(), 'controller')
             self.assertEqual(self.lun.read_text().strip(), '')
             return self.command(args)
@@ -70,13 +88,13 @@ class ResizeTest(unittest.TestCase):
 
     def test_already_bound_controller_is_accepted_only_when_it_matches(self):
         with patch.object(Path, 'write_text', side_effect=OSError('Device or resource busy')):
-            resize.bind_controller(self.binding, 'controller')
-            with self.assertRaises(OSError):
+            resize.bind_controller(self.binding, 'controller')   # 看门狗已绑好, 视为成功
+            with self.assertRaises(resize.ResizeError):
                 resize.bind_controller(self.binding, 'foreign-controller')
 
     def test_failed_publish_keeps_old_image(self):
         with patch.object(resize.os, 'replace', side_effect=OSError('publish failed')):
-            with self.assertRaisesRegex(OSError, 'publish failed'):
+            with self.assertRaisesRegex(resize.ResizeError, 'publish failed'):
                 self.run_resize()
         self.assertEqual(self.image.read_bytes(), b'original-image')
         self.assertEqual(self.binding.read_text().strip(), 'controller')
@@ -117,7 +135,7 @@ class ResizeTest(unittest.TestCase):
                 raise OSError('rebind failed')
             return original_write(path, data, *args, **kwargs)
         with patch.object(Path, 'write_text', reject_new_export):
-            with self.assertRaisesRegex(OSError, 'rebind failed'):
+            with self.assertRaises(resize.ResizeError):
                 self.run_resize()
         self.assertEqual(self.image.read_bytes(), b'original-image')
         self.assertEqual(self.binding.read_text().strip(), 'controller')
@@ -136,6 +154,19 @@ class ResizeTest(unittest.TestCase):
         self.assertTrue(resize.pending_recovery(self.image))
         self.assertEqual(self.image.read_bytes(), b'original-image')
         self.assertEqual(self.binding.read_text().strip(), '')
+
+    def test_repair_clears_stale_files_when_export_is_consistent(self):
+        for suffix in ('.resize-state', '.resize-new', '.resize-backup'):
+            Path(str(self.image) + suffix).write_bytes(b'stale')
+        note = resize.repair(self.image, self.gadget, 'controller')
+        self.assertIn('已清理', note)
+        self.assertFalse(resize.pending_recovery(self.image))
+
+    def test_repair_keeps_marker_when_export_is_not_restored(self):
+        Path(str(self.image) + '.resize-state').write_bytes(b'stale')
+        self.lun.write_text('/other/image', encoding='utf-8')
+        self.assertEqual(resize.repair(self.image, self.gadget, 'controller'), '')
+        self.assertTrue(resize.pending_recovery(self.image))
 
 
 if __name__ == '__main__':

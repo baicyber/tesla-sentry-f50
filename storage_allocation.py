@@ -1,6 +1,7 @@
 """Shared storage budgets and durable settings; sizes are integer GiB."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -8,6 +9,8 @@ import tempfile
 GIB = 1 << 30
 CACHE_GIB = 4
 FIELDS = ('archive_gib', 'drive_gib', 'free_min_gib', 'free_target_gib')
+# 0 = 不设上限: 归档/行车记录只受磁盘空闲保护线约束, 不再按总量清理
+UNLIMITED = ('archive_gib', 'drive_gib')
 
 
 def settings_path():
@@ -26,11 +29,19 @@ def validate_values(values, usb_gib):
     if set(values) != set(FIELDS):
         raise ValueError('存储参数不完整')
     for value in (*values.values(), usb_gib):
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 1 <= value <= 4096 or int(value) != value:
-            raise ValueError('容量须为大于 0 的整数 GiB')
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError('容量须为整数 GiB')
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError('容量须为整数 GiB')
+        if int(value) != value:
+            raise ValueError('容量须为整数 GiB')
+    for name in FIELDS:
+        low = 0 if name in UNLIMITED else 1
+        if not low <= values[name] <= 4096:
+            raise ValueError('归档与行车记录可填 0 表示无限制；其他容量须为 1～4096 GiB')
     if usb_gib > 128:
         raise ValueError('U 盘容量须在 1～128 GiB 范围内')
-    if values['drive_gib'] > values['archive_gib']:
+    if values['archive_gib'] and values['drive_gib'] > values['archive_gib']:
         raise ValueError('行车记录容量不能超过归档总容量')
     if values['free_min_gib'] > values['free_target_gib']:
         raise ValueError('最低空闲空间不能超过安全预留空间')
@@ -38,6 +49,7 @@ def validate_values(values, usb_gib):
 
 
 def required_bytes(values, usb_gib, cache_gib=CACHE_GIB):
+    # 归档设成 0 表示不设上限, 空间由空闲保护线兜底, 不再计入预留预算
     return (usb_gib + values['archive_gib'] + cache_gib + values['free_target_gib']) * GIB
 
 
