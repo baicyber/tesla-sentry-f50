@@ -16,7 +16,7 @@ def settings_path():
 
 
 def defaults():
-    return dict(archive_gib=int(os.environ.get('TSF_ARCHIVE_TOTAL_GB', '6')),
+    return dict(archive_gib=int(os.environ.get('TSF_ARCHIVE_TOTAL_GB', '30')),
                 drive_gib=int(os.environ.get('TSF_DRIVE_MAX_GB', '12')),
                 free_min_gib=int(os.environ.get('TSF_FREE_MIN_MB', '4096')) / 1024,
                 free_target_gib=int(os.environ.get('TSF_FREE_TARGET_MB', '10240')) / 1024)

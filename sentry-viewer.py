@@ -37,35 +37,35 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # 内嵌副本: 仅当同目录找不到同名 .py 时启用 (旧版 OTA 只下发主程序的兼容路径)
 _EMBED_MODULES = {
     "storage_allocation": (
-        "H4sIAAAAAAAC/6VYW2/cxhV+318x0QvJaE1rVSdIlbCALK0UAY5cSNuggSoQ3OWslhWXs+UMV1bTAEYc5QLIcZBWiNsYBdwW"
-        "rYsialAYhetYyJ8RdXnyX+g5M8PbXpQCXUBacubMN+c23zmzMzMzmz0vpj7hgsXeDiXtxN+hghMv8omfxF47pIRTIYJoh79J"
-        "ePBrCnMxJUEk6A6NyWpw056ZmakF/QGLBel5vBcG7ez1l5xF2TPjtW7M+mTgCRQhevin8JqJCNofdIOQ1mqrazeJQxrkrbfI"
-        "j+ZqS4tLbzddNXajtrLWvLW8CY+m4cWdXjCk7k7QNurE8OPSSzem1O0HUeVdeDGYJ4esWq3m025unYuKmdZCjcAnpiKJI6mc"
-        "ybhNo2EQs8iGtabR2lxxN1u3NxZXm+5ms9VaW1/dNCzCYrmy/JHLXRdNcl3Ljiln4ZCalr0XiJ4beX1qGtrxNrrKsDKl4M9L"
-        "QsFH9PGDjjBLRjsQhon6LW4svb32btNt3W4t3nJXb6IDXgf4+piOuc+mYi1vINI7iz/XOI35iUBlf0/FWtloAtTauvuOhLox"
-        "92PUilwnjbn5G1Mwi5hdDdta3FhttjQy4s0V0Jlfh14Y+J6gLjwklJvqq04S3sYNtLcDmRV60iKvOPJV5Z0WkUHxAk7JuyjV"
-        "jGMWm0b6zcP0wyfpgw/Pjr49fXY/PT48O3oKmSZtYTGRiHB2iPmqAre1HtaoClqNgAcRF17UoUqbOmkzFmKykYiJCdMmuKhO"
-        "uiHzhJWLwTly9N7wgE7HGXSmHJQWyqeFSgQm2Hf8n8tPHlw+/u702fP0L387ff45mSPnf/gIrASLkQy0saC6tof8hDTm37jK"
-        "aT8j518/zJHTR09I4+XJH2ER4pGLw3vp10/Tjw8KZOWzrdJx34ZdstEyJ2xfte/F48OLk79eHH+bnhyp7SFkF/dOLv59cPH9"
-        "J+nJl2eP/3x29zs1Nb57hV/KCowSzZVKnD26e3ry+fnfn19+9S/5/2lFiePP0oMnl3/66Pzo92pW66H54H3kkIUiknwLB7Yt"
-        "mWz4iLmm8vYDfQJi+qskAMZ32/ti/ADUScfr9BQf5Kxb5SAzC+zsZJfDeI5RkhnzikVeJQCu1YKE9U1kYGedRVTvqNYC0xd0"
-        "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"
+        "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"
     ),
     "storage_resize": (
         "H4sIAAAAAAAC/71YW28ctxV+31/BKDBmplmPVy4KpAb0YDd2EBRoA1+AAqqx4M5wtITmBpJjafvkwHEkuHbcALVROy7aNHZz"
@@ -231,7 +231,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.43"
+APP_VERSION = "2.8.44"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -7791,13 +7791,13 @@ RECENT_KEEP_MIN = int(os.environ.get("TSF_RECENT_KEEP_MIN", "60"))    # 兜底�
 #      停车几天没新事件不会被误清空);
 #   2) 按体积: 单个分类超过 MAX_GB 就从最旧的开始删, 直到回到上限以内。
 #   3) 按总量: SentryClips / SavedClips / RecentClips 合计不超过 ARCHIVE_TOTAL_GB。
-#      64GB 卡 + 40GB 镜像时，录像归档总量控制在 6GB 左右并保留 10GB 可用余量。
+#      64GB 卡 + 40GB 镜像时，录像归档总量控制在 30GB 左右并保留 10GB 可用余量。
 # 同步进行中的目录 (1 小时内有改动) 跳过, 非时间戳命名的目录一律不动。
 # 清掉的分类/事件会记入 /archive/.pruned 墓碑文件, 同步端读到就跳过 —— 否则车机 U 盘上
 # 还留着的旧事件会被当成新片段重抄回来, 形成 删除→重抄 的死循环 (和 RecentClips 同理)。
 BOX_KEEP_DAYS = int(os.environ.get("TSF_BOX_KEEP_DAYS", "14"))        # 盒子侧哨兵/手动保存保留天数, 0=不按天数清
 BOX_MAX_GB = int(os.environ.get("TSF_BOX_MAX_GB", "12"))              # 盒子侧单个分类体积上限(GB), 0=不按体积清
-ARCHIVE_TOTAL_GB = int(os.environ.get("TSF_ARCHIVE_TOTAL_GB", "6"))   # 所有录像归档总量上限(GB), 0=不按总量清
+ARCHIVE_TOTAL_GB = int(os.environ.get("TSF_ARCHIVE_TOTAL_GB", "30"))  # 所有录像归档总量上限(GB), 0=不按总量清
 DISK_GUARD_INTERVAL = max(30, int(os.environ.get("TSF_DISK_GUARD_INTERVAL", "60")))
 PRUNED_FILE = os.path.join(ARCHIVE, ".pruned")                        # 墓碑: 每行 "分类/事件名", 同步端跳过
 DRIVE_STATE = os.path.join(ARCHIVE, ".drive-retention.json")
