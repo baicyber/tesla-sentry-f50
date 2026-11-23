@@ -85,6 +85,9 @@ class InstallTest(unittest.TestCase):
         self.enterContext(patch.object(self.module.shutil, 'which', side_effect=lambda n: '/usr/bin/' + n))
         self.enterContext(patch.object(self.module.shutil, 'disk_usage',
                                       return_value=types.SimpleNamespace(free=120 * (1 << 30))))
+        # Keep preflight independent of services already listening on the host.
+        sockets = self.enterContext(patch.object(self.module, 'socket'))
+        self.port_probe = sockets.socket.return_value.__enter__.return_value
         self.commands = []
         self.enterContext(patch.object(self.module, 'run', side_effect=self.fake_run))
         if self.module.os.name == 'nt':
@@ -110,9 +113,17 @@ class InstallTest(unittest.TestCase):
         self.prepare_device()
         original = self.installer.path('/etc/crontabs/root').read_bytes()
         self.assertTrue(self.installer.preflight())
+        self.port_probe.bind.assert_called_once_with(('0.0.0.0', self.args.port))
         self.assertFalse(self.installer.path(self.module.APP).exists())
         self.assertEqual(self.installer.path('/etc/crontabs/root').read_bytes(), original)
         self.assertFalse(any('/etc/init.d/' in str(c) for c in self.commands))
+
+    def test_unavailable_port_fails_before_installation(self):
+        self.prepare_device()
+        self.port_probe.bind.side_effect = OSError('fixture address already in use')
+        with self.assertRaisesRegex(self.module.InstallError, '端口不可用'):
+            self.installer.preflight()
+        self.assertFalse(self.installer.path(self.module.APP).exists())
 
     def test_wrong_filesystem_and_missing_card_fail_before_any_install(self):
         self.prepare_device()
@@ -147,6 +158,9 @@ class InstallTest(unittest.TestCase):
         self.prepare_device()
         self.assertTrue(self.installer.install())
         app = self.installer.path(self.module.APP)
+        coordinator = app / 'tesla-usb-start.sh'
+        self.assertEqual(coordinator.read_text(encoding='utf-8'),
+                         (REPO / 'scripts/tesla-usb-start.sh').read_text(encoding='utf-8'))
         auth = (app / 'auth.conf').read_bytes()
         self.assertIn(b'user=admin', auth)
         self.assertFalse(json.loads((app / 'settings.json').read_text())['auto_update'])
@@ -160,6 +174,7 @@ class InstallTest(unittest.TestCase):
             self.assertEqual(link.read_text(), 'symlink:../init.d/tsf-mount')
         else:
             self.assertTrue(link.is_symlink())
+            self.assertEqual(coordinator.stat().st_mode & 0o777, 0o755)
             self.assertEqual((app / 'auth.conf').stat().st_mode & 0o777, 0o600)
             self.assertEqual((app / 'settings.json').stat().st_mode & 0o777, 0o600)
             self.assertEqual(self.installer.path('/etc/init.d/tsf-mount').stat().st_mode & 0o777, 0o755)

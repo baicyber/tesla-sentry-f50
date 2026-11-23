@@ -753,6 +753,7 @@ def _ota_start_watch(ver):
 # 旧版 OTA 只替换 sentry-viewer.py, 导致改了归档/同步脚本后老设备点"更新"永远不生效。
 OTA_SIDECARS = (
     ("scripts/tesla-gadget.sh", "tesla-gadget.sh", b"#!/bin/sh", 200),
+    ("scripts/tesla-usb-start.sh", "tesla-usb-start.sh", b"#!/bin/sh", 200),
     ("scripts/tesla-sync.sh", "tesla-sync.sh", b"#!/bin/sh", 200),
     ("scripts/usb-selfheal.sh", "usb-selfheal.sh", b"#!/bin/sh", 200),
     ("scripts/tesla-img.sh", "tesla-img.sh", b"#!/bin/sh", 200),

@@ -22,7 +22,7 @@ import storage_allocation
 APP = '/opt/tesla-sentry'
 CONF = '/etc/tesla-sentry.conf'
 SERVICES = ('tsf-mount', 'tesla-gadget', 'tesla-live', 'tesla-viewer')
-SCRIPTS = ('mkexfat.py', 'tesla-gadget.sh', 'tesla-img.sh', 'tesla-sync.sh',
+SCRIPTS = ('mkexfat.py', 'tesla-gadget.sh', 'tesla-usb-start.sh', 'tesla-img.sh', 'tesla-sync.sh',
            'usb-selfheal.sh', 'tsf-check.sh', 'tsf-storage.sh', 'tsf-maintenance.sh')
 GIB = 1 << 30
 MARKER = 'installation.json'
