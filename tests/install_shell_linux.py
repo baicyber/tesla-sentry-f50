@@ -141,6 +141,18 @@ esac
     def test_usb_entries_fall_back_when_coordinator_is_not_executable(self):
         self.check_usb_entry_dispatch(flag=True, coordinator=True, executable=False, expected='gadget-on')
 
+    def test_coordinator_failure_still_starts_live_and_viewer(self):
+        # 协调器超时 (ADB 等不齐) 只该让 U 盘导出失败, 应用服务必须照常起来,
+        # 否则车里既看不到 U 盘, 也打不开网页, 只能 SSH 上去救。
+        self.put('etc/mu300/usb-storage-boot', '1\n')
+        self.put('opt/tesla-sentry/tesla-usb-start.sh',
+                 '#!/bin/sh\necho coordinated-start >>/tmp/calls\nexit 1\n', True)
+        result = self.shell('. /etc/init.d/tsf-mount; start_apps')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / 'tmp/calls').read_text(encoding='utf-8').splitlines(),
+                         ['coordinated-start', '/opt/tesla-sentry/tesla-live-sync.py',
+                          '/opt/tesla-sentry/sentry-viewer.py'])
+
     def test_legacy_installer_copies_coordinator(self):
         source = (REPO / 'install.sh').read_text(encoding='utf-8')
         command = re.search(r'^cp .*scripts/tesla-usb-start\.sh.*$', source, re.M)

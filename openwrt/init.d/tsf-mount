@@ -16,7 +16,10 @@ TSF_DIR=${TSF_DIR:-/opt/tesla-sentry}
 
 start_apps() {
     if [ -f /etc/mu300/usb-storage-boot ] && [ -x "$TSF_DIR/tesla-usb-start.sh" ]; then
-        sh "$TSF_DIR/tesla-usb-start.sh" || return 1
+        # 协调器失败(ADB 等不到 / 抢不到锁 / 角色是 host)只该影响 U 盘导出。这里不能 return,
+        # 否则 tesla-live 和 tesla-viewer 一起被拦掉: 车里没有 U 盘, 也进不了网页, 只能 SSH。
+        sh "$TSF_DIR/tesla-usb-start.sh" ||
+            logger -t tsf-mount "USB 协调启动失败(见 tsf-usb 日志), 继续启动应用服务"
     elif [ -x "$TSF_DIR/tesla-gadget.sh" ]; then
         sh "$TSF_DIR/tesla-gadget.sh" on || return 1
     else
