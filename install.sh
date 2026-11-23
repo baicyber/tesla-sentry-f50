@@ -91,6 +91,7 @@ cp "$SRC_DIR/tesla-live-sync.py"    "$TSF_DIR/tesla-live-sync.py"
 cp "$SRC_DIR/storage_allocation.py" "$TSF_DIR/storage_allocation.py"
 cp "$SRC_DIR/storage_resize.py"     "$TSF_DIR/storage_resize.py"
 cp "$SRC_DIR/scripts/tesla-gadget.sh" "$TSF_DIR/tesla-gadget.sh"
+cp "$SRC_DIR/scripts/tesla-usb-start.sh" "$TSF_DIR/tesla-usb-start.sh"
 cp "$SRC_DIR/scripts/tesla-sync.sh"   "$TSF_DIR/tesla-sync.sh"
 cp "$SRC_DIR/scripts/usb-selfheal.sh" "$TSF_DIR/usb-selfheal.sh"
 cp "$SRC_DIR/scripts/tesla-img.sh"    "$TSF_DIR/tesla-img.sh"
@@ -193,7 +194,11 @@ START=99
 USE_PROCD=1
 start_service() {
     set -a; [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf; set +a
-    setsid /bin/sh "$TSF_DIR/tesla-gadget.sh" on </dev/null >/dev/null 2>&1 &
+    if [ -f /etc/mu300/usb-storage-boot ] && [ -x "$TSF_DIR/tesla-usb-start.sh" ]; then
+        setsid /bin/sh "$TSF_DIR/tesla-usb-start.sh" </dev/null >/dev/null 2>&1 &
+    else
+        setsid /bin/sh "$TSF_DIR/tesla-gadget.sh" on </dev/null >/dev/null 2>&1 &
+    fi
 }
 stop_service() {
     set -a; [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf; set +a
@@ -351,7 +356,11 @@ fi
 
 # ---------------- 5. 启动 ----------------
 say "启动虚拟U盘 ..."
-sh "$TSF_DIR/tesla-gadget.sh" on || echo "  [警告] 虚拟U盘启动失败, 见 $TSF_DIR/tesla-gadget.log"
+if [ -f /etc/rc.common ] && [ -f /etc/mu300/usb-storage-boot ] && [ -x "$TSF_DIR/tesla-usb-start.sh" ]; then
+    sh "$TSF_DIR/tesla-usb-start.sh" || echo "  [警告] 虚拟U盘启动失败, 见 $TSF_DIR/tesla-gadget.log"
+else
+    sh "$TSF_DIR/tesla-gadget.sh" on || echo "  [警告] 虚拟U盘启动失败, 见 $TSF_DIR/tesla-gadget.log"
+fi
 
 # 中文字体: 设备端烧录行车信息水印时由 libass 使用。
 # 没有字体时导出会明确提示"缺少中文字体"(也可以在导出面板点「安装字体」补), 不影响其它功能。

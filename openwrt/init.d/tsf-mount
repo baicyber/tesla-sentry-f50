@@ -15,7 +15,9 @@ TSF_DIR=${TSF_DIR:-/opt/tesla-sentry}
 . "$TSF_DIR/tsf-storage.sh" || exit 1
 
 start_apps() {
-    if [ -x "$TSF_DIR/tesla-gadget.sh" ]; then
+    if [ -f /etc/mu300/usb-storage-boot ] && [ -x "$TSF_DIR/tesla-usb-start.sh" ]; then
+        sh "$TSF_DIR/tesla-usb-start.sh" || return 1
+    elif [ -x "$TSF_DIR/tesla-gadget.sh" ]; then
         sh "$TSF_DIR/tesla-gadget.sh" on || return 1
     else
         /etc/init.d/tesla-gadget start || return 1

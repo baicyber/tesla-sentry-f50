@@ -60,7 +60,12 @@ status() {
 do_on() {
     [ -f "$IMG" ] || { echo "ERROR: 镜像不存在: $IMG"; exit 1; }
     if [ -e "$FUNC_DIR" ] && [ "$(cat "$FUNC_DIR/lun.0/file" 2>/dev/null)" = "$IMG" ]; then
-        echo "ALREADY-ON"; exit 0
+        # The web UI deliberately leaves the LUN populated while unbinding USB.
+        # Only the coordinator holds the management lock and checks local mounts.
+        if [ "${TSF_USB_START_COORDINATED:-0}" != 1 ] ||
+            { [ -L "$LINK" ] && [ "$(cat "$GADGET/UDC" 2>/dev/null)" = "$UDC" ]; }; then
+            echo "ALREADY-ON"; exit 0
+        fi
     fi
     log "=== ON: exporting $IMG ==="
     unbind; sleep 1

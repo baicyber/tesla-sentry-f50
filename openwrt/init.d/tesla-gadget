@@ -7,7 +7,11 @@ start_service() {
         . "$TSF_DIR/tsf-storage.sh" || return 1
         tsf_storage_ready || return 1
     fi
-    setsid /bin/sh "$TSF_DIR/tesla-gadget.sh" on </dev/null >/dev/null 2>&1 &
+    if [ -f /etc/mu300/usb-storage-boot ] && [ -x "$TSF_DIR/tesla-usb-start.sh" ]; then
+        setsid /bin/sh "$TSF_DIR/tesla-usb-start.sh" </dev/null >/dev/null 2>&1 &
+    else
+        setsid /bin/sh "$TSF_DIR/tesla-gadget.sh" on </dev/null >/dev/null 2>&1 &
+    fi
 }
 stop_service() {
     set -a; [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf; set +a

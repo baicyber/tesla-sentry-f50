@@ -3,10 +3,13 @@
 加载主程序需要 fcntl (Windows 没有), 这里注入一个空壳让它在非 Linux 上也能跑逻辑单测。
 """
 import importlib.util
+import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -67,6 +70,32 @@ class PathsTest(unittest.TestCase):
         self.assertTrue(dirs)
         for p in viewer._self_paths():
             self.assertIn(str(Path(p).resolve().parent), [str(Path(d).resolve()) for d in dirs])
+
+
+class StartupSidecarTest(unittest.TestCase):
+    def test_preinstalled_coordinator_is_updated_by_ota(self):
+        payload = (REPO / 'scripts/tesla-usb-start.sh').read_bytes()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'tesla-usb-start.sh'
+            target.write_bytes(b'#!/bin/sh\n# previous coordinator\n')
+            with patch.dict(os.environ, {'TSF_DIR': directory}), \
+                    patch.object(viewer, '_http_get', return_value=payload) as fetch:
+                updated, _ = viewer._ota_sidecars('https://example.invalid/repository')
+            self.assertEqual(updated, ['tesla-usb-start.sh'])
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertEqual(fetch.call_count, 1)
+            self.assertIn('/scripts/tesla-usb-start.sh?', fetch.call_args.args[0])
+            if os.name == 'posix':
+                self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+
+    def test_ota_preserves_existing_only_sidecar_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {'TSF_DIR': directory}), \
+                    patch.object(viewer, '_http_get') as fetch:
+                updated, _ = viewer._ota_sidecars('https://example.invalid/repository')
+            self.assertEqual(updated, [])
+            fetch.assert_not_called()
+            self.assertFalse((Path(directory) / 'tesla-usb-start.sh').exists())
 
 
 if __name__ == '__main__':

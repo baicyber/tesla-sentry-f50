@@ -45,4 +45,8 @@ grep -q " $MNT " /proc/mounts && exit 0
 
 echo "[$(date +%Y-%m-%d\ %H:%M:%S)] selfheal: LUN empty (host ejected?), re-exporting" >> "$LOG"
 # 后台任务必须关掉 fd 9, 否则会继承锁直到它退出
-setsid sh "$GADGET_SH" on </dev/null >>"$LOG" 2>&1 9>&- &
+if [ -f /etc/mu300/usb-storage-boot ] && [ -x "$TSF_DIR/tesla-usb-start.sh" ]; then
+    setsid sh "$TSF_DIR/tesla-usb-start.sh" </dev/null >>"$LOG" 2>&1 9>&- &
+else
+    setsid sh "$GADGET_SH" on </dev/null >>"$LOG" 2>&1 9>&- &
+fi
