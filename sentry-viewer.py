@@ -476,7 +476,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.001"
+APP_VERSION = "2026.11.25.002"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -626,8 +626,12 @@ def _race_get(path, timeout, limit, validate=None, collect=False, grace=1.0):
                     if not first_ok[0]:
                         first_ok[0] = time.time()
             else:
+                preview = ""
+                if data:
+                    text = re.sub(rb"\s+", b" ", data[:120]).decode("utf-8", "replace").strip()
+                    preview = " (%d 字节: %s)" % (len(data), text[:80])
                 with lock:
-                    bad[base] = "内容校验失败"
+                    bad[base] = "内容校验失败" + preview
         except Exception as ex:
             with lock:
                 bad[base] = _err_kind(ex)
@@ -2693,6 +2697,11 @@ body.settings-open { overflow:hidden; }
 .diag-tabs { display:flex; gap:8px; margin:10px 0 0; }
 .diag-tabs .mini { padding:7px 14px; border-radius:8px; background:var(--panel2); border:1px solid var(--line2); color:var(--text); font-size:12px; cursor:pointer; }
 .diag-tabs .mini.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+/* 关于页日志分析 */
+.logview { max-height:340px; overflow:auto; margin:10px 0 0; padding:10px 12px; border:1px solid var(--line2); border-radius:9px;
+  background:var(--panel2); color:var(--text); font:11.5px/1.6 var(--mono, ui-monospace, Consolas, monospace);
+  white-space:pre-wrap; word-break:break-all; user-select:text; }
+.logview[hidden] { display:none; }
 .storage-usage output { font-variant-numeric:tabular-nums; }
 .storage-danger { margin-top:26px; padding-top:22px; border-top:1px solid var(--line); position:relative; }
 #storage-retention { margin-top:0; }
@@ -3386,6 +3395,18 @@ body.settings-open { overflow:hidden; }
   </div>
   <div id="tab-about" style="display:none">
     <div class="hint">哨兵一剪梅 · 特斯拉哨兵视频查看器。扫码交流或赞助，感谢支持。</div>
+    <div class="support-sec">
+      <div class="support-title">日志分析</div>
+      <div class="support-text">更新失败、同步异常、无法转码等问题先看这里：日志概述给出关键状态与最近异常，详细日志可一键复制后发给作者定位。</div>
+      <div class="diag-tabs">
+        <button class="mini active" data-log-tab="summary" onclick="logTab('summary')">日志概述</button>
+        <button class="mini" data-log-tab="detail" onclick="logTab('detail')">详细日志</button>
+        <button class="mini" onclick="loadLogs(true)">刷新</button>
+        <button class="mini" onclick="copyLogs()">复制</button>
+      </div>
+      <pre class="logview" id="log-summary">正在读取日志…</pre>
+      <pre class="logview" id="log-detail" hidden></pre>
+    </div>
     <div class="support-sec">
       <div class="support-title">💬 交流加群</div>
       <div class="support-text">交流加群请联系作者，扫码关注抖音或添加微信好友~</div>
@@ -6245,6 +6266,34 @@ function doLogout() {
   if (!confirm(t('确定要退出登录吗？'))) return;
   location.href = '/logout';
 }
+/* ---------- 关于页: 日志分析 ---------- */
+let LOG_DATA = null, LOG_TAB = 'summary';
+function logTab(tab) {
+  LOG_TAB = tab;
+  document.querySelectorAll('[data-log-tab]').forEach(b => b.classList.toggle('active', b.dataset.logTab === tab));
+  document.getElementById('log-summary').hidden = tab !== 'summary';
+  document.getElementById('log-detail').hidden = tab !== 'detail';
+}
+async function loadLogs(manual) {
+  const sum = document.getElementById('log-summary');
+  if (!sum) return;
+  if (manual) sum.textContent = '正在读取日志…';
+  try {
+    const j = await (await fetch('/api/logs')).json();
+    LOG_DATA = j;
+    sum.textContent = (j.overview || []).join('\n') || '暂无状态信息';
+    document.getElementById('log-detail').textContent = j.detail || '暂无日志';
+  } catch (e) {
+    sum.textContent = '日志读取失败: ' + e;
+  }
+}
+async function copyLogs() {
+  if (!LOG_DATA) { toast('日志还没加载完成'); return; }
+  const text = LOG_TAB === 'summary' ? (LOG_DATA.overview || []).join('\n') : (LOG_DATA.detail || '');
+  if (!text) { toast('暂无日志可复制'); return; }
+  try { await navigator.clipboard.writeText(text); toast('已复制, 可粘贴发给作者'); }
+  catch (e) { toast('复制失败, 请长按日志手动全选复制'); }
+}
 function stab(which) {
   storageHelpClose();
   document.getElementById('panel').classList.add('settings-detail');
@@ -6264,6 +6313,7 @@ function stab(which) {
   if (which === 'brand') refreshBrand();
   if (which === 'skin') { applyStyle(localStorage.getItem(STYLE_KEY) || 'default'); refreshSkins(); }
   if (which === 'storage') storageLoad();
+  if (which === 'about') loadLogs();
 }
 
 function playLoad() {
@@ -9277,6 +9327,104 @@ def live_status():
         pass
     return {"running": running, "pending": pending, "ago": ago, "last": last,
             "disk": disk_usage(), "sys": sys_status()}
+
+
+def _log_tail(fp, max_lines=200, max_bytes=131072):
+    """读日志尾部若干行, 返回 (行列表, 文件大小); 文件不存在返回空"""
+    try:
+        st = os.stat(fp)
+        with open(fp, "rb") as f:
+            f.seek(max(0, st.st_size - max_bytes))
+            raw = f.read()
+        return raw.decode("utf-8", "replace").splitlines()[-max_lines:], st.st_size
+    except FileNotFoundError:
+        return [], 0
+    except Exception as ex:
+        return ["(读取失败: %s)" % ex], 0
+
+
+def log_report():
+    """关于页「日志分析」: 概述给出关键状态, 详细日志汇总各日志文件尾部。
+
+    更新失败、同步异常、ffmpeg 缺组件这类问题, 用户把这一页复制过来就能定位,
+    不用再登录 SSH 翻日志。"""
+    live = live_status()
+    st = live.get("sys") or {}
+    caps = ffmpeg_capabilities()
+    ov = ["版本: %s" % APP_VERSION,
+          "时间: %s" % time.strftime("%Y-%m-%d %H:%M:%S")]
+    ov.append("同步服务: %s；待同步 %s 项" % (
+        "运行中" if live.get("running") else "未运行", live.get("pending", 0)))
+    if live.get("ago") is not None:
+        ov.append("同步日志更新于 %d 秒前；最近一条: %s" % (live["ago"], live.get("last") or "-"))
+    else:
+        ov.append("同步日志: 暂无 (%s)" % LIVE_LOG)
+    if st.get("ffmpeg"):
+        issue = st.get("ffmpeg_issue") or ""
+        ov.append("ffmpeg: 已找到 %s%s" % (FFMPEG_BIN, ("；缺少 " + issue) if issue else "；组件完整"))
+    else:
+        ov.append("ffmpeg: 未找到（%s），缩略图与转码不可用" % FFMPEG_BIN)
+    ov.append("转码能力: HEVC 解码=%s / H.264 编码=%s / 硬件编码=%s" % (
+        "有" if caps.get("hevc") else "无",
+        "有" if caps.get("x264") else "无",
+        "有" if caps.get("v4l2") else "无"))
+    ov.append("温度: %s / CPU: %s / 内存: %s" % (
+        ("%s°C" % st["cpu_temp"]) if st.get("cpu_temp") is not None else "未知",
+        ("%s%%" % st["cpu_pct"]) if st.get("cpu_pct") is not None else "未知",
+        "%d/%d MB" % ((st.get("mem_used") or 0) // 1048576, (st.get("mem_total") or 0) // 1048576)))
+    try:
+        du = shutil.disk_usage(os.path.dirname(OTA_STATE) or "/")
+        ov.append("系统盘: 已用 %d MB / 共 %d MB（剩余 %d MB）" % (
+            (du.total - du.free) // 1048576, du.total // 1048576, du.free // 1048576))
+    except OSError:
+        pass
+    tgt = ota_target()
+    ov.append("更新源: %s @ %s" % (tgt.get("repo", "?"), tgt.get("branch", "?")))
+    ov.append("自动更新: %s（上次检查 %s）" % (
+        AUTO_UPD.get("last_result") or "尚无记录",
+        time.strftime("%H:%M:%S", time.localtime(AUTO_UPD["last_check"])) if AUTO_UPD.get("last_check") else "-"))
+    sections = []
+    # 1) 状态快照: OTA 记账 + 运行状态, 排查更新失败时最有用
+    try:
+        snap = {"version": APP_VERSION, "ota": _ota_state(), "auto_update": dict(AUTO_UPD),
+                "sys": st, "ffmpeg": {k: caps.get(k) for k in ("exists", "hevc", "x264", "v4l2", "scale", "mp4")}}
+        sections.append(("状态快照 (JSON)", json.dumps(snap, ensure_ascii=False, indent=1).splitlines()))
+    except Exception as ex:
+        sections.append(("状态快照", ["读取失败: %s" % ex]))
+    # 2) 各日志文件尾部
+    files = [(LIVE_LOG, 200), ("/opt/tesla-sentry/health.log", 120)]
+    sizes = []
+    for fp, n in files:
+        lines, size = _log_tail(fp, n)
+        sizes.append("%s %s" % (os.path.basename(fp), ("%d KB" % (size // 1024)) if size else "不存在"))
+        sections.append(("%s（尾部 %d 行）" % (fp, n), lines or ["(空或不存在)"]))
+    ov.append("日志文件: " + "；".join(sizes))
+    # 3) OpenWrt 系统日志: 服务 stdout/stderr 走 syslog, 更新失败、崩溃重启都在这里
+    if shutil.which("logread"):
+        try:
+            p = subprocess.run(["logread"], capture_output=True, text=True, timeout=8, errors="replace")
+            all_lines = (p.stdout or "").splitlines()
+            lines = [l for l in all_lines if re.search(r"tesla|sentry|ffmpeg", l, re.I)]
+            sections.append(("logread 系统日志（tesla/sentry 相关，尾部 200 行）",
+                             lines[-200:] or all_lines[-60:] or ["(空)"]))
+        except Exception as ex:
+            sections.append(("logread 系统日志", ["读取失败: %s" % ex]))
+    else:
+        sections.append(("logread 系统日志", ["(设备无 logread 命令)"]))
+    detail_lines = []
+    for title, lines in sections:
+        detail_lines.append("===== %s =====" % title)
+        detail_lines.extend(lines)
+        detail_lines.append("")
+    # 概述里附最近异常, 不用展开详细日志也能看到报错
+    bad = [l for l in detail_lines
+           if re.search(r"error|failed|失败|traceback|exception|不完整", l, re.I) and not l.startswith("=====")]
+    if bad:
+        ov.append("最近异常（详见详细日志）:")
+        ov.extend("  " + l.strip()[:160] for l in bad[-5:])
+    else:
+        ov.append("最近异常: 日志中未发现 error/失败 记录")
+    return {"ok": True, "overview": ov, "detail": "\n".join(detail_lines)}
 
 
 def active_skin():
@@ -14662,6 +14810,12 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if not self._gate():
+            return
+        if path == "/api/logs":
+            try:
+                self._json(log_report())
+            except Exception as ex:
+                self._json({"ok": False, "overview": ["日志读取失败: %s" % ex], "detail": ""})
             return
         if path in ("/", "/index.html"):
             # 二维码 URL 带内容版本号: 换码后旧图缓存立即失效, 避免浏览器显示未裁剪的旧二维码

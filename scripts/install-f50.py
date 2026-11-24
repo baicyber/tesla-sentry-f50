@@ -77,6 +77,7 @@ class Installer:
         self.root = Path(root)
         self.device = {}
         self.repaired = False
+        self.upgrade = False
         self.runtime = self.source / 'runtime' if (self.source / 'runtime').is_dir() else None
 
     def python(self):
@@ -152,6 +153,13 @@ class Installer:
                 for dest, src in self.payload().items()}
 
     def existing_install(self):
+        """返回 new / same / upgrade。
+
+        same: marker 与当前代码、参数完全一致；
+        upgrade: 已有安装目录但代码或参数不同（含老版本没有 marker 的情况），
+                 走原地升级，保留镜像、录像、账号与设置；
+        new: 什么都没有，按全新安装。
+        """
         marker = self.path(APP) / MARKER
         if marker.is_file():
             try:
@@ -170,14 +178,12 @@ class Installer:
                 matches = matches and image.stat().st_size == self.args.size_gb * GIB
             except (OSError, ValueError, KeyError):
                 matches = False
-            if matches:
-                return True
-            raise InstallError('已有安装与当前代码或参数不同；本脚本仅用于全新安装，不覆盖现有安装')
+            return 'same' if matches else 'upgrade'
         targets = [APP, CONF, self.data_home] + ['/etc/init.d/' + name for name in SERVICES]
         for target in targets:
             if os.path.lexists(self.path(target)):
-                raise InstallError('发现已有路径 %s；停止安装，保留原有内容' % target)
-        return False
+                return 'upgrade'
+        return 'new'
 
     def options_record(self):
         options = {key: getattr(self.args, key) for key in
@@ -202,7 +208,7 @@ class Installer:
                 out[k] = v
         return out
 
-    def configuration(self, old_conf_text=None):
+    def configuration(self, old_conf_text=None, upgrade=False):
         """生成 conf 字符串。
 
         old_conf_text: 如果传入旧 conf 内容, 用于升级时继承用户修改过的键值。
@@ -260,6 +266,18 @@ class Installer:
                     continue
                 if k in settings:
                     settings[k] = v
+            # 原地升级: 视频与日志路径沿用旧值, 录像留在原来的挂载点, 不因参数默认值变化被改走
+            if upgrade:
+                for key in ('TSF_VIDEO_ROOT', 'TSF_IMG', 'TSF_ARCHIVE', 'TSF_TRANSCODE_DIR',
+                            'TSF_LOG_DIR', 'TSF_LIVE_LOG', 'TSF_LIVE_STATE',
+                            'TSF_CARD_MNT', 'TSF_CARD_UUID'):
+                    if old.get(key):
+                        settings[key] = old[key]
+                settings['TSF_CACHE'] = APP + '/cache'
+                # FFmpeg 用本次探测/安装好的路径, 避免继续引用已失效的旧路径
+                for key, name in (('TSF_FFMPEG', 'ffmpeg'), ('TSF_FFPROBE', 'ffprobe')):
+                    if self.device.get(name):
+                        settings[key] = self.device[name]
 
         if self.runtime:
             runtime = APP + '/runtime'
@@ -487,7 +505,9 @@ class Installer:
             # 先把 FFmpeg 配好再谈安装: 这不是"用到时才发现"的可选项
             resolved = self.provision_ffmpeg()
             print('FFmpeg 就绪：%s / %s' % (resolved['ffmpeg'], resolved['ffprobe']), flush=True)
-        if self.existing_install():
+        state = self.existing_install()
+        self.upgrade = state == 'upgrade'
+        if state == 'same':
             if resolved:
                 self.update_dependency_paths(resolved)
                 try:
@@ -497,6 +517,8 @@ class Installer:
                     print('重启服务失败，请手动执行 /etc/init.d/tesla-viewer restart：%s' % exc)
                 self.repaired = True
             return False
+        if self.upgrade:
+            print('检测到已有安装：按升级方式替换程序，镜像、录像、账号与设置保留', flush=True)
         for name in ('blkid', 'flock', 'mount', 'umount', 'readlink', 'setsid'):
             if not self.tool(name):
                 raise InstallError('缺少工具：' + name)
@@ -520,10 +542,11 @@ class Installer:
         if not re.fullmatch(r'[A-Za-z0-9-]+', uuid):
             raise InstallError('无法读取数据盘 UUID')
         usage = shutil.disk_usage(self.path(self.args.data_mount))
-        if self.args.size_gb > usage.total / GIB / 2:
+        # 升级不新建镜像, 也不重新分配空间, 只做只读校验
+        if not self.upgrade and self.args.size_gb > usage.total / GIB / 2:
             raise InstallError('镜像容量不能超过数据盘实际容量的一半（%.1f GiB）：归档区要与车机内容一致，'
                                '还要存放转码缓存、铃声、涂装等文件' % (usage.total / GIB / 2))
-        if usage.free < self.required_bytes():
+        if not self.upgrade and usage.free < self.required_bytes():
             raise InstallError('数据盘至少需要 %d GiB 空闲空间（镜像、归档、安全预留）' %
                                (self.required_bytes() // GIB))
         app_bytes = sum(info['size'] for info in runtime_files.values()) + 128 * 1024 * 1024
@@ -541,7 +564,7 @@ class Installer:
         udc = bound or controllers[0]
         if udc not in controllers:
             raise InstallError('USB 控制器不可用')
-        if any(gadget.glob('functions/mass_storage*')):
+        if not self.upgrade and any(gadget.glob('functions/mass_storage*')):
             raise InstallError('USB 已存在 mass_storage 功能；保留现有导出，停止安装')
         # Do not load modules or mount configfs during a check.
         supported = self.path('/proc/filesystems').read_text().split()
@@ -581,11 +604,12 @@ class Installer:
              'color=size=64x64:rate=1', '-frames:v', '1', '-c:v',
              'libx264' if self.ffmpeg_caps(self.device['ffmpeg'])['x264'] else 'h264_v4l2m2m',
              '-f', 'null', '-'])
-        with socket.socket() as probe:
-            try:
-                probe.bind(('0.0.0.0', self.args.port))
-            except OSError as exc:
-                raise InstallError('端口不可用：%s' % self.args.port) from exc
+        if not self.upgrade:
+            with socket.socket() as probe:
+                try:
+                    probe.bind(('0.0.0.0', self.args.port))
+                except OSError as exc:
+                    raise InstallError('端口不可用：%s' % self.args.port) from exc
         for value in self.device.values():
             if not re.fullmatch(r'[A-Za-z0-9_./-]+', value):
                 raise InstallError('设备路径或标识包含不支持的字符')
@@ -611,8 +635,12 @@ class Installer:
             old_cron = cron_path.read_bytes() if cron_path.exists() else None
             old_cron_mode = cron_path.stat().st_mode & 0o777 if cron_path.exists() else 0o600
             # Recheck under the install lock before publishing any files.
-            if self.existing_install():
+            state = self.existing_install()
+            if state == 'same':
                 return False
+            if state == 'upgrade':
+                self.upgrade_in_place(old_cron, old_cron_mode)
+                return True
             app_stage = Path(tempfile.mkdtemp(prefix='.tsf-app-', dir=self.path('/opt')))
             stages.append(app_stage)
             data_stage = Path(tempfile.mkdtemp(prefix='.tsf-data-', dir=self.path(self.args.data_mount)))
@@ -706,6 +734,135 @@ class Installer:
         print('启动命令：/etc/init.d/tsf-mount start；网页端口：%s' % self.args.port)
         return True
 
+    @staticmethod
+    def _replace_file(path, content, mode=0o644):
+        """原子替换已有文件：同目录写临时文件再 rename，服务不会读到半截内容。"""
+        temporary = path.with_name('.' + path.name + '.tsf-' + secrets.token_hex(6))
+        with temporary.open('x', encoding='utf-8', newline='\n') as stream:
+            os.chmod(temporary, mode)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+
+    def upgrade_in_place(self, old_cron, old_cron_mode):
+        """老版本原地升级：只替换程序、离线运行环境与启动脚本。
+
+        镜像、归档录像、auth.conf、settings.json、通知配置、品牌/字体等目录全部保留，
+        视频路径沿用旧 conf，不会因为参数默认值变化把归档改到别的挂载点。
+        """
+        app = self.path(APP)
+        conf_path = self.path(CONF)
+        cron_path = self.path('/etc/crontabs/root')
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        backup = app.with_name(app.name + '.bak-' + stamp)
+        conf_backup = None
+        cron_changed = False
+        swapped = False
+        staging = Path(tempfile.mkdtemp(prefix='.tsf-upgrade-', dir=app.parent))
+        old_conf_text = conf_path.read_text(encoding='utf-8') if conf_path.is_file() else None
+        old = self._parse_old_conf(old_conf_text)
+        video_root = old.get('TSF_VIDEO_ROOT') or ''
+        if not video_root and old.get('TSF_ARCHIVE'):
+            video_root = str(Path(old['TSF_ARCHIVE']).parent)
+        if not video_root:
+            video_root = self.data_home
+        image = old.get('TSF_IMG') or video_root + '/img/teslacam.img'
+        archive = old.get('TSF_ARCHIVE') or video_root + '/archive'
+        if not self.path(image).is_file():
+            raise InstallError('旧安装找不到车机镜像 %s；请确认 TF 卡已挂载后重试，或全新安装' % image)
+        try:
+            # 以现有目录为底复制(排除可再生的 cache 与 runtime)，保留账号、设置与上传素材
+            shutil.copytree(app, staging, symlinks=True, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns('cache', 'runtime'))
+            (staging / 'cache').mkdir(exist_ok=True)
+            os.chmod(staging, 0o755)
+            if self.runtime:
+                for name, info in self.runtime_files().items():
+                    target = staging / 'runtime' / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(self.runtime / name, target)
+                    os.chmod(target, info['mode'])
+                shutil.copyfile(self.runtime / 'manifest.json', staging / 'runtime/manifest.json')
+            for dest, src in self.payload().items():
+                if dest.startswith(APP + '/'):
+                    target = staging / Path(dest).name
+                    target.write_text(src.read_text(encoding='utf-8'), encoding='utf-8', newline='\n')
+                    os.chmod(target, 0o755)
+            if not (staging / 'auth.conf').is_file():
+                password = secrets.token_urlsafe(18)
+                (staging / 'auth.conf').write_text(
+                    'user=admin\npass=%s\nsecret=%s\nttl=2592000\n' % (password, secrets.token_hex(32)),
+                    encoding='utf-8', newline='\n')
+                os.chmod(staging / 'auth.conf', 0o600)
+            if not (staging / 'settings.json').is_file():
+                (staging / 'settings.json').write_text('{"auto_update": false}\n',
+                                                       encoding='utf-8', newline='\n')
+                os.chmod(staging / 'settings.json', 0o600)
+            (staging / MARKER).write_text(json.dumps({'files': self.source_hashes(),
+                                                      'options': self.options_record()}, indent=2) + '\n',
+                                          encoding='utf-8', newline='\n')
+            env = os.environ.copy()
+            env.update(TSF_ARCHIVE=archive, TSF_CACHE=str(staging / 'cache'),
+                       TSF_AUTH_FILE=str(staging / 'auth.conf'),
+                       TSF_SETTINGS=str(staging / 'settings.json'))
+            run([self.python(), '-B', str(staging / 'sentry-viewer.py'), '--ota-check'], env=env)
+            app.rename(backup)
+            try:
+                staging.rename(app)
+            except BaseException:
+                backup.rename(app)
+                raise
+            swapped = True
+            for dest, src in self.payload().items():
+                if dest.startswith('/etc/init.d/'):
+                    self._replace_file(self.path(dest), src.read_text(encoding='utf-8'), 0o755)
+            for name in ('S08tsf-mount', 'K99tsf-mount'):
+                target = self.path('/etc/rc.d/' + name)
+                if not os.path.lexists(target):
+                    target.symlink_to('../init.d/tsf-mount')
+            if conf_path.exists():
+                conf_backup = conf_path.with_name(conf_path.name + '.bak-' + stamp)
+                shutil.copy2(conf_path, conf_backup)
+            self._replace_file(conf_path, self.configuration(old_conf_text=old_conf_text, upgrade=True))
+            cron_new = self.cron_text((old_cron or b'').decode('utf-8'))
+            if (cron_path.read_bytes() if cron_path.exists() else None) != old_cron:
+                raise InstallError('安装期间定时任务被其他程序修改，停止发布')
+            self._replace_file(cron_path, cron_new, old_cron_mode)
+            cron_changed = True
+            # 备份只留程序，旧缓存目录随备份释放，不在卡上多占一份
+            shutil.rmtree(backup / 'cache', ignore_errors=True)
+        except BaseException:
+            if swapped:
+                if app.exists():
+                    shutil.rmtree(app, ignore_errors=True)
+                if backup.exists():
+                    backup.rename(app)
+            if conf_backup and conf_backup.exists():
+                shutil.copy2(conf_backup, conf_path)
+            if cron_changed:
+                if old_cron is None:
+                    if cron_path.exists():
+                        cron_path.unlink()
+                else:
+                    cron_path.write_bytes(old_cron)
+                    os.chmod(cron_path, old_cron_mode)
+            raise
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+        print('升级完成，旧程序已备份到 %s' % backup)
+        if conf_backup:
+            print('旧配置已备份到 %s' % conf_backup)
+        for service in ('tesla-live', 'tesla-viewer'):
+            script = str(self.path('/etc/init.d/' + service))
+            try:
+                run([script, 'running'], timeout=15)
+                run([script, 'restart'], timeout=90)
+                print('已重启 %s' % service)
+            except InstallError as exc:
+                print('提示：%s 未运行或重启失败（%s），可稍后手动启动' % (service, exc))
+
     def start(self):
         # Installation remains intact if startup fails; no blind reinstall or USB rollback.
         run(['/etc/init.d/tsf-mount', 'start'], timeout=90)
@@ -732,7 +889,8 @@ def main(argv=None):
     try:
         if installer.args.apply:
             installed = installer.install()
-            if installed and installer.args.start:
+            # 原地升级已重启服务, 不再跑全新安装的启动校验(镜像路径可能沿用旧配置)
+            if installed and installer.args.start and not installer.upgrade:
                 installer.start()
         elif installer.preflight():
             print('检查通过。需要 %d GiB 数据盘空闲空间；尚未写入文件或启动服务。' %
