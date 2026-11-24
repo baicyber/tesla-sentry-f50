@@ -476,7 +476,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.24.001"
+APP_VERSION = "2026.11.24.002"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -554,7 +554,23 @@ def _ota_sources():
 def _http_get(url, timeout=10, limit=8 << 20):
     req = urllib.request.Request(url, headers={"User-Agent": "tsf-ota/" + APP_VERSION, "Cache-Control": "no-cache"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read(limit)
+        try:
+            want = int(r.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            want = 0
+        chunks, got = [], 0
+        while got < limit:
+            chunk = r.read(min(65536, limit - got))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            got += len(chunk)
+        data = b"".join(chunks)
+        # 连接中途被掐断时 read() 可能只是提前返回 EOF; 按响应头核对长度,
+        # 避免把半截文件当成完整文件 (F50 走 4G 时很常见)
+        if want and got < min(want, limit):
+            raise IOError("下载不完整 (%d/%d 字节)" % (got, want))
+        return data
 
 
 def _src_order():
@@ -1150,6 +1166,22 @@ def _viewer_version(blob):
     return m.group(1).decode() if m else ""
 
 
+def _viewer_blob_ok(blob):
+    """主程序完整性校验: 大小 + 特征串 + 能整体编译。
+
+    只按大小/特征串判断时, 半截文件 (截在函数中间) 也能通过; 这里直接编译,
+    截断或损坏的文件会被判为无效, 让下载源竞速去用另一份完整文件。"""
+    if not blob or len(blob) < 50000:
+        return False
+    if b"APP_VERSION" not in blob or b"--ota-check" not in blob or b"/api/events" not in blob:
+        return False
+    try:
+        compile(blob, "<ota-candidate>", "exec")
+    except (SyntaxError, ValueError):
+        return False
+    return True
+
+
 def ota_apply(force=False):
     """下载并安装最新版; 返回 (成功?, 提示/错误)
 
@@ -1167,32 +1199,44 @@ def ota_apply(force=False):
         return False, "当前已是最新版本 (%s)" % APP_VERSION
     # 1) 下载主程序。镜像 CDN 可能缓存旧文件(清单已经 2.8.55 而文件还是 2.8.52),
     #    所以一次性收齐各源的结果, 挑版本号与清单一致的那份; 只有全部源都旧才报错。
-    try:
-        res = _race_get("/sentry-viewer.py?ts=%d" % int(time.time()), timeout=60, limit=8 << 20,
-                        validate=lambda d: len(d) > 50000 and b"APP_VERSION" in d,
-                        collect=True, grace=1.5)
-    except Exception as ex:
-        return False, "下载失败: %s" % ex
-    picked = next(((b, d) for b, d in res if _viewer_version(d) == latest), None)
+    #    4G 网络偶发中途断流, 下载失败或没挑到完整文件时自动整体重试一次。
+    def _fetch_viewer():
+        return _race_get("/sentry-viewer.py?ts=%d" % int(time.time()), timeout=60, limit=8 << 20,
+                         validate=_viewer_blob_ok, collect=True, grace=1.5)
+    res, picked = [], None
+    for attempt in (0, 1):
+        try:
+            res = _fetch_viewer()
+        except Exception as ex:
+            if attempt:
+                return False, "下载失败: %s（已自动重试一次）" % ex
+            time.sleep(1.5)
+            continue
+        picked = next(((b, d) for b, d in res if _viewer_version(d) == latest), None)
+        if picked:
+            break
+        if attempt == 0:
+            time.sleep(1.5)
     if picked is None:
         seen = sorted({("%s(%s)" % (_viewer_version(d) or "?", urllib.parse.urlsplit(b).netloc))
                        for b, d in res})
-        return False, "版本校验失败 (文件 %s / 清单 %s)；下载源仍在缓存旧文件，请稍后重试或在「更新源」里换一个源" \
+        return False, "版本校验失败 (文件 %s / 清单 %s)；下载源仍在缓存旧文件或文件不完整，已自动重试一次，请稍后重试或在「更新源」里换一个源" \
                       % ("、".join(seen) or "?", latest)
-    data, base = picked
-    if len(data) < 50000:
-        return False, "下载不完整 (%d 字节)" % len(data)
-    if b"APP_VERSION" not in data or b"--ota-check" not in data or b"/api/events" not in data:
-        return False, "文件校验失败: 不是有效的查看器程序"
+    data, base = picked   # 已通过 _viewer_blob_ok 校验(大小/特征串/可编译)
     # 2) 下载依赖模块: 少一个都不装 (先装主程序后补模块, 只会得到一个起不来的服务)
     names = _ota_need_modules(j, data)
     mods = []
     for name in names:
-        try:
-            blob, _b = _race_get("/%s?ts=%d" % (name, int(time.time())), timeout=60, limit=4 << 20,
-                                 validate=lambda d: len(d) > 200)
-        except Exception as ex:
-            return False, "下载模块 %s 失败: %s" % (name, ex)
+        blob = None
+        for attempt in (0, 1):
+            try:
+                blob, _b = _race_get("/%s?ts=%d" % (name, int(time.time())), timeout=60, limit=4 << 20,
+                                     validate=lambda d: not _ota_check_py(name, d))
+                break
+            except Exception as ex:
+                if attempt:
+                    return False, "下载模块 %s 失败: %s（已自动重试一次）" % (name, ex)
+                time.sleep(1.5)
         bad = _ota_check_py(name, blob)
         if bad:
             return False, "模块 %s 校验失败: %s" % (name, bad)
