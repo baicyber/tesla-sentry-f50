@@ -406,7 +406,7 @@ FILES_DIR = os.path.join(ARCHIVE, "files")
 # 转码缓存放在归档区 transcode_cache 子目录 (随数据卡), 与归档视频一一对应; 归档视频被删时自动清理对应缓存
 TRANSCODE_DIR = os.environ.get("TSF_TRANSCODE_DIR") or os.path.join(ARCHIVE, "transcode_cache")
 PORT = int(os.environ.get("TSF_PORT", "8080"))
-CATS = ["SentryClips", "SavedClips", "RecentClips", "DriveClips"]
+CATS = ["SentryClips", "SavedClips", "DriveClips", "RecentClips"]
 # ===== 多语言表 (由 tools/i18n_*.json 生成, key 为中文原文) =====
 LANG_NAMES = [("zh", "中文"), ("en", "English"), ("de", "Deutsch"), ("fr", "Français"),
               ("it", "Italiano"), ("es", "Español"), ("nl", "Nederlands"), ("ru", "Русский"),
@@ -476,7 +476,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.53"
+APP_VERSION = "2.8.54"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -508,11 +508,16 @@ def ota_target():
 
 
 def ota_set_target(repo, branch):
-    """切换更新仓库与分支; 保存后清空清单缓存"""
+    """切换更新仓库与分支; 保存后清空清单缓存 (仓库支持 owner/repo 或 GitHub 地址)"""
     repo = (repo or "").strip().strip("/")
+    repo = re.sub(r"^https?://", "", repo, flags=re.I)
+    repo = re.sub(r"^(www\.)?github\.com/", "", repo, flags=re.I)
+    repo = repo.rstrip("/")
+    if repo.lower().endswith(".git"):
+        repo = repo[:-4]
     branch = (branch or "").strip()
     if not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
-        return False, "仓库地址格式应为 owner/repo"
+        return False, "仓库地址格式应为 owner/repo, 也可直接粘贴 GitHub 仓库链接"
     if not branch or not re.match(r"^[A-Za-z0-9_.\-/]+$", branch):
         return False, "分支名不合法"
     try:
@@ -1683,9 +1688,20 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .chip.pick { border-style:dashed; background:var(--chipbg); color:var(--muted);
   position:sticky; right:0; z-index:2; box-shadow:-10px 0 12px var(--bg); }
 .chip.pick:hover { color:var(--text); }
-/* 原生日期选择器本体: 藏起来只用来唤起系统日历 */
-.dpick { position:absolute; left:0; top:0; width:1px; height:1px; opacity:0; border:0; padding:0;
-  pointer-events:none; }
+/* 自定义日期时间段: 居中弹层, 选开始/结束日期 */
+.dpick-pop { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); z-index:80;
+  width:min(330px, calc(100vw - 40px)); background:var(--panel); border:1px solid var(--line2);
+  border-radius:12px; padding:14px 15px 13px; box-shadow:0 18px 48px rgba(0,0,0,.5); }
+.dpick-pop[hidden] { display:none; }
+.dpick-pop h4 { margin:0 0 11px; font-size:13.5px; color:var(--text); }
+.dpick-pop label { display:flex; align-items:center; gap:9px; margin-bottom:9px; font-size:12.5px; color:var(--muted); }
+.dpick-pop input[type=date] { flex:1; min-width:0; background:var(--panel2); border:1px solid var(--line2);
+  border-radius:8px; color:var(--text); padding:8px 9px; font-size:12.5px; color-scheme:dark; }
+.dpick-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:12px; }
+.dpick-actions button { border:1px solid var(--line2); background:var(--panel2); color:var(--text);
+  border-radius:8px; padding:8px 15px; font-size:12.5px; cursor:pointer; }
+.dpick-actions button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+.dpick-actions button:hover { filter:brightness(1.08); }
 .chip { padding:8px 13px; border-radius:14px; background:var(--chipbg); color:var(--muted); border:1px solid var(--line2);
   font-size:12px; cursor:pointer; white-space:nowrap; flex:0 0 auto; transition:background .15s,color .15s; }
 .chip:hover { color:var(--text); border-color:var(--muted2); }
@@ -2135,7 +2151,7 @@ select.ninput { cursor:pointer; }
 /* 实时预览: 与其它三个分类页签同级, 内容直接排在页签下方 (不再是全屏浮层 + 返回按钮) */
 .livep { display:none; max-width:1180px; margin:0 auto; padding:12px 16px 24px; }
 .livep.open { display:block; }
-body.livemode #filters, body.livemode #dfilters, body.livemode #dpick,
+body.livemode #filters, body.livemode #dfilters, body.livemode #dpick-pop,
 body.livemode #grid, body.livemode #empty { display:none !important; }
 .lvtop { display:flex; align-items:center; gap:10px; padding:0 0 10px; border-bottom:1px solid var(--line); }
 .lvtitle { font-weight:600; font-size:14.5px; flex:1; min-width:0; line-height:1.35; }
@@ -2315,7 +2331,7 @@ html[data-style="pixel"] .storbar { height:9px; border:2px solid var(--line); ba
 html[data-style="pixel"] .storbar i { border-radius:0 !important; }
 html[data-style="pixel"] .syscell { border:2px solid var(--line); background:var(--panel2); }
 html[data-style="pixel"] .upbtn { border-style:solid; }
-html[data-style="pixel"] .ninput, html[data-style="pixel"] .dpick,
+html[data-style="pixel"] .ninput, html[data-style="pixel"] .dpick-pop,
 html[data-style="pixel"] .fm-dest-input, html[data-style="pixel"] select {
   border:2px solid var(--line) !important; background:var(--panel2) !important; color:var(--text) !important;
 }
@@ -2451,10 +2467,11 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .storval { font-variant-numeric:tabular-nums; }
 .storbar { height:3px; margin:7px 0 0; background:var(--line); }
 .filter-reset { color:var(--accent); background:none; border:0; padding:4px 0; min-height:36px; cursor:pointer; }
-.livebtn { color:#fff; background:var(--blue); border:0; border-radius:8px; padding:5px 11px; min-height:32px;
-  font-size:12.5px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
+.livebtn { color:#fff; background:var(--accent); border:0; border-radius:8px; padding:5px 12px; min-height:32px;
+  font-size:12.5px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; gap:4px;
+  box-shadow:0 2px 10px rgba(232,68,63,.45); }
 .livebtn[hidden] { display:none; }
-.livebtn:hover { filter:brightness(1.08); }
+.livebtn:hover { filter:brightness(1.08); box-shadow:0 3px 14px rgba(232,68,63,.6); }
 .storextra { width:100%; margin:0; padding-top:14px; border-top:1px solid var(--line); }
 .stortog { right:7px; top:16px; }
 .library-toolbar { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
@@ -2822,9 +2839,15 @@ body.settings-open { overflow:hidden; }
 <nav class="filters" id="dfilters"></nav>
 <nav class="filters" id="filters"></nav>
 <button class="livebtn" id="live-btn" onclick="openLive()" hidden>📡 <span>实时预览</span></button>
-<button class="filter-reset" onclick="reasonFilter='all';dateFilter='all';render(currentCat)">重置</button>
+<button class="filter-reset" onclick="resetFilters()">重置</button>
 </div></div>
-<input type="date" id="dpick" class="dpick" onchange="if(this.value) setDate(this.value)">
+<div class="dpick-pop" id="dpick-pop" hidden role="dialog" aria-modal="true" aria-label="选择日期时间段">
+  <h4>选择日期时间段</h4>
+  <label><span>开始</span><input type="date" id="dpick-from"></label>
+  <label><span>结束</span><input type="date" id="dpick-to"></label>
+  <div class="hint" style="margin:0 0 4px">只填开始或结束也可以，表示从该日期起 / 截止到该日期。</div>
+  <div class="dpick-actions"><button type="button" onclick="closeDatePick()">取消</button><button type="button" class="primary" onclick="applyDateRange()">应用</button></div>
+</div>
 <div class="grid-wrap" id="grid"></div>
 <div class="empty" id="empty" style="display:none"><div class="big">📹</div>
 <div>暂无归档视频<br><small style="font-size:12px">车机录制后, 归档同步任务会自动把视频收进来 (镜像需空闲10分钟)</small></div></div>
@@ -2936,8 +2959,7 @@ body.settings-open { overflow:hidden; }
   <aside class="settings-nav"><h2>设置 <button class="x" onclick="closePanel()" aria-label="关闭设置">✕</button></h2>
   <nav class="stabs" aria-label="设置分类"><h3>存储与文件</h3>
     <button class="stab" id="st-storage" onclick="stab('storage')"><svg class="ic"><use href="#i-archive"/></svg>存储分配</button>
-    <button class="stab" id="st-files" onclick="stab('files');switchArea('usb')"><svg class="ic"><use href="#i-folder"/></svg>车机 U 盘文件</button>
-    <button class="stab" id="st-archive" onclick="stab('files');switchArea('archive')"><svg class="ic"><use href="#i-archive"/></svg>盒子归档</button>
+    <button class="stab" id="st-files" onclick="stab('files');switchArea(area)"><svg class="ic"><use href="#i-folder"/></svg>文件管理</button>
     <h3>车辆个性化</h3>
     <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车语音</button>
     <button class="stab" id="st-wraps" onclick="stab('wraps')"><svg class="ic"><use href="#i-brush"/></svg>涂装</button>
@@ -3093,7 +3115,6 @@ body.settings-open { overflow:hidden; }
         <button onclick="goDir(document.getElementById('dest-dir').value)" style="background:#e8443f;border:none;color:#fff;border-radius:8px;padding:0 14px;font-size:12px;cursor:pointer">跳转</button>
       </div>
       <div id="crumb" style="font-size:12px;color:#5ea9ff;margin-bottom:8px;line-height:1.8"></div>
-      <label class="fm-tool" id="upbtn"><svg class="ic"><use href="#i-copy"/></svg>＋ 上传文件到当前目录 (≤100MB)<input type="file" id="anyfile-file" hidden></label>
       <div id="fm-bar" class="fm-bar">
         <div class="row" style="justify-content:space-between;margin-bottom:8px">
           <label class="row" style="cursor:pointer;font-size:12.5px;gap:6px">
@@ -3102,10 +3123,12 @@ body.settings-open { overflow:hidden; }
           <span class="fm-count" id="fm-count">已选 0 项</span>
         </div>
         <div class="row">
-          <button class="fm-danger" onclick="fmOp('delete')"><svg class="ic"><use href="#i-trash"/></svg>删除</button>
+          <button title="上传文件到当前目录 (≤100MB)" onclick="document.getElementById('anyfile-file').click()"><svg class="ic"><use href="#i-download"/></svg>上传</button>
           <button onclick="fmOp('move')"><svg class="ic"><use href="#i-move"/></svg>移动</button>
           <button onclick="fmOp('copy')"><svg class="ic"><use href="#i-copy"/></svg>复制</button>
           <button onclick="fmOp('rename')"><svg class="ic"><use href="#i-pen"/></svg>重命名</button>
+          <button class="fm-danger" onclick="fmOp('delete')"><svg class="ic"><use href="#i-trash"/></svg>删除</button>
+          <input type="file" id="anyfile-file" hidden>
         </div>
         <div class="row" id="fm-dest" style="display:none;margin-top:8px"></div>
       </div>
@@ -3134,42 +3157,50 @@ body.settings-open { overflow:hidden; }
     <div class="hint" id="play-msg"></div>
   </div>
   <div id="tab-notify" style="display:none">
-    <div class="hint">哨兵触发时把时间/位置/触发原因和触发画面推到飞书；也可以只开微信提醒（爱语飞飞）。默认走自建应用私聊(只有你本人可见)；也可切到群机器人 webhook(群里都能看到)。视频推送只支持私聊。</div>
+    <div class="hint">哨兵触发时把时间/位置/触发原因和触发画面推送给你。先选择推送方式：飞书提醒支持封面卡片与视频；微信提醒支持爱语飞飞、Server酱等接口，只发文字提醒。</div>
     <label class="nrow"><span>启用推送</span><input type="checkbox" id="nt-en"></label>
     <label class="nrow"><span>也推手动保存</span><input type="checkbox" id="nt-saved"></label>
-    <select class="ninput" id="nt-mode">
-      <option value="dm">私聊推送 — 只有我本人能看到</option>
-      <option value="group">群机器人 — 群里所有人都能看到</option>
+    <select class="ninput" id="nt-channel" onchange="ntChannelUI()">
+      <option value="feishu">推送方式：飞书提醒（卡片 / 视频）</option>
+      <option value="wechat">推送方式：微信提醒（文字）</option>
     </select>
-    <div class="eyebar">
-      <span class="lbl" id="nt-eyetip">敏感信息已隐藏（截图安全）</span>
-      <button class="mini" id="nt-eye" onclick="ntToggleEye()"><svg class="ic"><use href="#i-eye"/></svg>显示</button>
-    </div>
-    <input class="ninput" id="nt-to" placeholder="接收人: 你的 open_id (ou_ 开头) 或飞书登录邮箱">
-    <select class="ninput" id="nt-media" onchange="ntMediaUI()">
-      <option value="thumb">推送内容：封面卡片（触发那帧图 + 信息，最快）</option>
-      <option value="video">推送内容：触发摄像头视频（可回放）</option>
-    </select>
-    <div id="nt-vwrap" style="display:none">
-      <select class="ninput" id="nt-quality">
-        <option value="720p">视频清晰度：720p（约 5MB / 30 秒）</option>
-        <option value="480p">视频清晰度：480p（约 3MB / 30 秒）</option>
-        <option value="360p">视频清晰度：360p（约 1.8MB / 30 秒）</option>
+    <div id="nt-fs">
+      <select class="ninput" id="nt-mode">
+        <option value="dm">私聊推送 — 只有我本人能看到</option>
+        <option value="group">群机器人 — 群里所有人都能看到</option>
       </select>
-      <div class="nrow"><span>视频时长</span><input class="ninput num" id="nt-vdur" type="number" min="10" max="60"> <span class="hint2">秒（从触发前 5 秒开始截）</span></div>
+      <div class="eyebar">
+        <span class="lbl" id="nt-eyetip">敏感信息已隐藏（截图安全）</span>
+        <button class="mini" id="nt-eye" onclick="ntToggleEye()"><svg class="ic"><use href="#i-eye"/></svg>显示</button>
+      </div>
+      <input class="ninput" id="nt-to" placeholder="接收人: 你的 open_id (ou_ 开头) 或飞书登录邮箱">
+      <select class="ninput" id="nt-media" onchange="ntMediaUI()">
+        <option value="thumb">推送内容：封面卡片（触发那帧图 + 信息，最快）</option>
+        <option value="video">推送内容：触发摄像头视频（可回放）</option>
+      </select>
+      <div id="nt-vwrap" style="display:none">
+        <select class="ninput" id="nt-quality">
+          <option value="720p">视频清晰度：720p（约 5MB / 30 秒）</option>
+          <option value="480p">视频清晰度：480p（约 3MB / 30 秒）</option>
+          <option value="360p">视频清晰度：360p（约 1.8MB / 30 秒）</option>
+        </select>
+        <div class="nrow"><span>视频时长</span><input class="ninput num" id="nt-vdur" type="number" min="10" max="60"> <span class="hint2">秒（从触发前 5 秒开始截）</span></div>
+      </div>
+      <input class="ninput" id="nt-appid" placeholder="App ID — cli_ 开头">
+      <input class="ninput" id="nt-secret" type="password" placeholder="App Secret (已保存则留空表示不修改)">
+      <input class="ninput" id="nt-hook" placeholder="群机器人 webhook (仅群推送需要): https://open.feishu.cn/open-apis/bot/v2/hook/...">
+      <input class="ninput" id="nt-url" placeholder="查看链接前缀 (可选): http://你的域名:端口">
+      <div class="nrow"><span>延迟推送</span><input class="ninput num" id="nt-delay" type="number" min="5" max="600"> <span class="hint2">秒 (等片段写完再推)</span></div>
+      <div class="hint">默认走自建应用私聊(只有你本人可见)；也可切到群机器人 webhook(群里都能看到)。视频推送只支持私聊。</div>
     </div>
-    <input class="ninput" id="nt-appid" placeholder="App ID — cli_ 开头">
-    <input class="ninput" id="nt-secret" type="password" placeholder="App Secret (已保存则留空表示不修改)">
-    <input class="ninput" id="nt-hook" placeholder="群机器人 webhook (仅群推送需要): https://open.feishu.cn/open-apis/bot/v2/hook/...">
-    <input class="ninput" id="nt-url" placeholder="查看链接前缀 (可选): http://你的域名:端口">
-    <div class="nrow"><span>延迟推送</span><input class="ninput num" id="nt-delay" type="number" min="5" max="600"> <span class="hint2">秒 (等片段写完再推)</span></div>
-    <div class="hint" style="margin-top:16px">微信提醒（爱语飞飞）</div>
-    <label class="nrow"><span>启用微信提醒</span><input type="checkbox" id="nt-wx-en"></label>
-    <select class="ninput" id="nt-wx-api">
-      <option value="iyuu">接口：爱语飞飞 iyuu.cn</option>
-    </select>
-    <input class="ninput" id="nt-wx-token" type="password" placeholder="爱语飞飞 Token (IYUU 开头，已保存则留空表示不修改)">
-    <div class="hint">开启后，每个推送会同时发一条微信提醒；可以只用微信、不配飞书。Token 在 iyuu.cn 注册后获取，免费额度有限。</div>
+    <div id="nt-wx" style="display:none">
+      <select class="ninput" id="nt-wx-api" onchange="ntWxApiUI()">
+        <option value="iyuu">接口：爱语飞飞 iyuu.cn</option>
+        <option value="serverchan">接口：Server酱 sctapi.ftqq.com</option>
+      </select>
+      <input class="ninput" id="nt-wx-token" type="password" placeholder="爱语飞飞 Token (IYUU 开头，已保存则留空表示不修改)">
+      <div class="hint" id="nt-wx-hint">微信提醒只发送文字信息（时间 / 位置 / 原因），不含封面与视频。Token 在对应网站注册后获取，免费额度有限。</div>
+    </div>
     <div class="updbtns">
       <button class="mini primary" onclick="ntSave()">保存设置</button>
       <button class="mini" onclick="ntTest()">发送测试</button>
@@ -3193,7 +3224,8 @@ body.settings-open { overflow:hidden; }
   <div id="tab-update" style="display:none">
     <div class="updrow" style="flex-wrap:wrap;gap:8px;align-items:center">
       <span class="updk">更新源</span>
-      <select class="ninput" id="upd-repo" style="flex:1 1 180px;min-width:0" onchange="otaReloadBranches()"></select>
+      <select class="ninput" id="upd-repo" style="flex:1 1 180px;min-width:0" onchange="otaRepoUI()"></select>
+      <input class="ninput" id="upd-custom" placeholder="自定义仓库 owner/repo 或 https://github.com/owner/repo" style="display:none;flex:1 1 220px;min-width:0" spellcheck="false" autocapitalize="none">
       <select class="ninput" id="upd-branch" style="flex:0 0 110px;min-width:0"></select>
       <button class="mini" onclick="otaSaveTarget()">切换</button>
     </div>
@@ -3762,7 +3794,7 @@ function renderFilters(cat) {
   const rbox = document.getElementById('filters'), dbox = document.getElementById('dfilters');
   // 只有动态生成的筛选项才可能因录像变动而消失。
   if (cat !== 'SentryClips' && reasonFilter !== 'all' && !evs.some(ev => matchReason(cat, ev))) reasonFilter = 'all';
-  const byDate = dateFilter === 'all' ? evs : evs.filter(ev => dateOf(ev) === dateFilter);
+  const byDate = evs.filter(ev => dateMatch(dateOf(ev)));
   const byReason = reasonFilter === 'all' ? evs : evs.filter(ev => matchReason(cat, ev));
 
   if (cat === 'SentryClips') {
@@ -3783,29 +3815,69 @@ function renderFilters(cat) {
 
   const dcnt = {};
   byReason.forEach(ev => { const d = dateOf(ev); if (d) dcnt[d] = (dcnt[d] || 0) + 1; });
-  if (dateFilter !== 'all' && !/^\d{4}-\d{2}-\d{2}$/.test(dateFilter)) dateFilter = 'all';
+  if (dateFilter !== 'all' && dateFilter !== 'range' && !/^\d{4}-\d{2}-\d{2}$/.test(dateFilter)) dateFilter = 'all';
   const alldays = [...new Set(evs.map(dateOf).filter(Boolean))].sort().reverse();
-  let days = alldays.filter(d => dcnt[d] > 0 || d === dateFilter);
+  let days = alldays.filter(d => dcnt[d] > 0 || dateMatch(d));
   // 自选日期可能当天没有事件, 仍然把选中的那天显示出来, 方便点回「全部日期」
-  if (dateFilter !== 'all' && !days.includes(dateFilter)) days = [dateFilter].concat(days);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateFilter) && !days.includes(dateFilter)) days = [dateFilter].concat(days);
   if (!alldays.length && dateFilter === 'all') { dbox.className = 'filters'; dbox.innerHTML = ''; return; }
   const items = [['all', t('全部日期'), byReason.length]].concat(
-    days.map(d => [d, d.replaceAll('-', '/'), dcnt[d] || 0]), [['pick', t('选择日期…'), null]]);
+    days.map(d => [d, d.replaceAll('-', '/'), dcnt[d] || 0]));
+  if (dateFilter === 'range') {
+    items.push(['range', dateRangeLabel(), byReason.filter(ev => dateMatch(dateOf(ev))).length]);
+  }
+  items.push(['pick', t('选择日期…'), null]);
   filterSelect(dbox, t('日期'), items, dateFilter, value => {
-    if (value === 'pick') { dbox.querySelector('select').value = dateFilter; pickDate(); }
+    if (value === 'pick' || value === 'range') { dbox.querySelector('select').value = dateFilter; pickDate(); }
     else setDate(value);
   });
 }
-/* 原生日期选择器: 分类里只有一天时也能翻到别的日期 */
+/* 日期筛选: 全部 / 单日 / 自选时间段 */
+let dateRange = { from: '', to: '' };
+function dateMatch(d) {
+  if (dateFilter === 'all') return true;
+  if (!d) return false;
+  if (dateFilter === 'range') {
+    return (!dateRange.from || d >= dateRange.from) && (!dateRange.to || d <= dateRange.to);
+  }
+  return d === dateFilter;
+}
+function dateRangeLabel() {
+  const fmt = x => x.replaceAll('-', '/');
+  if (dateRange.from && dateRange.to) {
+    return dateRange.from === dateRange.to ? fmt(dateRange.from) : fmt(dateRange.from) + ' – ' + fmt(dateRange.to);
+  }
+  return dateRange.from ? fmt(dateRange.from) + ' 起' : (dateRange.to ? '截止 ' + fmt(dateRange.to) : t('时间段'));
+}
 function pickDate() {
-  const inp = document.getElementById('dpick');
-  if (!inp) return;
-  const t = new Date();
-  inp.max = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' +
-    String(t.getDate()).padStart(2, '0');
-  inp.value = dateFilter !== 'all' ? dateFilter : '';
-  try { if (inp.showPicker) { inp.showPicker(); return; } } catch (e) {}
-  inp.click();
+  const f = document.getElementById('dpick-from'), to = document.getElementById('dpick-to');
+  const d = new Date();
+  const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  f.max = today; to.max = today;
+  let from = dateRange.from, end = dateRange.to;
+  if (!from && !end && /^\d{4}-\d{2}-\d{2}$/.test(dateFilter)) { from = end = dateFilter; }
+  f.value = from || ''; to.value = end || '';
+  document.getElementById('dpick-pop').hidden = false;
+  try { (from ? to : f).focus(); } catch (e) {}
+}
+function closeDatePick() {
+  const box = document.getElementById('dpick-pop');
+  if (box) box.hidden = true;
+}
+function applyDateRange() {
+  let a = document.getElementById('dpick-from').value;
+  let b = document.getElementById('dpick-to').value;
+  if (!a && !b) { toast('请至少选择开始或结束日期'); return; }
+  if (a && b && a > b) { const x = a; a = b; b = x; }
+  dateRange = { from: a, to: b };
+  dateFilter = 'range';
+  closeDatePick();
+  render(currentCat);
+}
+function resetFilters() {
+  reasonFilter = 'all'; dateFilter = 'all'; dateRange = { from: '', to: '' };
+  closeDatePick();
+  render(currentCat);
 }
 function setReason(k) {
   reasonFilter = k;
@@ -3843,7 +3915,7 @@ function render(cat) {
   renderFilters(cat);
   let evs = data[cat] || [];
   evs = evs.filter(ev => matchReason(cat, ev));
-  if (dateFilter !== 'all') evs = evs.filter(ev => dateOf(ev) === dateFilter);
+  if (dateFilter !== 'all') evs = evs.filter(ev => dateMatch(dateOf(ev)));
   document.getElementById('library-title').textContent = t(CATS_NAME[cat] || cat);
   document.getElementById('library-count').textContent = evs.length + ' ' + t('条');
   const liveBtn = document.getElementById('live-btn');
@@ -4057,7 +4129,7 @@ function showLibrary(ev) {
   const box = byId('watch-items');
   box.replaceChildren();
   const source = data[libraryCat] || [];
-  const items = source.filter(e => liveMode || (matchReason(libraryCat, e) && (dateFilter === 'all' || dateOf(e) === dateFilter)));
+  const items = source.filter(e => liveMode || (matchReason(libraryCat, e) && dateMatch(dateOf(e))));
   byId('watch-list-title').textContent = t(CATS_NAME[libraryCat] || libraryCat);
   for (const item of items) {
     const button = document.createElement('button');
@@ -6008,7 +6080,6 @@ function doLogout() {
 function stab(which) {
   storageHelpClose();
   document.getElementById('panel').classList.add('settings-detail');
-  document.getElementById('st-archive').classList.remove('active');
   ['files', 'storage', 'audio', 'wraps', 'play', 'notify', 'auth', 'lang', 'skin', 'brand', 'update'].forEach(k => {
     const b = document.getElementById('st-' + k), t = document.getElementById('tab-' + k);
     if (b) b.classList.toggle('active', k === which);
@@ -6461,6 +6532,21 @@ function ntSetEye(hide) {
   if (tip) tip.textContent = ntHidden ? '敏感信息已隐藏（截图安全）' : '敏感信息已明文显示，注意别外发';
 }
 function ntToggleEye() { ntSetEye(!ntHidden); }
+function ntChannelUI() {
+  const ch = document.getElementById('nt-channel').value;
+  document.getElementById('nt-fs').style.display = ch === 'feishu' ? '' : 'none';
+  document.getElementById('nt-wx').style.display = ch === 'wechat' ? '' : 'none';
+}
+function ntWxApiUI() {
+  const api = document.getElementById('nt-wx-api').value;
+  const inp = document.getElementById('nt-wx-token');
+  inp.placeholder = api === 'serverchan'
+    ? 'Server酱 SendKey (SCT 开头，已保存则留空表示不修改)'
+    : '爱语飞飞 Token (IYUU 开头，已保存则留空表示不修改)';
+  document.getElementById('nt-wx-hint').textContent = api === 'serverchan'
+    ? 'Server酱在 sct.ftqq.com 注册后获取 SendKey。微信提醒只发送文字信息（时间 / 位置 / 原因），不含封面与视频。'
+    : '爱语飞飞在 iyuu.cn 注册后获取 Token。微信提醒只发送文字信息（时间 / 位置 / 原因），不含封面与视频，免费额度有限。';
+}
 
 async function ntLoad() {
   try {
@@ -6480,10 +6566,11 @@ async function ntLoad() {
     document.getElementById('nt-secret').dataset.has = j.has_secret ? '1' : '0';
     document.getElementById('nt-url').value = j.public_url || '';
     document.getElementById('nt-delay').value = j.delay || 20;
-    document.getElementById('nt-wx-en').checked = !!j.wx_enabled;
+    document.getElementById('nt-channel').value = j.channel || 'feishu';
     document.getElementById('nt-wx-api').value = j.wx_api || 'iyuu';
     document.getElementById('nt-wx-token').value = '';
     document.getElementById('nt-wx-token').dataset.has = j.has_wx_token ? '1' : '0';
+    ntChannelUI(); ntWxApiUI();
     ntSetEye(ntHidden);
     const m = document.getElementById('nt-msg');
     if (j.last && j.last.msg) {
@@ -6508,7 +6595,7 @@ async function ntSave() {
     app_secret: document.getElementById('nt-secret').value.trim(),
     public_url: ntReal('nt-url'),
     delay: +document.getElementById('nt-delay').value || 20,
-    wx_enabled: document.getElementById('nt-wx-en').checked,
+    channel: document.getElementById('nt-channel').value,
     wx_api: document.getElementById('nt-wx-api').value,
     wx_token: document.getElementById('nt-wx-token').value.trim(),
   };
@@ -6516,8 +6603,10 @@ async function ntSave() {
     const secSaved = document.getElementById('nt-secret').dataset.has === '1';
     const wxSaved = document.getElementById('nt-wx-token').dataset.has === '1';
     const hasApp = body.app_id && (body.app_secret || secSaved);
-    const hasWx = body.wx_enabled && (body.wx_token || wxSaved);
-    if (!hasWx) {
+    const hasWx = body.wx_token || wxSaved;
+    if (body.channel === 'wechat') {
+      if (!hasWx) { toast('请先填写微信接口 Token'); return; }
+    } else {
       if (body.mode === 'dm' && (!hasApp || !body.receive_id)) { toast('私聊需要 App ID / Secret + 接收人，或改用微信提醒'); return; }
       if (body.mode === 'group' && !body.webhook) { toast('请先填群机器人 webhook，或改用微信提醒'); return; }
     }
@@ -6533,7 +6622,7 @@ async function ntSave() {
 }
 async function ntTest() {
   const m = document.getElementById('nt-msg');
-  m.textContent = t('正在发送测试卡片…'); m.style.color = '';
+  m.textContent = t('正在发送测试推送…'); m.style.color = '';
   try {
     const j = await (await fetch('/api/notify/test', { method: 'POST' })).json();
     m.textContent = (j.ok ? '✅ ' : '❌ ') + j.msg;
@@ -6611,12 +6700,30 @@ async function otaLoadTarget() {
   try {
     const j = await (await fetch('/api/ota/target', { cache: 'no-store' })).json();
     const r = document.getElementById('upd-repo');
-    if (!r.options.length) {
-      r.innerHTML = (j.repos || []).map(x => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join('');
-    }
+    const repos = (j.repos || []).slice();
+    if (j.repo && repos.indexOf(j.repo) < 0) repos.push(j.repo);
+    r.innerHTML = repos.map(x => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join('')
+      + '<option value="__custom__">自定义源…</option>';
     r.value = j.repo || r.value;
+    document.getElementById('upd-custom').value = '';
+    document.getElementById('upd-custom').style.display = 'none';
     otaFillBranches(j.branches, j.branch);
   } catch (e) {}
+}
+function otaRepoUI() {
+  const sel = document.getElementById('upd-repo');
+  const inp = document.getElementById('upd-custom');
+  const custom = sel.value === '__custom__';
+  inp.style.display = custom ? '' : 'none';
+  if (custom) { inp.focus(); return; }
+  inp.value = '';
+  otaReloadBranches();
+}
+function otaRepoValue() {
+  const sel = document.getElementById('upd-repo');
+  return (sel.value === '__custom__'
+    ? document.getElementById('upd-custom').value
+    : sel.value).trim();
 }
 function otaFillBranches(list, cur) {
   const b = document.getElementById('upd-branch');
@@ -6627,16 +6734,17 @@ function otaFillBranches(list, cur) {
 }
 async function otaReloadBranches() {
   const repo = document.getElementById('upd-repo').value;
+  if (repo === '__custom__') return;
   try {
     const j = await (await fetch('/api/ota/target?repo=' + encodeURIComponent(repo), { cache: 'no-store' })).json();
     otaFillBranches(j.branches, document.getElementById('upd-branch').value);
   } catch (e) {}
 }
 async function otaSaveTarget() {
-  const repo = document.getElementById('upd-repo').value;
+  const repo = otaRepoValue();
   const branch = document.getElementById('upd-branch').value;
   const msg = document.getElementById('upd-msg');
-  if (!repo || !branch) { toast('请选择仓库和分支'); return; }
+  if (!repo || !branch) { toast('请选择或填写仓库和分支'); return; }
   msg.textContent = t('切换更新源…');
   try {
     const j = await (await fetch('/api/ota/target', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -7187,9 +7295,8 @@ document.getElementById('wraps-file').onchange = async function () {
 };
 function switchArea(a) {
   area = a;
-  document.getElementById('st-files').classList.toggle('active', a === 'usb');
-  document.getElementById('st-archive').classList.toggle('active', a === 'archive');
-  document.getElementById('settings-title').textContent = document.getElementById(a === 'usb' ? 'st-files' : 'st-archive').textContent;
+  document.getElementById('st-files').classList.add('active');
+  document.getElementById('settings-title').textContent = '文件管理';
   document.getElementById('area-usb').classList.toggle('active', a === 'usb');
   document.getElementById('area-archive').classList.toggle('active', a === 'archive');
   document.getElementById('usb-hint').style.display = a === 'usb' ? '' : 'none';
@@ -10361,7 +10468,7 @@ _NC_DEFAULT = {
     "enabled": False, "mode": "dm", "webhook": "", "app_id": "", "app_secret": "",
     "receive_id": "", "receive_id_type": "", "public_url": "", "saved": False, "delay": 20,
     "media": "thumb", "quality": "480p", "vdur": 30,
-    "wx_enabled": False, "wx_api": "iyuu", "wx_token": "",
+    "channel": "feishu", "wx_enabled": False, "wx_api": "iyuu", "wx_token": "",
 }
 _TOK = {"v": "", "exp": 0}
 CAM_NUM = {0: "前视", 3: "左B柱", 4: "右B柱", 5: "左翼子板", 6: "右翼子板", 7: "后视"}
@@ -10388,6 +10495,9 @@ def notify_conf():
             j = json.load(f)
         if isinstance(j, dict):
             c.update(j)
+            # 旧配置没有 channel: 开过微信提醒就沿用微信, 否则飞书
+            if "channel" not in j and j.get("wx_enabled"):
+                c["channel"] = "wechat"
     except Exception:
         pass
     return c
@@ -11359,13 +11469,22 @@ def _event_text(cat, name, test=False):
 
 
 def _wx_send(conf, text):
-    """微信提醒: 爱语飞飞 (iyuu.cn) 接口"""
+    """微信提醒: 爱语飞飞 (iyuu.cn) / Server酱 (sctapi.ftqq.com)"""
     tok = str(conf.get("wx_token") or "").strip()
+    api = str(conf.get("wx_api") or "iyuu")
+    name = "Server酱" if api == "serverchan" else "爱语飞飞"
     if not tok:
-        return False, "未配置爱语飞飞 Token"
-    if str(conf.get("wx_api") or "iyuu") != "iyuu":
+        return False, "未配置%s Token" % name
+    if api == "iyuu":
+        url = "https://iyuu.cn/%s.send?text=%s" % (urllib.parse.quote(tok, safe=""), urllib.parse.quote(text))
+    elif api == "serverchan":
+        lines = text.split("\n")
+        title = (lines[0] or "哨兵提醒")[:32]
+        desp = "\n".join(lines[1:]) or text
+        url = "https://sctapi.ftqq.com/%s.send?title=%s&desp=%s" % (
+            urllib.parse.quote(tok, safe=""), urllib.parse.quote(title), urllib.parse.quote(desp))
+    else:
         return False, "暂不支持该微信接口"
-    url = "https://iyuu.cn/%s.send?text=%s" % (urllib.parse.quote(tok, safe=""), urllib.parse.quote(text))
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "tesla-sentry-f50"})
         with urllib.request.urlopen(req, timeout=20, context=_tls12()) as r:
@@ -11377,7 +11496,7 @@ def _wx_send(conf, text):
         code = j.get("errcode", j.get("code", 0))
         if code in (0, 200, None):
             return True, "微信提醒已发送"
-        return False, "微信提醒失败: %s" % (j.get("errmsg") or raw[:120])
+        return False, "微信提醒失败: %s" % (j.get("errmsg") or j.get("message") or raw[:120])
     except Exception as ex:
         return False, "微信提醒失败: %s" % str(ex)[:120]
 
@@ -11435,21 +11554,27 @@ def _feishu_push(cat, name, test=False):
     return True, "已推送到飞书群" + warn
 
 
+def _notify_channel(conf):
+    return "wechat" if str(conf.get("channel") or "feishu") == "wechat" else "feishu"
+
+
+def _notify_ready(conf):
+    """当前选择的推送方式是否已配置完整"""
+    if _notify_channel(conf) == "wechat":
+        return _wx_ready(conf)
+    return _dm_ready(conf) or bool(str(conf.get("webhook") or "").strip())
+
+
 def notify_push(cat, name, test=False):
-    """按配置推送: 飞书 + 微信提醒(爱语飞飞); 任一渠道成功即算成功"""
+    """按选择的推送方式推送: 飞书提醒 或 微信提醒"""
     conf = notify_conf()
-    has_fs = _dm_ready(conf) or bool(str(conf.get("webhook") or "").strip())
-    has_wx = _wx_ready(conf)
-    if not (has_fs or has_wx):
-        return False, "未配置: 需要飞书 App ID/Secret + 接收人, 或群机器人 webhook, 或微信提醒 Token"
-    fs_ok, fs_msg = (False, "")
-    if has_fs:
-        fs_ok, fs_msg = _feishu_push(cat, name, test)
-    wx_ok, wx_msg = (False, "")
-    if has_wx:
-        wx_ok, wx_msg = _wx_send(conf, _event_text(cat, name, test))
-    parts = [m for m in (fs_msg, wx_msg) if m]
-    return bool(fs_ok or wx_ok), " · ".join(parts)
+    if _notify_channel(conf) == "wechat":
+        if not _wx_ready(conf):
+            return False, "未配置微信提醒: 请在「推送」里选择接口并填写 Token"
+        return _wx_send(conf, _event_text(cat, name, test))
+    if not (_dm_ready(conf) or str(conf.get("webhook") or "").strip()):
+        return False, "未配置飞书提醒: 需要 App ID/Secret + 接收人, 或群机器人 webhook"
+    return _feishu_push(cat, name, test)
 
 
 def _ev_ts(name):
@@ -11461,9 +11586,9 @@ def _ev_ts(name):
 
 
 def notify_scan():
-    """扫一遍归档, 把新出现的哨兵事件推给飞书; 返回本轮推送条数"""
+    """扫一遍归档, 把新出现的哨兵事件推送给已选渠道; 返回本轮推送条数"""
     conf = notify_conf()
-    if not conf.get("enabled") or not (_dm_ready(conf) or str(conf.get("webhook") or "").strip() or _wx_ready(conf)):
+    if not conf.get("enabled") or not _notify_ready(conf):
         return 0
     st = _nstate_load()
     seen = st.setdefault("seen", {})
@@ -11558,6 +11683,7 @@ def notify_status():
         "media": conf.get("media") or "thumb",
         "quality": conf.get("quality") or "480p",
         "vdur": int(conf.get("vdur") or 30),
+        "channel": _notify_channel(conf),
         "wx_enabled": bool(conf.get("wx_enabled")),
         "wx_api": conf.get("wx_api") or "iyuu",
         "has_wx_token": bool(str(conf.get("wx_token") or "").strip()),
@@ -14678,11 +14804,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "msg": "参数错误"}, 400)
                 return
             patch = {}
-            for k in ("enabled", "saved", "wx_enabled"):
+            for k in ("enabled", "saved"):
                 if k in body:
                     patch[k] = bool(body.get(k))
             for k in ("mode", "media", "quality", "webhook", "app_id", "receive_id",
-                      "receive_id_type", "public_url", "wx_api"):
+                      "receive_id_type", "public_url", "wx_api", "channel"):
                 if k in body:
                     patch[k] = str(body.get(k) or "").strip()
             if str(body.get("wx_token") or "").strip():
@@ -14703,15 +14829,23 @@ class Handler(BaseHTTPRequestHandler):
                 patch.pop("quality", None)
             if str(patch.get("media") or "") not in ("thumb", "video"):
                 patch.pop("media", None)
+            if str(patch.get("channel") or "") not in ("feishu", "wechat"):
+                patch.pop("channel", None)
+            if str(patch.get("wx_api") or "") not in ("iyuu", "serverchan"):
+                patch.pop("wx_api", None)
+            if patch.get("channel") == "wechat":
+                patch["wx_enabled"] = True
+            elif patch.get("channel") == "feishu":
+                patch["wx_enabled"] = False
             conf = notify_save(patch)
-            if _dm_ready(conf):
+            if _notify_channel(conf) == "wechat":
+                warn = "" if _wx_ready(conf) else "微信提醒还没就绪: 请选择接口并填写 Token"
+            elif _dm_ready(conf):
                 warn = "" if (conf.get("public_url") or "").strip() else "私聊已可用; 填「查看链接前缀」后卡片上会有查看按钮"
             elif str(conf.get("webhook") or "").strip():
                 warn = "私聊未就绪 (需 App ID/Secret + 接收人), 当前会推到群里"
-            elif _wx_ready(conf):
-                warn = "飞书未配置, 当前只发微信提醒 (爱语飞飞)"
             else:
-                warn = "还没配接收人: 私聊需要 App ID/Secret + 接收人, 或填群机器人 webhook, 或开启微信提醒"
+                warn = "还没配接收人: 私聊需要 App ID/Secret + 接收人, 或填群机器人 webhook, 或改用微信提醒"
             self._json({"ok": True, "msg": "已保存", "status": notify_status(), "warn": warn})
             return
         if path == "/api/notify/test":
