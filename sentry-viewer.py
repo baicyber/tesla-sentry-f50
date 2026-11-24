@@ -476,7 +476,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.002"
+APP_VERSION = "2026.11.25.003"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1226,7 +1226,7 @@ def ota_apply(force=False):
                        for b, d in res})
         return False, "版本校验失败 (文件 %s / 清单 %s)；下载源仍在缓存旧文件或文件不完整，已自动重试一次，请稍后重试或在「更新源」里换一个源" \
                       % ("、".join(seen) or "?", latest)
-    data, base = picked   # 已通过 _viewer_blob_ok 校验(大小/特征串/可编译)
+    base, data = picked   # collect=True 返回 (下载源, 文件字节); 文件已通过 _viewer_blob_ok 校验
     # 2) 下载依赖模块: 少一个都不装 (先装主程序后补模块, 只会得到一个起不来的服务)
     names = _ota_need_modules(j, data)
     mods = []
