@@ -254,7 +254,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.45"
+APP_VERSION = "2.8.46"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -8632,6 +8632,7 @@ def _pick_clip(cat, name):
     except Exception:
         ts = None
     if ts is not None:
+        cands = []
         for f in files:                       # 文件名前 19 位是片段开始时间, 与 timestamp 同一时基
             try:
                 s = datetime.datetime.strptime(f[:19], "%Y-%m-%d_%H-%M-%S")
@@ -8639,7 +8640,13 @@ def _pick_clip(cat, name):
                 continue
             off = (ts - s).total_seconds()
             if 0 <= off <= 70 and f.rsplit("-", 1)[-1][:-4] == cam_key:
-                return os.path.join(d, f), max(0.0, min(off, 60.0)), meta
+                cands.append((off, f))
+        if cands:
+            # 新车型一个事件里同一路会切成多段, 文件名时间就是各段起点。必须取离触发点
+            # 最近(起点最晚、off 最小)的那一段: 排序后取第一段会把 off 算成整段前置时长,
+            # 推送就从触发前几十秒开始, 而不是约定的「触发前 5 秒」。
+            off, f = min(cands, key=lambda x: x[0])
+            return os.path.join(d, f), max(0.0, min(off, 60.0)), meta
     front = [f for f in files if f.endswith("-front.mp4")]
     return os.path.join(d, front[0] if front else files[0]), 1.0, meta
 
@@ -9427,7 +9434,13 @@ def _feishu_card(conf, cat, name, img_key=None, test=False):
     except Exception:
         pass
     loc = " ".join(x for x in (meta.get("city") or "", meta.get("street") or "") if x).strip() or "位置未知"
-    nclip = len(_ev_files(d))
+    # 卡片写的是「几路画面」, 不是「几个文件」。新车型一个事件里同一路会切成多段,
+    # 直接数 mp4 会把 6 路 44 段显示成「44 路画面」。按文件名末尾的镜头后缀去重。
+    cams_seen = set()
+    for f in _ev_files(d):
+        stem = f[:-4]
+        cams_seen.add((stem.rsplit("-", 1)[-1] if "-" in stem else stem).lower())
+    nclip = len(cams_seen)
     title = ("🧪 [测试] " if test else "🚨 ") + cat_name + (" · " + cam if cam else "")
     fields = [("时间", when), ("位置", loc), ("触发原因", detail)]
     if cam:
