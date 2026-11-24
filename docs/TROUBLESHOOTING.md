@@ -80,11 +80,11 @@ cron 是否在跑：`ps | grep cron`、`cat /etc/crontabs/root`。
 
 ## 合成导出报「设备上未安装 ffmpeg」
 
-F50 是 aarch64 / OpenWrt（musl），请直接用系统包安装，不要再用 arm64 静态包：
+F50 是 aarch64 / OpenWrt（musl），请直接用系统包安装，不要再用 aarch64 静态包：
 
 ```sh
 apk add ffmpeg
-./install-f50.sh --apply --install-deps --ffmpeg /usr/bin/ffmpeg
+./install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg
 ```
 
 配置里的 `TSF_FFMPEG` / `TSF_FFPROBE` 应分别指向 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`。

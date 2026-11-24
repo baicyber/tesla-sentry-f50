@@ -209,7 +209,7 @@ CONF_FILE = os.environ.get("TSF_CONF", "/etc/tesla-sentry.conf")
 # 启动时根据 env 自动派生:
 #   - 优先用 TSF_VIDEO_ROOT (新单键);
 #   - 否则从旧键 TSF_IMG / TSF_ARCHIVE 反推;
-#   - 没有任何配置时回退 /mnt/mmc (F50 TF 卡) 或 /archive (通用).
+#   - 没有任何配置时回退 /mnt/sdcard (F50 TF 卡) 或 /archive (通用).
 VIDEO_ROOT = os.environ.get("TSF_VIDEO_ROOT", "").strip()
 if not VIDEO_ROOT:
     _img_env = os.environ.get("TSF_IMG", "").strip()
@@ -223,7 +223,7 @@ if not VIDEO_ROOT:
         VIDEO_ROOT = os.path.normpath(os.path.join(_arch_env, os.pardir))
 # F50 默认 TF 卡挂载点, 其次通用 /archive
 if not VIDEO_ROOT:
-    VIDEO_ROOT = "/mnt/mmc" if os.path.isdir("/mnt/mmc") else "/archive"
+    VIDEO_ROOT = "/mnt/sdcard" if os.path.isdir("/mnt/sdcard") else "/archive"
 os.environ.setdefault("TSF_VIDEO_ROOT", VIDEO_ROOT)
 os.environ.setdefault("TSF_IMG", os.path.join(VIDEO_ROOT, "img", "teslacam.img"))
 os.environ.setdefault("TSF_ARCHIVE", os.path.join(VIDEO_ROOT, "archive"))
@@ -2522,7 +2522,7 @@ body.settings-open { overflow:hidden; }
 </defs></svg>
 <header class="app-header"><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">哨兵一剪梅</span></h1><span class="sub" id="stat"></span>
 <div class="system-status" aria-label="系统状态"><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
-<div class="ffwarn" id="ffwarn" role="status" hidden><b>FFmpeg 未配置</b><span>列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。F50 请执行 <code>apk add ffmpeg</code>，然后运行 <code>install-f50.sh --apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。</span></div>
+<div class="ffwarn" id="ffwarn" role="status" hidden><b>FFmpeg 未配置</b><span>列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。F50 请执行 <code>apk add ffmpeg</code>，然后运行 <code>install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。</span></div>
 <nav class="tabs" id="tabs" aria-label="录像分类"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button><button id="gear" title="设置" aria-expanded="false" aria-controls="panel"><svg class="ic"><use href="#i-gear"/></svg><span>设置</span></button></header>
 <main class="library-page">
 <nav class="storwrap status-only" id="storwrap">
@@ -2704,7 +2704,7 @@ body.settings-open { overflow:hidden; }
     </section>
     <section class="storage-quota" id="storage-paths">
       <h3>存储路径</h3>
-      <div class="hint">程序本体在 /opt/tesla-sentry。视频存储建议放在 TF 卡（F50 默认 /dev/mmcblk1p1，挂载 /mnt/mmc）。目录结构固定为「根目录/img/teslacam.img」和「根目录/archive/transcode_cache」。修改后需重启服务生效，现有录像不会自动迁移。</div>
+      <div class="hint">程序本体在 /opt/tesla-sentry。视频存储建议放在 TF 卡（F50 默认 /dev/mmcblk1p1，挂载 /mnt/sdcard）。目录结构固定为「根目录/img/teslacam.img」和「根目录/archive/transcode_cache」。修改后需重启服务生效，现有录像不会自动迁移。</div>
       <div class="storage-row"><label for="storage-path-root">视频存储根目录</label><input class="ninput" id="storage-path-root" type="text" spellcheck="false" style="min-width:320px"><span class="retention-unit">绝对路径</span></div>
       <div class="storage-row"><label>车机 U 盘镜像</label><input class="ninput" id="storage-path-img" type="text" disabled style="min-width:360px"></div>
       <div class="storage-row"><label>归档区目录</label><input class="ninput" id="storage-path-archive" type="text" disabled style="min-width:360px"></div>
@@ -8200,7 +8200,7 @@ def active_skin():
 
 # ---------------- 多路合成导出 (ffmpeg) ----------------
 # F50 是 aarch64/OpenWrt，推荐 `apk add ffmpeg` 安装到 /usr/bin；
-# 不再优先使用来源不明的 arm64 静态包。
+# 不再优先使用来源不明的 aarch64 静态包。
 FFMPEG_BIN = os.environ.get("TSF_FFMPEG") or (
     "/usr/bin/ffmpeg" if os.path.exists("/usr/bin/ffmpeg") else "ffmpeg")
 FFPROBE_BIN = os.environ.get("TSF_FFPROBE") or (
@@ -8233,7 +8233,7 @@ APP_HOME = os.path.dirname(os.path.realpath(__file__))
 # TSF_CACHE 仍可覆盖程序缓存根; 旧版自动选择的 /opt/mu300 或数据卡 cache
 # 视为历史默认值, 升级后自动迁到安装目录, 避免继续占用数据卡。
 CACHE_ROOT = os.environ.get("TSF_CACHE") or os.path.join(APP_HOME, "cache")
-if CACHE_ROOT in ("/opt/mu300", os.path.join(os.environ.get("TSF_CARD_MNT", "/mnt/mmc"),
+if CACHE_ROOT in ("/opt/mu300", os.path.join(os.environ.get("TSF_CARD_MNT", "/mnt/sdcard"),
                                              "tesla-sentry", "cache")):
     CACHE_ROOT = os.path.join(APP_HOME, "cache")
 STITCH_DIR = CACHE_ROOT + "/stitch-tmp"  # 不用 /tmp: tmpfs 占内存, 大视频会挤爆 RAM
@@ -8394,7 +8394,7 @@ def transcode_info(fp, qv):
 def transcode_hint(error):
     text = (error or "").lower()
     if "libx264" in text or "unknown encoder" in text:
-        return "设备 FFmpeg 缺少 H.264 编码器：请执行 apk add ffmpeg，再运行 install-f50.sh --apply --install-deps --ffmpeg /usr/bin/ffmpeg"
+        return "设备 FFmpeg 缺少 H.264 编码器：请执行 apk add ffmpeg，再运行 install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg"
     if "no such file" in text or "not found" in text:
         return "找不到 FFmpeg：请确认 /usr/bin/ffmpeg 存在，并检查配置里的 TSF_FFMPEG"
     if "invalid data" in text or "moov atom not found" in text:
@@ -13939,7 +13939,7 @@ if __name__ == "__main__":
     print("auth: %s (%s)" % ("ON, user=" + AUTH_USER if AUTH_ON else "OFF - 公网可直接访问!", AUTH_FILE))
     if not ffmpeg_ready(refresh=True):
         print("WARN: ffmpeg/ffprobe 不可用 (%s / %s): 缩略图与清晰度转码会失效, "
-              "请重跑 install-f50.sh --apply（或 --install-deps）配置 FFmpeg" % (FFMPEG_BIN, FFPROBE_BIN), flush=True)
+              "请重跑 install.sh f50 --apply（或 --install-deps）配置 FFmpeg" % (FFMPEG_BIN, FFPROBE_BIN), flush=True)
     # 升级自愈: 上一版装完没确认就崩掉的话, 这里退回备份并重启。
     # 放在绑定端口成功之后 —— 只有真的成为主实例才计数, 免得 procd 重启期间新旧实例
     # 短暂重叠把计数冲高, 把好版本误判成坏版本。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a versioned offline tarball from a clean checkout and audited ARM64 runtime."""
+"""Build a versioned offline tarball from a clean checkout and audited aarch64 runtime."""
 import argparse
 import hashlib
 import io

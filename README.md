@@ -77,7 +77,7 @@ sudo ./install.sh --size 120 --port 8080 --archive /archive    # 自定义参数
 
 安装会：检查内核 gadget / exFAT / Python → 建稀疏镜像并**预置 exFAT + `TeslaCam` 目录** → 装到 `/opt/tesla-sentry/`、写 `/etc/tesla-sentry.conf` → 注册 `tesla-gadget` / `tesla-viewer` / `tesla-live` 三个服务（OpenWrt procd、systemd 或 rc.local）与两条 cron → 生成随机登录密码 → 启动并打印状态。ffmpeg、字体、部分内核项缺失只警告不中止。
 
-> ARM64 OpenWrt 全新设备另有专用入口 `install-f50.sh`（默认只做环境检查，加 `--apply` 才真正写入，要求 Python 3.11+），与通用 `install.sh` 二选一，步骤见 [docs/INSTALL-F50.md](docs/INSTALL-F50.md)。
+> aarch64 OpenWrt 全新设备另有专用入口 `./install.sh f50`（默认只做环境检查，加 `--apply` 才真正写入，要求 Python 3.11+），与通用一键安装二选一，步骤见 [docs/INSTALL-F50.md](docs/INSTALL-F50.md)。
 
 **2. 插到车上**：插进手套箱 USB 口 → 车机直接识别、显示容量并开始录制。镜像里已预建 `TeslaCam/{RecentClips,SavedClips,SentryClips,EncryptedClips}`，**不再需要点「格式化 USB 设备」**；若车机仍弹出该提示，点确认也无害，只是把同样的结构重建一遍。
 
@@ -135,7 +135,7 @@ OTA、飞书推送、认证的参数**不写入这个 conf**，走环境变量�
 - **车机不认盘 / 提示格式化**：确认 `/sys/class/udc/` 有控制器、`grep exfat /proc/filesystems` 有输出，再跑 `/opt/tesla-sentry/tesla-gadget.sh status`。新部署已预置 exFAT，正常不会再提示；旧版安装留下的全零空盘重装时会自动补写。若 `--size` 超过 128G（车机同款布局的寻址上限），会退回空白盘由车机格式化一次；想手动补写可执行 `python3 /opt/tesla-sentry/mkexfat.py <镜像路径> <容量GB>`（镜像里有数据时它会拒绝覆盖）。
 - **播放黑屏**：视频是 H.265 / HEVC，Windows 用 Edge / Chrome（需 HEVC 解码器）、iPhone Safari 原生支持，部分安卓浏览器不支持。
 - **网页没有事件**：看 `/opt/tesla-sentry/` 下的 `tesla-live.log`、`tesla-sync.log`；先确认顶部同步状态胶囊在线，再核对归档目录与镜像路径。
-- **缩略图一直不出现 / 点开视频缓冲很久**：先看页面顶部有没有「FFmpeg 未配置」红条，或执行 `grep TSF_FFMPEG /etc/tesla-sentry.conf` 后用该路径跑一次 `-version`。缺少 `ffmpeg`/`ffprobe` 时缩略图会全部 404、清晰度转码会退化成原画（公网链路上就表现为一直缓冲）。修复：F50 上先 `apk add ffmpeg`，再执行 `sh install-f50.sh --apply --install-deps --ffmpeg /usr/bin/ffmpeg`（已安装的设备也会走这条修复路径：补齐依赖 → 写回配置 → 重启服务）。配置里的 `TSF_FFMPEG`/`TSF_FFPROBE` 应指向 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`，不要再用来源不明的 arm64 静态包。
+- **缩略图一直不出现 / 点开视频缓冲很久**：先看页面顶部有没有「FFmpeg 未配置」红条，或执行 `grep TSF_FFMPEG /etc/tesla-sentry.conf` 后用该路径跑一次 `-version`。缺少 `ffmpeg`/`ffprobe` 时缩略图会全部 404、清晰度转码会退化成原画（公网链路上就表现为一直缓冲）。修复：F50 上先 `apk add ffmpeg`，再执行 `sh install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg`（已安装的设备也会走这条修复路径：补齐依赖 → 写回配置 → 重启服务）。配置里的 `TSF_FFMPEG`/`TSF_FFPROBE` 应指向 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`，不要再用来源不明的 aarch64 静态包。
 - **存储分配填 0**：「盒子归档总上限」填 0 = 不设上限（不再按总量清理，只有磁盘空闲低于保护线时才从最旧清起）；行车记录上限仍须 ≥1，且不能超过归档上限。
 - **手动只覆盖主程序**：`sentry-viewer.py` 在顶层使用同目录的 `storage_allocation.py` 与 `storage_resize.py`。2.8.43 起主程序内嵌了两份 gzip 副本，同目录找不到文件时会自动顶上，所以只替换主程序也能正常启动（`--ota-check` 会显示 `modules=embedded`）。网页 OTA 会自动把主程序、本地模块和 `tesla-live-sync.py` 一起下载、一起自检、一起安装，缺文件或模块损坏时**拒绝升级、保留旧版**；手动升级仍建议把相关 `.py` 一起复制，或直接重跑 `install.sh`（方便单独热修模块）。
 

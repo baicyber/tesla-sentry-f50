@@ -1,21 +1,21 @@
 # 全新 F50 安装
 
-本流程安装当前仓库的查看器、录像同步、虚拟 U 盘和开机服务。目标是已能通过 SSH 登录的 ARM64 F50，运行兼容的 OpenWrt/procd 固件。仓库不包含刷机、解锁或内核安装程序；原厂系统尚未具备这些条件时，需先完成固件环境准备。
+本流程安装当前仓库的查看器、录像同步、虚拟 U 盘和开机服务。目标是已能通过 SSH 登录的 aarch64 F50，运行兼容的 OpenWrt/procd 固件。仓库不包含刷机、解锁或内核安装程序；原厂系统尚未具备这些条件时，需先完成固件环境准备。
 
-`install-f50.sh` 默认只检查。指定 `--apply` 才写入文件，`--apply --start` 在安装后启动服务。脚本不分区、不格式化物理存储卡、不替换已有安装、不重启设备。请在**新 F50** 上执行，勿把现役设备地址作为安装目标。
+`./install.sh f50` 默认只检查。指定 `--apply` 才写入文件，`--apply --start` 在安装后启动服务。脚本不分区、不格式化物理存储卡、不替换已有安装、不重启设备。请在**新 F50** 上执行，勿把现役设备地址作为安装目标。
 
 ## 1. 选择离线完整包
 
-维护者可使用 `scripts/build-offline-package.py` 制作 `f50-offline-*.tar.gz`；本 PR 不附带运行环境二进制或已发布的离线包。以下完整包说明适用于含已校验 `runtime/` 的构建：Python 3.13.18、标准库和配套动态库、FFmpeg/FFprobe 7.0.2 ARM64 静态构建、BusyBox、blkid、flock、Noto Sans SC 字体及公共 CA 根证书。安装不下载运行依赖，不执行 pip、apk 或 opkg。
+维护者可使用 `scripts/build-offline-package.py` 制作 `f50-offline-*.tar.gz`；本 PR 不附带运行环境二进制或已发布的离线包。以下完整包说明适用于含已校验 `runtime/` 的构建：Python 3.13.18、标准库和配套动态库、FFmpeg/FFprobe 7.0.2 aarch64 静态构建、BusyBox、blkid、flock、Noto Sans SC 字体及公共 CA 根证书。安装不下载运行依赖，不执行 pip、apk 或 opkg。
 
 把压缩包传到新设备的已挂载数据盘，在新设备 SSH 终端解压：
 
 ```sh
-cd /mnt/mmc
+cd /mnt/sdcard
 tar -xzf f50-offline-<版本及提交号>.tar.gz
 cd tesla-sentry-f50
-sh install-f50.sh --check
-sh install-f50.sh --apply --start
+sh install.sh f50 --check
+sh install.sh f50 --apply --start
 ```
 
 请将文件名替换为实际包名。使用 tar 解包以保留执行权限；不要把包解到容量有限的 `/tmp` 或系统根分区。压缩包旁的 `.sha256` 可用 `sha256sum -c <文件名>.sha256` 校验。包内 `PACKAGE.json` 记录源码提交，`runtime/manifest.json` 记录依赖的大小、权限和 SHA-256，`runtime/licenses/` 保留来源与许可。
@@ -32,7 +32,7 @@ sh install-f50.sh --apply --start
 - OpenWrt 的 `/etc/rc.common`、procd、cron，以及 `blkid`、`flock`、`mount`、`umount`、`readlink`、`setsid`、`losetup`。
 - 内核具备 ext4、exFAT、configfs、loop、USB mass storage；已加载对应模块或编译为内建支持。
 - 固件已经建立一个 USB Gadget 和一个 configuration；存在 USB Device 控制器。脚本保留固件的网卡、串口等功能，只增加 mass storage。多控制器设备须先由固件绑定正确控制器，安装器会记录该控制器。
-- F50 是 aarch64 / OpenWrt，FFmpeg 和 FFprobe 推荐用 `apk add ffmpeg` 安装到 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`（不要用来源不明的 arm64 静态包）。FFmpeg 必须支持 `libx264`、`scale`、`pad`、`fps`、`xstack`、`setsar`、`subtitles`。安装检查会实际编码一帧。
+- F50 是 aarch64 / OpenWrt，FFmpeg 和 FFprobe 推荐用 `apk add ffmpeg` 安装到 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`（不要用来源不明的 aarch64 静态包）。FFmpeg 必须支持 `libx264`、`scale`、`pad`、`fps`、`xstack`、`setsar`、`subtitles`。安装检查会实际编码一帧。
 
 先确认固件使用的包管理器与软件源：
 
@@ -54,27 +54,27 @@ USB Device 是硬件要求，普通 USB Host 接口无法通过安装软件变�
 
 ## 2. 准备数据盘
 
-使用已准备好的 ext4 数据分区，挂载到 `/mnt/mmc`。先查看设备分区、文件系统和实际挂载情况：
+使用已准备好的 ext4 数据分区，挂载到 `/mnt/sdcard`。先查看设备分区、文件系统和实际挂载情况：
 
 ```sh
 blkid
 cat /proc/mounts
-df -h /mnt/mmc /opt
+df -h /mnt/sdcard /opt
 ```
 
 确认新的数据分区后，用它自己的 UUID 挂载。例如将下方占位符替换为 `blkid` 查到的 UUID：
 
 ```sh
-mkdir -p /mnt/mmc
-mount -t ext4 -o noatime "$(blkid -U '<新数据分区UUID>')" /mnt/mmc
+mkdir -p /mnt/sdcard
+mount -t ext4 -o noatime "$(blkid -U '<新数据分区UUID>')" /mnt/sdcard
 ```
 
-尚无 ext4 分区时，先在确认选中空白卡后完成分区和格式化，再回到此步骤。格式化会清空选中分区，安装器不会代为执行。已有其他磁盘挂载在 `/mnt/mmc` 时，先核对挂载目标。
+尚无 ext4 分区时，先在确认选中空白卡后完成分区和格式化，再回到此步骤。格式化会清空选中分区，安装器不会代为执行。已有其他磁盘挂载在 `/mnt/sdcard` 时，先核对挂载目标。
 
 默认预留容量：64 GiB 车载镜像＋34 GiB 归档＋4 GiB 缓存预算＋10 GiB 空闲余量，共需 **112 GiB 可用空间**。缓存预算用于安装容量估算；实际运行仍由缓存清理和空闲空间保护管理。离线完整包的 `/opt` 另需约 280 MiB 空闲空间（运行环境加 128 MiB 余量，检查时按实际大小计算）；源码安装需 128 MiB。小容量卡可降低配额，例如 16＋12＋4＋10＝42 GiB：
 
 ```sh
-sh install-f50.sh --check --size-gb 16 --archive-gb 12 --drive-gb 4
+sh install.sh f50 --check --size-gb 16 --archive-gb 12 --drive-gb 4
 ```
 
 镜像使用稀疏文件，但容量检查按将来写满后的空间计算。行车记录配额包含在总归档配额内。
@@ -98,16 +98,16 @@ git rev-parse HEAD
 以下命令在**新 F50 的 SSH 终端**、源码根目录执行：
 
 ```sh
-sh install-f50.sh --check
-sh install-f50.sh --apply --start
+sh install.sh f50 --check
+sh install.sh f50 --apply --start
 ```
 
 自定义容量、路径或工具时，两次命令应使用相同参数。例如：
 
 ```sh
-sh install-f50.sh --check --size-gb 16 --archive-gb 12 --drive-gb 4 \
+sh install.sh f50 --check --size-gb 16 --archive-gb 12 --drive-gb 4 \
   --ffmpeg /opt/ffmpeg/ffmpeg --ffprobe /opt/ffmpeg/ffprobe
-sh install-f50.sh --apply --start --size-gb 16 --archive-gb 12 --drive-gb 4 \
+sh install.sh f50 --apply --start --size-gb 16 --archive-gb 12 --drive-gb 4 \
   --ffmpeg /opt/ffmpeg/ffmpeg --ffprobe /opt/ffmpeg/ffprobe
 ```
 
@@ -118,14 +118,14 @@ sh install-f50.sh --apply --start --size-gb 16 --archive-gb 12 --drive-gb 4 \
 设备上已经有安装、但依赖后来丢了（固件升级常把旧版 `/opt/mu300` 依赖冲掉），先 `apk add ffmpeg`，再用同一条命令补：
 
 ```sh
-sh install-f50.sh --apply --install-deps
+sh install.sh f50 --apply --install-deps
 ```
 
 `--install-deps` 会先按固件的包管理器（`apk` / `opkg`）尝试安装 FFmpeg，再做完整校验；已安装的设备只更新 `/etc/tesla-sentry.conf` 里的 `TSF_FFMPEG`/`TSF_FFPROBE` 并重启服务，不动录像和其他配置。装不上的原因（例如系统仓库里的精简版没有 `libx264`）会原样报出来。
 
 运行期也有一层兜底：主程序启动时检查两个二进制，缺失会在页面顶部显示「FFmpeg 未配置」红条，`/thumb` 请求返回 503 并带 `X-TSF-Reason: ffmpeg-missing`，不会再静默变成空白缩略图。
 
-其他参数：`--data-mount /mnt/mmc`、`--port 8080`。安装目录固定为 `/opt/tesla-sentry`。检查过程读取设备能力并执行短暂编码探测，不挂载磁盘、不加载内核模块、不修改 USB 或服务。
+其他参数：`--data-mount /mnt/sdcard`、`--port 8080`。安装目录固定为 `/opt/tesla-sentry`。检查过程读取设备能力并执行短暂编码探测，不挂载磁盘、不加载内核模块、不修改 USB 或服务。
 
 安装生成：
 
@@ -133,10 +133,10 @@ sh install-f50.sh --apply --install-deps
 | --- | --- |
 | `/opt/tesla-sentry/` | 程序、脚本、安装记录、网页登录凭据、设置 |
 | `/etc/tesla-sentry.conf` | 本设备 UUID、控制器、路径、配额和端口 |
-| `/mnt/mmc/tesla-sentry/teslacam.img` | 含 TeslaCam 目录的 exFAT 镜像 |
-| `/mnt/mmc/tesla-sentry/archive/` | 哨兵、手动保存、最近一小时和行车记录 |
+| `/mnt/sdcard/tesla-sentry/teslacam.img` | 含 TeslaCam 目录的 exFAT 镜像 |
+| `/mnt/sdcard/tesla-sentry/archive/` | 哨兵、手动保存、最近一小时和行车记录 |
 | `/opt/tesla-sentry/cache/` | 缩略图、转码及遥测缓存（按用途分子目录） |
-| `/mnt/mmc/tesla-sentry/logs/` | 项目脚本日志 |
+| `/mnt/sdcard/tesla-sentry/logs/` | 项目脚本日志 |
 | `/etc/init.d/` | 四个项目服务，仅 `tsf-mount` 注册开关机启动链接 |
 | `/etc/crontabs/root` | 追加项目区块，保留原有任务 |
 
@@ -184,7 +184,7 @@ logread -e tsf-mount
 
 最后在新设备上重启，检查挂载、USB 导出、同步和网页能否恢复。`--start` 的进程与 HTTP 检查不能代替冷启动和真实车机枚举验收。
 
-已有安装测试覆盖隔离文件系统和 ARM64 模拟环境；尚未完成空白 F50 的完整物理设备验收。本次贡献未重新运行测试。包内 `scripts/check-runtime.py` 可在目标 ARM64 设备上验证运行环境。
+尚未完成空白 F50 的完整物理设备验收。包内 `scripts/check-runtime.py` 可在目标 aarch64 设备上验证运行环境。
 
 安装文件发布过程中遇到可捕获的异常，会清理本次新增内容并保留原有任务；启动检查失败时保留已安装文件供排查。断电、进程被强制杀死或文件系统损坏无法保证自动清理，重新运行会拒绝覆盖残留安装。检查 `/tmp/tsf-install.lock` 前先确认没有另一安装进程，勿盲目删除安装目录或数据盘内容。
 

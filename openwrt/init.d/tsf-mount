@@ -1,7 +1,7 @@
 #!/bin/sh /etc/rc.common
 # Mount the F50 data card by filesystem UUID before starting the Tesla apps.
 # The card is a normal MBR/ext4 filesystem; the virtual Tesla disk remains
-# a separate exFAT image inside /mnt/mmc/tesla-sentry.
+# a separate exFAT image inside /mnt/sdcard/tesla-sentry.
 
 START=08
 STOP=99
@@ -10,7 +10,7 @@ set -a
 [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf
 set +a
 UUID=${TSF_CARD_UUID:-}
-MNT=${TSF_CARD_MNT:-/mnt/mmc}
+MNT=${TSF_CARD_MNT:-/mnt/sdcard}
 TSF_DIR=${TSF_DIR:-/opt/tesla-sentry}
 . "$TSF_DIR/tsf-storage.sh" || exit 1
 

@@ -38,8 +38,8 @@ def arguments(argv=None):
     mode.add_argument('--check', action='store_true', help='只检查（默认）')
     mode.add_argument('--apply', action='store_true', help='安装到全新设备')
     parser.add_argument('--start', action='store_true', help='安装成功后启动；仅与 --apply 一起使用')
-    parser.add_argument('--data-mount', default='/mnt/mmc',
-                        help='视频存储（镜像+归档）所在盘的挂载点，建议 TF 卡；F50 默认 /dev/mmcblk1p1 挂载到 /mnt/mmc')
+    parser.add_argument('--data-mount', default='/mnt/sdcard',
+                        help='视频存储（镜像+归档）所在盘的挂载点，建议 TF 卡；F50 默认 /dev/mmcblk1p1 挂载到 /mnt/sdcard')
     parser.add_argument('--size-gb', type=int, default=64)
     parser.add_argument('--archive-gb', type=int, default=34)
     parser.add_argument('--drive-gb', type=int, default=12)
@@ -211,7 +211,7 @@ class Installer:
           - 视频路径四键 (VIDEO_ROOT/IMG/ARCHIVE/TRANSCODE) 优先取新派生值,
             其他参数 (PORT/IDLE/GADGET/FFMPEG 等) 旧 conf 有就继承
         """
-        # F50 推荐 apk add ffmpeg；未显式指定时把配置固定到 /usr/bin，避免再去找旧 arm64 包。
+        # F50 推荐 apk add ffmpeg；未显式指定时把配置固定到 /usr/bin，避免再去找旧 aarch64 包。
         ffmpeg = self.args.ffmpeg or ('/usr/bin/ffmpeg' if self.path('/usr/bin/ffmpeg').is_file()
                                       else self.device['ffmpeg'])
         ffprobe = self.args.ffprobe or ('/usr/bin/ffprobe' if self.path('/usr/bin/ffprobe').is_file()
@@ -287,7 +287,7 @@ class Installer:
     def resolve_binary(self, name):
         """按 --ffmpeg/--ffprobe -> /usr/bin (apk 安装) -> PATH -> /opt/mu300 的顺序找可执行文件。
         F50 是 aarch64/OpenWrt，推荐用 `apk add ffmpeg`；/usr/bin 的包与系统 ABI 一致，
-        不要优先使用来源不明的 arm64 静态包。"""
+        不要优先使用来源不明的 aarch64 静态包。"""
         binary = getattr(self.args, name)
         if not binary:
             standard = '/usr/bin/' + name
@@ -382,7 +382,7 @@ class Installer:
     def preflight(self):
         self.validate_options()
         if platform.system() != 'Linux' or platform.machine() != 'aarch64':
-            raise InstallError('安装目标须为 aarch64 (ARM64) Linux F50；本机测试请运行 tests/test_install_f50.py')
+            raise InstallError('安装目标须为 aarch64 Linux F50')
         if os.geteuid() != 0:
             raise InstallError('请用 root 执行')
         if not self.path('/etc/rc.common').is_file() or not self.path('/etc/init.d/cron').is_file():

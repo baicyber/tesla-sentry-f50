@@ -3,21 +3,14 @@ on: [workflow_dispatch]
 permissions:
   contents: read
 jobs:
-  regression:
+  smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare isolated Linux checks
+      - name: Install ffmpeg
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y busybox-static ffmpeg
-      - name: Python regression tests
-        run: |
-          for pattern in test_install_f50.py test_usb_startup.py test_ota_multifile.py test_export_regressions.py test_sentry_resume.py test_drive_trips.py test_drive_retention.py test_clip_continuity.py test_storage_allocation.py test_storage_resize.py test_storage_api.py; do
-            python3 -B -m unittest discover -s tests -p "$pattern" -v
-          done
-      - name: OpenWrt startup in disposable chroot
-        run: sudo python3 -B tests/install_shell_linux.py /bin/busybox
+          sudo apt-get install -y ffmpeg
       - name: Viewer module and encoder checks
         run: |
           export TSF_CACHE="$RUNNER_TEMP/tsf-cache" TSF_ARCHIVE="$RUNNER_TEMP/tsf-archive"

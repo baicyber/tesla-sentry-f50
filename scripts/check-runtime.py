@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the bundled ARM64 runtime without installing or touching services/USB."""
+"""Check the bundled aarch64 runtime without installing or touching services/USB."""
 import importlib
 import json
 from pathlib import Path

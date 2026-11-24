@@ -16,11 +16,10 @@
 #   sudo ./install.sh f50-check          # 仅预检 (默认 --apply 关闭)
 #   sudo ./install.sh f50-apply          # 预检 + 真正安装 (--apply)
 #   sudo ./install.sh f50-install        # 预检 + 安装 + 服务启动 (--apply --start)
-#   等价于: ./install-f50.sh --apply --start --data-mount /mnt/mmc ...
+#   等价于: ./install.sh f50-install --data-mount /mnt/sdcard ...
 #
-# install-f50.sh 已内嵌进本脚本: 直接 exec 同一套 Python 安装器,
-# 可执行离线 runtime (runtime/bin/python3) 或系统 python3. 旧 install-f50.sh 保留为
-# 兼容别名, 内容仅为调用 ./install.sh f50.
+# 旧 install-f50.sh 的逻辑已完全并入本脚本: 直接 exec 同一套 Python 安装器,
+# 可执行离线 runtime (runtime/bin/python3) 或系统 python3; 独立入口文件已删除.
 
 set -e
 
@@ -29,7 +28,7 @@ say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---- 子命令分发: f50 / f50-check / f50-apply / f50-install ----
-# install-f50.py 的启动器; install-f50.sh 原 20 行逻辑全部内嵌于此
+# install-f50.py 的启动器; 原 install-f50.sh 逻辑已全部内嵌于此
 _run_f50_installer() {
     local sub="$1"; shift
     local src py
@@ -84,12 +83,12 @@ done
 
 CONF=/etc/tesla-sentry.conf
 
-# 视频存储根目录默认放到 TF 卡: F50 上 /dev/mmcblk1p1 一般挂载到 /mnt/mmc
+# 视频存储根目录默认放到 TF 卡: F50 上 /dev/mmcblk1p1 一般挂载到 /mnt/sdcard
 TF_MOUNT=""
 if [ -r /proc/mounts ]; then
     TF_MOUNT=$(awk '$1 ~ /mmcblk1p1$/ {print $2; exit}' /proc/mounts 2>/dev/null || true)
 fi
-[ -z "$TF_MOUNT" ] && [ -d /mnt/mmc ] && TF_MOUNT=/mnt/mmc
+[ -z "$TF_MOUNT" ] && [ -d /mnt/sdcard ] && TF_MOUNT=/mnt/sdcard
 
 if [ -z "$VIDEO_ROOT" ]; then
     if [ -n "$TF_MOUNT" ]; then
@@ -98,7 +97,7 @@ if [ -z "$VIDEO_ROOT" ]; then
     else
         VIDEO_ROOT=/archive
         echo "  [提示] 未检测到 TF 卡 (/dev/mmcblk1p1)。建议把视频存储装到 TF 卡上;"
-        echo "         F50 默认设备 /dev/mmcblk1p1, 挂载点 /mnt/mmc。"
+        echo "         F50 默认设备 /dev/mmcblk1p1, 挂载点 /mnt/sdcard。"
         echo "         可用 --video-root 指定根目录, 或挂载 TF 卡后重新运行。"
     fi
 fi
@@ -161,7 +160,7 @@ CACHE_DIR="$TSF_DIR/cache"
 mkdir -p "$CACHE_DIR/thumbs" "$CACHE_DIR/tel-cache" "$CACHE_DIR/stitch-tmp" 2>/dev/null || true
 
 # ffmpeg 探测: 缩略图与部分导出功能依赖。F50 是 aarch64/OpenWrt, 推荐 apk add ffmpeg,
-# 生成的配置固定写 /usr/bin, 不再优先使用来源不明的 arm64 静态包。
+# 生成的配置固定写 /usr/bin, 不再优先使用来源不明的 aarch64 静态包。
 if [ -x /usr/bin/ffmpeg ] && [ -x /usr/bin/ffprobe ]; then
     FFMPEG=/usr/bin/ffmpeg
     FFPROBE=/usr/bin/ffprobe
@@ -231,7 +230,7 @@ ls -lh "$IMG"
 say "写入配置 $CONF ..."
 
 # ---- 3.1 升级场景: 备份旧 conf + 迁移旧值 ----
-# 如果旧 conf 存在, 先备份一份用于回滚 (install-f50.sh 和其他升级路径也这么做)
+# 如果旧 conf 存在, 先备份一份用于回滚 (F50 安装器和其他升级路径也这么做)
 CONF_BAK=""
 if [ -f "$CONF" ]; then
     CONF_BAK="${CONF}.bak.$(date +%Y%m%d-%H%M%S)"
