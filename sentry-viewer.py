@@ -476,7 +476,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.57"
+APP_VERSION = "2026.11.24.001"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1150,8 +1150,10 @@ def _viewer_version(blob):
     return m.group(1).decode() if m else ""
 
 
-def ota_apply():
+def ota_apply(force=False):
     """下载并安装最新版; 返回 (成功?, 提示/错误)
+
+    force=True 时即使版本相同也重新下载覆盖 (用于修复被改坏的程序文件)。
 
     顺序刻意做成"全部下载校验 -> 备份 -> 先模块后主程序 -> 记账 -> 重启 + 探活守护":
     任何一步失败都停在"只动了临时文件"的阶段, 线上程序一个字节都不动。"""
@@ -1160,7 +1162,8 @@ def ota_apply():
     except Exception as ex:
         return False, "检查更新失败: %s" % ex
     latest = str(j.get("version"))
-    if not _vtuple(latest) > _vtuple(APP_VERSION):
+    newer = _vtuple(latest) > _vtuple(APP_VERSION)
+    if not newer and not (force and _vtuple(latest) == _vtuple(APP_VERSION)):
         return False, "当前已是最新版本 (%s)" % APP_VERSION
     # 1) 下载主程序。镜像 CDN 可能缓存旧文件(清单已经 2.8.55 而文件还是 2.8.52),
     #    所以一次性收齐各源的结果, 挑版本号与清单一致的那份; 只有全部源都旧才报错。
@@ -1231,7 +1234,7 @@ def ota_apply():
                       "modules": saved, "pending": {"v": latest, "tries": 0,
                                                     "at": int(time.time())}})
     _ota_start_watch(latest)
-    msg = "已升级到 %s, 服务正在重启…" % latest
+    msg = ("已重新安装 %s" if not newer else "已升级到 %s") % latest + ", 服务正在重启…"
     if mods:
         msg += " 模块已同步: " + ", ".join(n for n, _ in mods)
     if upd:
@@ -1458,8 +1461,8 @@ def load_settings():
          "recent_keep_min": _retention_default("TSF_RECENT_KEEP_MIN", 60),
          "recent_max_gb": _retention_default("TSF_RECENT_MAX_GB", 12),
          "box_keep_days": _retention_default("TSF_BOX_KEEP_DAYS", 14),
-         "prewarm_sentry": _retention_default("TSF_PREWARM_SENTRY", 3),
-         "prewarm_saved": _retention_default("TSF_PREWARM_SAVED", 3)}
+         "prewarm_sentry": _retention_default("TSF_PREWARM_SENTRY", 2),
+         "prewarm_saved": _retention_default("TSF_PREWARM_SAVED", 2)}
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
             j = json.load(f)
@@ -2088,6 +2091,15 @@ select.ninput { cursor:pointer; }
 .updvercard .updbtns { margin:8px 0 0; flex-wrap:wrap; }
 .updvercard .updauto { margin:0 0 0 auto; padding-top:0; border-top:0; font-size:12.5px; flex:0 0 auto; }
 .updvercard .updauto span { flex:0 0 auto; }
+/* 立即升级右侧的小箭头: 展开可选「强制更新」 */
+.updsplit { position:relative; display:flex; flex:1 1 180px; min-width:0; }
+.updvercard .updsplit .mini, .updbtns .updsplit .mini { flex:1; min-width:0; }
+.updbtns .updsplit #upd-go { border-radius:9px 0 0 9px; }
+.updbtns .updsplit .updcaret { flex:0 0 34px; padding:9px 0; border-radius:0 9px 9px 0; border-left:1px solid rgba(255,255,255,.28); font-size:11px; }
+.updmenu { position:absolute; z-index:30; top:calc(100% + 4px); right:0; min-width:180px; padding:5px; border:1px solid var(--line2); border-radius:9px; background:var(--panel); box-shadow:0 8px 24px #0003; }
+.updmenu[hidden] { display:none; }
+.updmenu button { display:block; width:100%; padding:9px 11px; border:0; border-radius:7px; background:transparent; color:var(--text); font-size:12.5px; text-align:left; cursor:pointer; }
+.updmenu button:hover { background:var(--panel2); }
 .updvercard .hint { margin-top:7px; }
 .updnotes-wrap { margin:14px 0 6px; }
 .updnotes-title { font-size:12.5px; font-weight:600; margin-bottom:7px; color:var(--text); }
@@ -2607,7 +2619,7 @@ body.settings-open { overflow:hidden; }
 .storage-total-row { display:flex; align-items:center; gap:10px; font-size:16px; font-weight:600; }
 .storage-total-row output { margin-left:4px; }
 .storage-total-row .storage-help { margin-left:auto; }
-.storage-columns { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); gap:20px; margin-top:20px; }
+.storage-columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:20px; margin-top:20px; }
 .storage-quota,#storage-usage { padding:20px; border:1px solid var(--line); border-radius:8px; background:var(--panel); margin:0; }
 .storage-nested { margin-left:12px; padding-left:12px; border-left:1px solid var(--line); }
 .storage-advanced { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
@@ -2643,6 +2655,9 @@ body.settings-open { overflow:hidden; }
 .retention-unit { color:var(--muted); font-size:12.5px; flex:0 0 auto; }
 /* 备注列常被挤成 28px：保留时间/存储路径改成按内容自适应宽度 */
 #tab-storage .storage-row.note { grid-template-columns:minmax(0,1fr) minmax(68px,96px) minmax(0,auto); max-width:none; }
+/* 容量输入框后紧跟 GiB 单位: 标签 | 数字 | 单位 | 说明按钮 */
+#tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) minmax(68px,98px) minmax(0,auto) 28px; max-width:none; }
+@media (pointer:coarse) { #tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) 76px minmax(0,auto) 44px; gap:4px; } }
 #tab-storage .storage-row.path { grid-template-columns:minmax(0,1fr) minmax(0,2.4fr) auto; max-width:none; }
 #tab-storage .storage-row.path .ninput { min-width:0; }
 .usage-actions { display:flex; align-items:center; gap:8px; }
@@ -2771,12 +2786,17 @@ body.settings-open { overflow:hidden; }
 .system-status { order:2; display:flex; align-items:center; gap:12px; color:var(--muted); font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .system-status strong { color:var(--text); font-weight:500; }
 .system-status .hot { color:var(--danger); }
-/* 依赖缺失提示条: 安装时没配好 ffmpeg 才出现, 不要等到用户点开视频/等缩略图才发现 */
-.ffwarn { display:flex; align-items:center; gap:8px; flex:1 0 100%; order:9; margin:0 0 6px;
-  padding:7px 10px; border:1px solid var(--danger); border-radius:8px; background:color-mix(in srgb, var(--danger) 12%, transparent);
-  color:var(--text); font-size:12px; line-height:1.45; }
+/* 依赖缺失提示条: 独立一行放在内容区顶部, 文案自动换行, 不再挤在标题栏里 */
+.ffwarn { display:flex; flex-direction:column; align-items:stretch; gap:6px; margin:0 0 16px;
+  padding:10px 12px; border:1px solid var(--danger); border-radius:8px; background:color-mix(in srgb, var(--danger) 12%, transparent);
+  color:var(--text); font-size:12px; line-height:1.55; }
 .ffwarn[hidden] { display:none; }
 .ffwarn b { color:var(--danger); font-weight:600; }
+.ffwarn-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ffwarn-text { display:block; white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
+.ffwarn-fix { flex:0 0 auto; margin-left:auto; padding:4px 12px; border:1px solid var(--danger); border-radius:7px;
+  background:var(--danger); color:#fff; font-size:11.5px; line-height:1.4; cursor:pointer; }
+.ffwarn-fix:disabled { opacity:.65; cursor:default; }
 .ffwarn code { font-size:11px; background:var(--panel2); border-radius:4px; padding:1px 4px; }
 .player-actions { display:flex; gap:4px; flex:none; }
 .player-actions button { display:inline-flex; align-items:center; justify-content:center; gap:5px; min-height:40px; padding:0 10px; background:transparent; border:1px solid var(--line); border-radius:4px; color:var(--text); cursor:pointer; }
@@ -2863,9 +2883,9 @@ body.settings-open { overflow:hidden; }
 </defs></svg>
 <header class="app-header"><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">哨兵一剪梅</span></h1><span class="sub" id="stat"></span>
 <div class="system-status" aria-label="系统状态"><span class="netspeed" id="netspeed" hidden></span><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
-<div class="ffwarn" id="ffwarn" role="status" hidden><b id="ffwarn-title">FFmpeg 未配置</b><span id="ffwarn-text">列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。F50 请执行 <code>apk add ffmpeg</code>，然后运行 <code>install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。</span></div>
 <nav class="tabs" id="tabs" aria-label="录像分类"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button><button id="gear" title="设置" aria-expanded="false" aria-controls="panel"><svg class="ic"><use href="#i-gear"/></svg><span>设置</span></button></header>
 <main class="library-page">
+<div class="ffwarn" id="ffwarn" role="status" hidden><div class="ffwarn-head"><b id="ffwarn-title">FFmpeg 未配置</b><button class="ffwarn-fix" id="ffwarn-fix" type="button" onclick="ffmpegFix()">一键修复</button></div><span class="ffwarn-text" id="ffwarn-text">列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。点「一键修复」自动安装完整版；也可在设备上执行 <code>apk add ffmpeg</code> 后运行 <code>install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。</span></div>
 <nav class="storwrap status-only" id="storwrap">
   <div class="storcard" id="storcard">
 <span id="live" title="车机在线只读同步状态" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:4px 10px;white-space:nowrap"><span id="livedot" style="width:7px;height:7px;border-radius:50%;background:#5f6b76"></span><span id="livetxt">同步状态</span></span>
@@ -3005,18 +3025,19 @@ body.settings-open { overflow:hidden; }
   <aside class="settings-nav"><h2>设置 <button class="x" onclick="closePanel()" aria-label="关闭设置">✕</button></h2>
   <nav class="stabs" aria-label="设置分类"><h3>存储与文件</h3>
     <button class="stab" id="st-storage" onclick="stab('storage')"><svg class="ic"><use href="#i-archive"/></svg>存储分配</button>
+    <button class="stab" id="st-play" onclick="stab('play')"><svg class="ic"><use href="#i-eye"/></svg>预转码设置</button>
     <button class="stab" id="st-files" onclick="stab('files');switchArea(area)"><svg class="ic"><use href="#i-folder"/></svg>文件管理</button>
     <h3>车辆个性化</h3>
     <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车语音</button>
     <button class="stab" id="st-wraps" onclick="stab('wraps')"><svg class="ic"><use href="#i-brush"/></svg>涂装</button>
     <h3>系统与偏好</h3>
-    <button class="stab" id="st-play" onclick="stab('play')"><svg class="ic"><use href="#i-eye"/></svg>播放设置</button>
     <button class="stab" id="st-notify" onclick="stab('notify')"><svg class="ic"><use href="#i-bell"/></svg>推送</button>
     <button class="stab" id="st-auth" onclick="stab('auth')"><svg class="ic"><use href="#i-key"/></svg>账号</button>
     <button class="stab" id="st-lang" onclick="stab('lang')"><svg class="ic"><use href="#i-globe"/></svg>语言</button>
     <button class="stab" id="st-skin" onclick="stab('skin')"><svg class="ic"><use href="#i-image"/></svg>外观与背景</button>
     <button class="stab" id="st-brand" onclick="stab('brand')"><svg class="ic"><use href="#i-brand"/></svg>品牌</button>
     <button class="stab" id="st-update" onclick="stab('update')"><svg class="ic"><use href="#i-refresh"/></svg>更新</button>
+    <button class="stab" id="st-about" onclick="stab('about')"><svg class="ic"><use href="#i-brand"/></svg>关于</button>
   </nav></aside>
   <div class="settings-content"><button class="settings-back" onclick="settingsBack()">‹ 设置</button><h2 id="settings-title">存储分配</h2>
   <div id="tab-storage" style="display:none">
@@ -3025,7 +3046,6 @@ body.settings-open { overflow:hidden; }
       <div class="usage-legend" id="usage-legend"></div>
       <div class="hint" style="margin-top:7px">按存储卡实际占用绘制。驾驶记录 / 哨兵 / 手动保存 / 实时滚动记录之间用硬链接共享同一段视频，这里只计一次；缓存目录与其他文件合并成「其他文件」。修改下方容量设置后此图会同步刷新。</div>
     </div>
-    <div class="hint">容量单位：GiB</div>
     <div id="storage-plan" hidden>
       <div class="storage-total-row"><span>存储卡实际容量</span><output id="storage-total">—</output><span>GiB</span><button class="storage-help" type="button" aria-label="存储卡实际容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="total">?</button></div>
       <div class="storage-summary"><span>分配预览</span><span>可分配 <output id="storage-available">—</output> GiB</span></div>
@@ -3041,11 +3061,11 @@ body.settings-open { overflow:hidden; }
     </div>
     <div class="hint" id="storage-budget" role="status"></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
-    <div class="storage-row"><label for="storage-archive">记录分类归档总上限</label><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
-    <div class="storage-nested"><div class="storage-row"><label for="storage-drive">其中：驾驶记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="驾驶记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row"><label for="retention-recentmax">其中：实时滚动记录上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="实时滚动记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div></div>
-    <div class="storage-row"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
+    <div class="storage-row cap"><label for="storage-archive">记录分类归档总上限</label><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">GiB</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
+    <div class="storage-nested"><div class="storage-row cap"><label for="storage-drive">其中：驾驶记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">GiB</span><button class="storage-help" type="button" aria-label="驾驶记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row cap"><label for="retention-recentmax">其中：实时滚动记录上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">GiB</span><button class="storage-help" type="button" aria-label="实时滚动记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div></div>
+    <div class="storage-row cap"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">GiB</span><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
     <details class="storage-advanced"><summary>高级保护</summary>
-      <div class="storage-row"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
+      <div class="storage-row cap"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">GiB</span><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
     </details>
     <div class="updbtns"><button class="mini primary" id="storage-save" onclick="storageSave()" disabled>保存归档设置</button><button class="mini" onclick="storageLoad()">重新加载</button></div>
     <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
@@ -3183,7 +3203,7 @@ body.settings-open { overflow:hidden; }
     <div class="hint">内网访问自动用原画，不转码，加载最快；外网访问默认用下面选择的画质。选择非「原画」时，设备会在空闲时按该画质预先转码哨兵/手动保存事件的片段（实时滚动记录影像不预热）。</div>
     <label class="nrow"><span>外网默认画质</span>
       <select class="ninput" id="play-quality" onchange="playSave()">
-        <option value="orig">原画 — 不转码，最清晰但外网流量大</option>
+        <option value="orig">原画 — 不转码，最清晰；码率约 5～8 Mbps，外网流量大</option>
         <option value="720p">720p — 清晰，约 2.2 Mbps</option>
         <option value="480p">480p — 均衡（推荐），约 1.2 Mbps</option>
         <option value="360p">360p — 省流量，约 0.7 Mbps</option>
@@ -3193,7 +3213,8 @@ body.settings-open { overflow:hidden; }
     <div class="hint" id="play-msg"></div>
     <section class="storage-quota" id="storage-prewarm">
       <h3>预转码设置</h3>
-      <div class="hint">提前把哨兵录像、手动保存里的最新事件转成上面的外网默认画质，点开即可播放，不用等转码。这里设置每个模块预转码缓存几个事件（每个事件预转全部摄像头：新款 6 路、老款 4 路，每路触发段及前后各一段）；填 0 关闭该模块预转码。设置同步写入 /etc/tesla-sentry.conf。</div>
+      <div class="hint">提前把哨兵录像、手动保存里的最新事件转成上面的外网默认画质，点开即可播放，不用等转码。这里设置每个模块预转码缓存几个事件（每个事件预转全部摄像头：新款 6 路、老款 4 路，每路覆盖事件发生前后 3 分钟）；填 0 关闭该模块预转码。设置同步写入 /etc/tesla-sentry.conf。</div>
+      <div class="hint">空间占用提醒：480p 下每个事件预转全部摄像头约占用 150～200 MB，两个模块各 2 个事件约 0.6～0.8 GB；画质越高占用越大。存储紧张时请调小事件数或填 0 关闭。</div>
       <div class="storage-row note"><label for="prewarm-sentry">哨兵录像预转码</label><input class="ninput" id="prewarm-sentry" type="number" min="0" max="50" step="1" inputmode="numeric"><span class="retention-unit">个事件</span></div>
       <div class="storage-row note"><label for="prewarm-saved">手动保存预转码</label><input class="ninput" id="prewarm-saved" type="number" min="0" max="50" step="1" inputmode="numeric"><span class="retention-unit">个事件</span></div>
       <div class="updbtns"><button class="mini primary" id="prewarm-save" onclick="storageSavePrewarm()" disabled>保存预转码设置</button></div>
@@ -3289,7 +3310,7 @@ body.settings-open { overflow:hidden; }
       </div>
       <div class="updbtns">
         <button class="mini" id="upd-check" onclick="otaCheck(true)">检查更新</button>
-        <button class="mini primary" id="upd-go" onclick="otaApply()" disabled>立即升级</button>
+        <span class="updsplit"><button class="mini primary" id="upd-go" onclick="otaApply()" disabled>立即升级</button><button class="mini primary updcaret" id="upd-force-toggle" type="button" title="更多升级方式" aria-haspopup="menu" aria-expanded="false" onclick="otaForceMenu(event)">▾</button><div class="updmenu" id="upd-force-menu" role="menu" hidden><button type="button" role="menuitem" onclick="otaApply(true)">强制更新（同版本重装）</button></div></span>
         <label class="updauto" title="检测到新版本时, 在没人看视频的空闲时刻自动升级 (只重启本服务, 约 5 秒)">
           <span>自动更新</span>
           <input type="checkbox" id="upd-auto" checked onchange="setAutoUpdate(this.checked)">
@@ -3311,7 +3332,8 @@ body.settings-open { overflow:hidden; }
     <div class="langgrid" id="lang-grid"></div>
     <div class="hint">界面语言，保存在本机浏览器</div>
   </div>
-  <details class="support-box" id="support-box"><summary>交流与赞助</summary>
+  <div id="tab-about" style="display:none">
+    <div class="hint">哨兵一剪梅 · 特斯拉哨兵视频查看器。扫码交流或赞助，感谢支持。</div>
     <div class="support-sec">
       <div class="support-title">💬 交流加群</div>
       <div class="support-text">交流加群请联系作者，扫码关注抖音或添加微信好友~</div>
@@ -3328,7 +3350,7 @@ body.settings-open { overflow:hidden; }
         <figure><img src="/sponsor/wechatpay?v=__SPONSOR_VER__" alt="微信收款码" loading="lazy"><figcaption>微信支付</figcaption></figure>
       </div>
     </div>
-  </details></div>
+  </div></div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -3719,9 +3741,26 @@ function updateSystemStatus(sys) {
     if (!ffwarn.hidden) {
       byId('ffwarn-title').textContent = missingBytes ? 'FFmpeg 未配置' : 'FFmpeg 缺少必要组件';
       byId('ffwarn-text').innerHTML = missingBytes
-        ? '列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。F50 请执行 <code>apk add ffmpeg</code>，然后运行 <code>install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。'
-        : '当前 ffmpeg 缺少 ' + issue + '，抽帧、缩略图和转码都会失败（从老系统升级上来的设备常见）。执行 <code>sh install.sh f50-apply --install-deps</code> 自动补装完整版，装完到「播放设置 → 转码诊断」复查。';
+        ? '列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。点右侧「一键修复」自动安装完整版；也可在设备上执行 <code>apk add ffmpeg</code>，再运行 <code>install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。'
+        : '当前 ffmpeg 缺少 ' + issue + '，抽帧、缩略图和转码都会失败（从老系统升级上来的设备常见）。点右侧「一键修复」自动补装完整版，装完到「预转码设置 → 转码诊断」复查。';
     }
+  }
+}
+async function ffmpegFix() {
+  const btn = byId('ffwarn-fix'), text = byId('ffwarn-text');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = '正在修复…';
+  try {
+    const j = await (await fetch('/api/ffmpeg/fix', {method:'POST'})).json();
+    text.textContent = j.msg || (j.ok ? '已修复' : '修复失败');
+    btn.textContent = j.ok ? '已修复' : '重试修复';
+    if (j.ok) setTimeout(() => { try { refreshLive(); } catch (e) {} }, 3500);
+    else btn.disabled = false;
+  } catch (e) {
+    text.textContent = '修复失败: ' + e;
+    btn.textContent = '一键修复';
+    btn.disabled = false;
   }
 }
 async function refreshLive() {
@@ -6157,7 +6196,7 @@ function doLogout() {
 function stab(which) {
   storageHelpClose();
   document.getElementById('panel').classList.add('settings-detail');
-  ['files', 'storage', 'audio', 'wraps', 'play', 'notify', 'auth', 'lang', 'skin', 'brand', 'update'].forEach(k => {
+  ['files', 'storage', 'audio', 'wraps', 'play', 'notify', 'auth', 'lang', 'skin', 'brand', 'update', 'about'].forEach(k => {
     const b = document.getElementById('st-' + k), t = document.getElementById('tab-' + k);
     if (b) b.classList.toggle('active', k === which);
     if (t) t.style.display = k === which ? '' : 'none';
@@ -6265,12 +6304,13 @@ function storageRenderAllocation() {
     const input = document.getElementById('storage-' + name);
     if (!input.value || !input.validity.valid) {
       plan.hidden = true;
-      budgetText.dataset.error = 'true';
-      budgetText.textContent = '请输入有效的整数容量';
+      budgetText.dataset.invalid = 'true';
+      storageMessage('请输入有效的整数容量');
       return;
     }
     values[name] = Number(input.value);
   }
+  if (budgetText.dataset.invalid === 'true') { budgetText.dataset.invalid = 'false'; storageMessage(''); }
   const budget = storageData.disk.budget_bytes / 1073741824;
   const unlimited = values.archive === 0;          // 0 = 不设上限, 只受磁盘空闲保护线约束
   const allocated = values.usb + values.archive + values.reserve;
@@ -6995,14 +7035,35 @@ async function otaWaitBack() {
   }
   location.reload();
 }
-async function otaApply() {
-  if (!otaInfo || !otaInfo.has_update) return;
-  if (!confirm('升级到 v' + otaInfo.latest + ' ?\n程序文件会被覆盖, 服务自动重启约 5 秒, 期间页面会短暂打不开。')) return;
+function otaForceMenu(event) {
+  event.stopPropagation();
+  const menu = document.getElementById('upd-force-menu'), btn = document.getElementById('upd-force-toggle');
+  const open = menu.hidden;
+  menu.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+}
+document.addEventListener('click', event => {
+  const menu = document.getElementById('upd-force-menu');
+  if (menu && !menu.hidden && !event.target.closest('.updsplit')) {
+    menu.hidden = true;
+    document.getElementById('upd-force-toggle').setAttribute('aria-expanded', 'false');
+  }
+});
+async function otaApply(force) {
+  force = !!force;
+  const menu = document.getElementById('upd-force-menu');
+  if (menu) { menu.hidden = true; document.getElementById('upd-force-toggle').setAttribute('aria-expanded', 'false'); }
+  const latest = otaInfo && otaInfo.latest;
+  if (!force && (!otaInfo || !otaInfo.has_update)) return;
+  const tip = force
+    ? '强制重新安装 v' + (latest || '最新版') + ' ?\n即使版本相同也会重新下载并覆盖程序文件, 服务自动重启约 5 秒。'
+    : '升级到 v' + latest + ' ?\n程序文件会被覆盖, 服务自动重启约 5 秒, 期间页面会短暂打不开。';
+  if (!confirm(tip)) return;
   const btn = document.getElementById('upd-go'), msg = document.getElementById('upd-msg');
   btn.disabled = true;
   msg.textContent = t('正在下载并校验新版本…');
   try {
-    const j = await (await fetch('/api/ota/apply', { method: 'POST' })).json();
+    const j = await (await fetch('/api/ota/apply', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({force})})).json();
     msg.textContent = j.msg;
     if (!j.ok) { btn.disabled = false; return; }
     otaWaitBack();
@@ -9220,6 +9281,60 @@ def ffmpeg_capabilities(refresh=False):
     caps["mp4"] = bool(re.search(r"^\s*\S+\s+mp4\s", dump("-muxers"), re.M))
     _FF_CAPS.update(t=now, v=caps)
     return caps
+
+
+def ffmpeg_fix():
+    """一键修复 ffmpeg: 用设备包管理器安装完整版, 再重新探测能力。
+
+    从老系统升级上来的设备常见「装了 ffmpeg 但缺 HEVC 解码 / H.264 编码」,
+    这里直接调 apk / opkg 补装完整包, 省得用户登录 SSH 敲命令。"""
+    def complete(c):
+        return bool(c.get("exists") and c.get("hevc") and (c.get("x264") or c.get("v4l2")))
+
+    caps = ffmpeg_capabilities(refresh=True)
+    if complete(caps):
+        return True, "当前 ffmpeg 组件已完整（HEVC 解码与 H.264 编码可用），无需修复。"
+    missing = []
+    if not caps.get("exists"):
+        missing.append("ffmpeg 本体")
+    else:
+        if not caps.get("hevc"):
+            missing.append("HEVC 解码")
+        if not (caps.get("x264") or caps.get("v4l2")):
+            missing.append("H.264 编码")
+    def tool(name):
+        found = shutil.which(name)
+        if found:
+            return found
+        for base in ("/usr/bin", "/bin", "/usr/sbin", "/sbin"):
+            cand = os.path.join(base, name)
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                return cand
+        return ""
+    apk, opkg = tool("apk"), tool("opkg")
+    cmds = []
+    if apk:
+        cmds.append([apk, "add", "--no-cache", "ffmpeg"])
+    elif opkg:
+        cmds.extend([[opkg, "update"], [opkg, "install", "ffmpeg"]])
+    if not cmds:
+        return False, "未找到 apk/opkg 包管理器，无法自动安装。缺少：%s。请手动安装完整 ffmpeg 后刷新页面。" % "、".join(missing)
+    failed = []
+    for cmd in cmds:
+        try:
+            p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               timeout=600, errors="replace")
+            if p.returncode != 0:
+                failed.append(" ".join(cmd))
+        except Exception:
+            failed.append(" ".join(cmd))
+    caps = ffmpeg_capabilities(refresh=True)
+    if complete(caps):
+        return True, "已安装完整 ffmpeg，HEVC 解码与 H.264 编码已可用，缩略图与转码恢复正常。"
+    if failed:
+        return False, "自动修复未完成（缺少 %s，失败命令：%s）。请检查网络后重试，或在设备上手动安装完整 ffmpeg。" \
+                      % ("、".join(missing), "；".join(failed))
+    return False, "已执行安装，但仍缺少 %s。请重启服务后重试，或在设备上手动安装完整 ffmpeg。" % "、".join(missing)
 
 
 def video_encoder_args(preset="superfast"):
@@ -15247,7 +15362,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok, "msg": msg, "repo": ota_target()["repo"], "branch": ota_target()["branch"]})
             return
         if path == "/api/ota/apply":
-            ok, msg = ota_apply()
+            body = self._read_json()
+            force = bool(isinstance(body, dict) and body.get("force"))
+            ok, msg = ota_apply(force)
+            self._json({"ok": ok, "msg": msg})
+            return
+        if path == "/api/ffmpeg/fix":
+            try:
+                ok, msg = ffmpeg_fix()
+            except Exception as ex:
+                ok, msg = False, "修复失败: %s" % str(ex)[:160]
             self._json({"ok": ok, "msg": msg})
             return
         if path == "/api/ota/rollback":

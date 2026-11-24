@@ -2,7 +2,7 @@
 """发版助手: 改版本号 + 更新说明 + 同步 version.json
 
 用法:
-    python3 tools/make_release.py 2.2.0 "新增 XXX" "修复 YYY"
+    python3 tools/make_release.py 2026.11.24.001 "新增 XXX" "修复 YYY"
 
 做的事:
   1) 把 sentry-viewer.py 里的 APP_VERSION 改成新版本号
@@ -29,7 +29,7 @@ def main():
         return 1
     ver = sys.argv[1].strip().lstrip("v")
     if not re.fullmatch(r"\d+(\.\d+){1,3}", ver):
-        print("版本号格式不对, 例: 2.2.0")
+        print("版本号格式不对, 例: 2026.11.24.001")
         return 1
     notes = [a.strip() for a in sys.argv[2:] if a.strip()]
     src = open(APP, encoding="utf-8").read()

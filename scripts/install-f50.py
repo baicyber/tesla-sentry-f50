@@ -361,9 +361,12 @@ class Installer:
                 and caps['scale'] and caps['mp4']), caps
 
     def install_static_ffmpeg(self):
-        """固件的 ffmpeg 是精简构建时, 下载官方 arm64 静态包 (含 HEVC 解码 + libx264)。
-        只从固定的官方地址取, 解压时按文件名白名单提取 ffmpeg / ffprobe。"""
-        target = self.path('/opt/tsf-ffmpeg')
+        """固件的 ffmpeg 是精简构建时, 下载官方 arm64(aarch64) 静态包
+        (含 HEVC 解码 + libx264), 直接装到 /usr/bin/ffmpeg、/usr/bin/ffprobe;
+        该目录已有同名文件会被原子替换。只从固定官方地址取, 解压按文件名白名单提取。"""
+        if platform.machine() not in ('aarch64', 'arm64'):
+            raise InstallError('静态 FFmpeg 仅提供 aarch64 构建，当前架构为 %s' % platform.machine())
+        target = self.path('/usr/bin')
         binary = target / 'ffmpeg'
         probe = target / 'ffprobe'
         if binary.is_file() and os.access(binary, os.X_OK):
@@ -372,7 +375,7 @@ class Installer:
                 return {'ffmpeg': str(binary), 'ffprobe': str(probe)}
         url = 'https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz'
         print('固件自带的 FFmpeg 不完整（缺 HEVC 解码或 H.264 编码），'
-              '正在下载官方静态构建：%s' % url, flush=True)
+              '正在下载官方 aarch64 静态构建并安装到 /usr/bin：%s' % url, flush=True)
         target.mkdir(parents=True, exist_ok=True)
         archive = Path(tempfile.mkdtemp(prefix='tsf-ff-', dir='/tmp')) / 'ffmpeg.tar.xz'
         try:
@@ -398,7 +401,7 @@ class Installer:
         ok, caps = self.ffmpeg_ok(str(binary))
         if not ok:
             raise InstallError('静态 FFmpeg 校验失败（HEVC=%s libx264=%s scale=%s mp4=%s）；'
-                               '请手动放置 ffmpeg/ffprobe 后用 --ffmpeg /opt/tsf-ffmpeg/ffmpeg 指定'
+                               '请手动放置 ffmpeg/ffprobe 到 /usr/bin 后用 --ffmpeg /usr/bin/ffmpeg 指定'
                                % (caps['hevc'], caps['x264'], caps['scale'], caps['mp4']))
         return {'ffmpeg': str(binary), 'ffprobe': str(probe)}
 
