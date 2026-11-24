@@ -476,7 +476,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.24.002"
+APP_VERSION = "2026.11.25.001"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2679,9 +2679,15 @@ body.settings-open { overflow:hidden; }
 .usage-row.nested:last-child { margin-bottom:0; }
 .usage-row.free { margin:0; padding-top:18px; border-top:1px solid var(--line); }
 .usage-chart-box { margin:0 0 18px; padding:16px 20px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.usage-chart-row { display:flex; align-items:center; gap:10px; margin:0 0 10px; }
+.usage-chart-row:last-of-type { margin-bottom:0; }
+.usage-chart-label { flex:0 0 30px; font-size:11.5px; color:var(--muted); }
+.usage-chart-row .usage-chart { flex:1 1 auto; }
 .usage-chart { display:flex; width:100%; height:16px; border-radius:8px; overflow:hidden; background:var(--line); }
-.usage-chart span { display:block; height:100%; min-width:0; transition:width .3s ease; }
+.usage-chart span { position:relative; display:block; height:100%; min-width:0; transition:width .3s ease; }
+.usage-chart span i { display:block; height:100%; transition:width .3s ease; }
 .usage-legend { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:9px; font-size:11.5px; color:var(--muted); }
+.usage-legend-sub { margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); }
 .usage-legend i { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
 .usage-legend b { color:var(--text); font-weight:600; }
 .diag-tabs { display:flex; gap:8px; margin:10px 0 0; }
@@ -2691,7 +2697,7 @@ body.settings-open { overflow:hidden; }
 .storage-danger { margin-top:26px; padding-top:22px; border-top:1px solid var(--line); position:relative; }
 #storage-retention { margin-top:0; }
 #storage-retention .storage-row { max-width:420px; }
-#storage-prewarm .storage-row { max-width:420px; }
+#storage-prewarm .storage-row { max-width:none; grid-template-columns:minmax(0,1fr) minmax(88px,150px) minmax(0,auto); }
 .storage-settings-columns { margin-top:26px; align-items:start; }
 #storage-retention .storage-nested .storage-row { max-width:408px; }
 #storage-paths > summary { font-size:17px; color:var(--text); font-weight:600; padding:0 0 18px; cursor:pointer; list-style-position:inside; }
@@ -3069,7 +3075,7 @@ body.settings-open { overflow:hidden; }
   <aside class="settings-nav"><h2>设置 <button class="x" onclick="closePanel()" aria-label="关闭设置">✕</button></h2>
   <nav class="stabs" aria-label="设置分类"><h3>存储与文件</h3>
     <button class="stab" id="st-storage" onclick="stab('storage')"><svg class="ic"><use href="#i-archive"/></svg>存储分配</button>
-    <button class="stab" id="st-play" onclick="stab('play')"><svg class="ic"><use href="#i-eye"/></svg>预转码设置</button>
+    <button class="stab" id="st-play" onclick="stab('play')"><svg class="ic"><use href="#i-eye"/></svg>播放设置</button>
     <button class="stab" id="st-files" onclick="stab('files');switchArea(area)"><svg class="ic"><use href="#i-folder"/></svg>文件管理</button>
     <h3>车辆个性化</h3>
     <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车语音</button>
@@ -3086,9 +3092,11 @@ body.settings-open { overflow:hidden; }
   <div class="settings-content"><button class="settings-back" onclick="settingsBack()">‹ 设置</button><h2 id="settings-title">存储分配</h2>
   <div id="tab-storage" style="display:none">
     <div class="usage-chart-box" id="usage-chart-box">
-      <div class="usage-chart" id="usage-chart" role="img" aria-label="存储卡实际容量分布"></div>
+      <div class="usage-chart-row"><span class="usage-chart-label">整卡</span><div class="usage-chart" id="usage-chart" role="img" aria-label="存储卡容量与占用"></div></div>
+      <div class="usage-chart-row"><span class="usage-chart-label">归档</span><div class="usage-chart" id="usage-chart-sub" role="img" aria-label="记录分类归档各分类"></div></div>
       <div class="usage-legend" id="usage-legend"></div>
-      <div class="hint" style="margin-top:7px">按存储卡实际占用绘制。驾驶记录 / 哨兵 / 手动保存 / 实时滚动记录之间用硬链接共享同一段视频，这里只计一次；缓存目录与其他文件合并成「其他文件」。修改下方容量设置后此图会同步刷新。</div>
+      <div class="usage-legend usage-legend-sub" id="usage-legend-sub"></div>
+      <div class="hint" style="margin-top:7px">每段的浅色是该分类的总上限，深色是实际占用，两者画在同一段里；上限随下方容量设置实时变化。驾驶记录 / 哨兵 / 手动保存 / 实时滚动记录之间用硬链接共享同一段视频，这里只计一次；缓存等归入「其他文件」。</div>
     </div>
     <div id="storage-plan" hidden>
       <div class="storage-total-row"><span>存储卡实际容量</span><output id="storage-total">—</output><span>GiB</span><button class="storage-help" type="button" aria-label="存储卡实际容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="total">?</button></div>
@@ -3256,7 +3264,7 @@ body.settings-open { overflow:hidden; }
     <div class="hint" id="play-net"></div>
     <div class="hint" id="play-msg"></div>
     <section class="storage-quota" id="storage-prewarm">
-      <h3>预转码设置</h3>
+      <h3>播放设置</h3>
       <div class="hint">提前把哨兵录像、手动保存里的最新事件转成上面的外网默认画质，点开即可播放，不用等转码。这里设置每个模块预转码缓存几个事件（每个事件预转全部摄像头：新款 6 路、老款 4 路，每路覆盖事件发生前后 3 分钟）；填 0 关闭该模块预转码。设置同步写入 /etc/tesla-sentry.conf。</div>
       <div class="hint">空间占用提醒：480p 下每个事件预转全部摄像头约占用 150～200 MB，两个模块各 2 个事件约 0.6～0.8 GB；画质越高占用越大。存储紧张时请调小事件数或填 0 关闭。</div>
       <div class="storage-row note"><label for="prewarm-sentry">哨兵录像预转码</label><input class="ninput" id="prewarm-sentry" type="number" min="0" max="50" step="1" inputmode="numeric"><span class="retention-unit">个事件</span></div>
@@ -3786,7 +3794,7 @@ function updateSystemStatus(sys) {
       byId('ffwarn-title').textContent = missingBytes ? 'FFmpeg 未配置' : 'FFmpeg 缺少必要组件';
       byId('ffwarn-text').innerHTML = missingBytes
         ? '列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。点右侧「一键修复」自动安装完整版；也可在设备上执行 <code>apk add ffmpeg</code>，再运行 <code>install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。'
-        : '当前 ffmpeg 缺少 ' + issue + '，抽帧、缩略图和转码都会失败（从老系统升级上来的设备常见）。点右侧「一键修复」自动补装完整版，装完到「预转码设置 → 转码诊断」复查。';
+        : '当前 ffmpeg 缺少 ' + issue + '，抽帧、缩略图和转码都会失败（从老系统升级上来的设备常见）。点右侧「一键修复」自动补装完整版，装完到「播放设置 → 转码诊断」复查。';
     }
   }
 }
@@ -6396,47 +6404,84 @@ function storageRenderUsage() {
     const output = document.getElementById('storage-used-' + name);
     if (output) output.textContent = bytes == null ? '—' : (bytes / 1073741824).toFixed(2) + ' GiB';
   }
-  // 容量分布图: 全部按存储卡实际占用绘制。四类录像后端已按硬链接去重, 相加即归档实际用量;
-  // 「其他文件」= 整卡 - 镜像分配 - 四类录像 - 空闲, 含缓存目录、索引、铃声/涂装及卡上其他占用。
+  // 容量分布图分两排: 上排「整卡」= 车机 U 盘镜像 / 记录分类归档总和 / 空闲;
+  // 下排「归档」= 各分类。每段浅色是总上限, 深色是实际占用, 同段展示;
+  // 上限直接取下方容量设置输入框的值, 改动时实时重绘。
   const G = 1073741824;
-  const cardTotal = disk.total_bytes || 0, free = disk.free_bytes || 0;
-  const usbImg = disk.usb_bytes || 0;
-  // 车机 U 盘镜像是预分配文件，宿主盘上占的是标称容量；卷内实际写入多少单独标注，
-  // 与「实际用量」里的车机 U 盘一致。
-  const usbUsed = disk.usb_used_bytes != null ? disk.usb_used_bytes : usbImg;
+  const gb = (bytes) => (bytes || 0) / G;
+  const cardGb = gb(disk.total_bytes);
+  const usbUsed = disk.usb_used_bytes != null ? disk.usb_used_bytes : (disk.usb_bytes || 0);
   const drive = disk.drive_bytes || 0, sentry = disk.sentry_bytes || 0;
   const saved = disk.saved_bytes || 0, recent = disk.recent_bytes || 0;
-  const cache = disk.cache_bytes || 0;
-  const other = Math.max(0, cardTotal - usbImg - drive - sentry - saved - recent - free);
-  const cap = (bytes) => (bytes / G).toFixed(2) + ' GiB';
-  const segs = [
-    ['车机 U 盘镜像（已用 ' + cap(usbUsed) + '）', usbImg, '#4c8dff'],
-    ['驾驶记录', drive, '#35c288'],
-    ['哨兵', sentry, '#e8443f'],
-    ['手动保存', saved, '#b06cf0'],
-    ['实时滚动记录', recent, '#f0a93b'],
-    ['其他文件（含缓存 ' + cap(cache) + '）', other, '#7a8794'],
-    ['空闲', free, 'var(--line2)']
-  ].filter(s => s[1] > 0.5);
-  const total = cardTotal > 0 ? cardTotal : segs.reduce((sum, s) => sum + s[1], 0);
-  const bar = document.getElementById('usage-chart');
-  const legend = document.getElementById('usage-legend');
-  if (!bar || !legend) return;
-  bar.innerHTML = total > 0 ? segs.map(([label, bytes, color]) =>
-    '<span style="width:' + (bytes / total * 100).toFixed(2) + '%;background:' + color + '" title="' +
-    label + ' ' + cap(bytes) + '"></span>').join('') : '';
+  const archiveUsed = disk.archive_bytes || 0;
+  const archiveOther = Math.max(0, archiveUsed - drive - sentry - saved - recent);
   const inputNum = (id, fallback) => {
     const el = document.getElementById(id);
-    const v = el ? Number(el.value) : NaN;
-    return Number.isFinite(v) ? v : fallback;
+    if (!el || el.value === '') return fallback;
+    const v = Number(el.value);
+    return Number.isFinite(v) && v >= 0 ? v : fallback;
   };
+  const usbLimit = inputNum('storage-usb', usb_gib);
+  const archiveLimit = inputNum('storage-archive', values.archive_gib);
   const driveLimit = inputNum('storage-drive', values.drive_gib);
   const recentLimit = inputNum('retention-recentmax', storageData.retention ? storageData.retention.recent_max_gb : 0);
-  const notes = {'驾驶记录': driveLimit > 0 ? ' / ' + driveLimit + ' GiB 上限' : '',
-                 '实时滚动记录': recentLimit > 0 ? ' / ' + recentLimit + ' GiB 上限' : ''};
-  legend.innerHTML = segs.map(([label, bytes, color]) =>
-    '<span><i style="background:' + color + '"></i>' + label + ' <b>' + cap(bytes) + '</b>' +
-    (notes[label] || '') + '</span>').join('');
+  const unlimited = archiveLimit <= 0;
+  const archCap = unlimited ? gb(archiveUsed) : archiveLimit;
+  const freeGb = Math.max(0, cardGb - usbLimit - archCap);
+  const bar = document.getElementById('usage-chart');
+  const subBar = document.getElementById('usage-chart-sub');
+  const legend = document.getElementById('usage-legend');
+  const subLegend = document.getElementById('usage-legend-sub');
+  if (!bar || !legend || !subBar || !subLegend) return;
+  const num = (v) => (Math.round(v * 10) / 10).toFixed(1);
+  const rgb = (hex) => { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+  const fade = (hex, a) => { const c = rgb(hex); return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; };
+  const colors = {usb:'#4c8dff', archive:'#2fb3a3', drive:'#35c288', sentry:'#e8443f',
+                  saved:'#b06cf0', recent:'#f0a93b', other:'#7a8794', free:'#9aa4b2', rest:'#9aa4b2'};
+  // capGb 是上限宽度, usedGb 是实际占用宽度; 实际超出上限时按实际撑开, 不把占用画丢
+  const seg = (basis, color, capGb, usedGb, title) => {
+    const widthGb = Math.max(capGb, usedGb, 0);
+    if (basis <= 0 || widthGb <= 0.005) return '';
+    const fill = Math.min(100, usedGb / widthGb * 100);
+    return '<span style="width:' + (widthGb / basis * 100).toFixed(2) + '%;background:' + fade(color, .28) +
+      '" title="' + title + '"><i style="width:' + fill.toFixed(2) + '%;background:' + color + '"></i></span>';
+  };
+  const mark = (color, dual) => '<i style="background:' + (dual
+    ? 'linear-gradient(90deg,' + color + ' 0 52%,' + fade(color, .32) + ' 52% 100%)' : color) + '"></i>';
+
+  const row1 = [
+    [colors.usb, usbLimit, gb(usbUsed), '车机 U 盘镜像 已用 ' + num(gb(usbUsed)) + ' / ' + num(usbLimit) + ' GiB'],
+    [colors.archive, archCap, gb(archiveUsed), '记录分类归档 已用 ' + num(gb(archiveUsed)) + ' / ' + (unlimited ? '无限制' : num(archCap) + ' GiB')],
+    [colors.free, freeGb, freeGb, '空闲 ' + num(freeGb) + ' GiB']
+  ];
+  const total1 = Math.max(cardGb, row1.reduce((s, p) => s + Math.max(p[1], p[2]), 0), 1);
+  bar.innerHTML = row1.map(p => seg(total1, p[0], p[1], p[2], p[3])).join('');
+  legend.innerHTML =
+    '<span>' + mark(colors.usb, true) + '车机 U 盘镜像 <b>' + num(gb(usbUsed)) + ' GiB</b> / ' + num(usbLimit) + ' GiB</span>' +
+    '<span>' + mark(colors.archive, true) + '记录分类归档 <b>' + num(gb(archiveUsed)) + ' GiB</b> / ' + (unlimited ? '无限制' : num(archCap) + ' GiB') + '</span>' +
+    '<span>' + mark(colors.free, false) + '空闲 <b>' + num(freeGb) + ' GiB</b></span>';
+
+  // 下排: 驾驶记录 / 实时滚动记录有 GB 上限, 哨兵 / 手动保存 / 其他按实际占用整段填充
+  const sub = [
+    [colors.drive, driveLimit > 0 ? driveLimit : gb(drive), gb(drive), '驾驶记录 已用 ' + num(gb(drive)) + ' GiB'],
+    [colors.sentry, gb(sentry), gb(sentry), '哨兵 已用 ' + num(gb(sentry)) + ' GiB'],
+    [colors.saved, gb(saved), gb(saved), '手动保存 已用 ' + num(gb(saved)) + ' GiB'],
+    [colors.recent, recentLimit > 0 ? recentLimit : gb(recent), gb(recent), '实时滚动记录 已用 ' + num(gb(recent)) + ' GiB'],
+    [colors.other, gb(archiveOther), gb(archiveOther), '其他文件 已用 ' + num(gb(archiveOther)) + ' GiB']
+  ];
+  const capSum = sub.reduce((s, p) => s + Math.max(p[1], p[2]), 0);
+  const restGb = Math.max(0, archCap - capSum);
+  const total2 = Math.max(archCap, capSum, 1);
+  subBar.innerHTML = sub.map(p => seg(total2, p[0], p[1], p[2], p[3])).join('') +
+    (restGb > 0.005 ? seg(total2, colors.rest, restGb, 0, '归档未分配 ' + num(restGb) + ' GiB') : '');
+  const subNote = (limitGb) => (limitGb > 0 ? ' / ' + num(limitGb) + ' GiB' : '');
+  subLegend.innerHTML =
+    '<span>' + mark(colors.drive, true) + '驾驶记录 <b>' + num(gb(drive)) + ' GiB</b>' + subNote(driveLimit) + '</span>' +
+    '<span>' + mark(colors.sentry, false) + '哨兵 <b>' + num(gb(sentry)) + ' GiB</b></span>' +
+    '<span>' + mark(colors.saved, false) + '手动保存 <b>' + num(gb(saved)) + ' GiB</b></span>' +
+    '<span>' + mark(colors.recent, true) + '实时滚动记录 <b>' + num(gb(recent)) + ' GiB</b>' + subNote(recentLimit) + '</span>' +
+    '<span>' + mark(colors.other, false) + '其他文件 <b>' + num(gb(archiveOther)) + ' GiB</b></span>' +
+    (restGb > 0.005 ? '<span>' + mark(colors.rest, true) + '未分配 <b>' + num(restGb) + ' GiB</b></span>' : '');
 }
 // 容量设置变化时同步刷新分配条与图表里的上限标注, 保证与设置联动
 document.querySelectorAll('#tab-storage input').forEach(input => input.addEventListener('input', () => {
