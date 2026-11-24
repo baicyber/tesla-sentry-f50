@@ -28,7 +28,7 @@ cat /proc/mounts | grep teslamnt
 ## 车机不认盘 / 提示"USB 设备无法读取"
 
 1. `tesla-gadget.sh status` 看 `lun` 是否指向镜像、`state` 是否 `configured`
-2. 新盘第一次插入，车机通常提示"**格式化 USB 设备**"，点确认即可
+2. 新部署的镜像已预置 exFAT 与 `TeslaCam/`，正常**不再提示格式化**；若旧安装仍弹出，点确认可继续，或重跑 `install.sh` 补写镜像
 3. 若一直提示错误：镜像可能不是 exFAT（`mount -t exfat` 报错），删镜像重建
 4. 换一根**数据线**（很多线只供电不传数据）
 
@@ -58,7 +58,9 @@ cat /proc/mounts | grep teslamnt
 
 验收应包含停车状态下的冷启动、U 盘识别后的 USB 通断记录与新录像。早期网络/串口枚举仍由固件控制，本模式只协调应用侧存储导出。
 
-## 归档不触发
+## 定时挂载（Boombox 音频）不触发
+
+> 视频归档不在这里：它由常驻的 `tesla-live-sync.py` 每 15 秒只读同步，不依赖 cron；本节只针对 `tesla-sync.sh` 往镜像写 Boombox 音频的定时挂载。
 
 日志里会有原因：
 
@@ -74,9 +76,11 @@ cron 是否在跑：`ps | grep cron`、`cat /etc/crontabs/root`。
 
 ## 网页能打开但没有任何事件
 
-- 归档还没跑（默认要等镜像空闲 10 分钟）→ 手工跑一次：`sh /opt/tesla-sentry/tesla-sync.sh`
+- 先确认在线同步在跑：`/etc/init.d/tesla-live running`，`logread -e tesla-live`；正常约 15 秒一轮，不需要等 10 分钟
+- 数据盘是否挂载：`cat /proc/mounts | grep mmcblk1p1`；未挂载时 USB 导出与归档都不会工作
 - 车根本没在写 → 确认车机设置里哨兵模式开启、U 盘被识别为 TeslaCam 盘
-- 归档目录为空 → `ls -R /archive | head`
+- 归档目录为空 → `ls -R "${TSF_ARCHIVE:-/archive}" | head`（F50 默认 `/mnt/sdcard/tesla-sentry/archive`）
+- 手工跑一次 Boombox 音频同步（不负责视频归档）：`sh /opt/tesla-sentry/tesla-sync.sh`
 
 ## 合成导出报「设备上未安装 ffmpeg」
 
@@ -92,7 +96,7 @@ apk add ffmpeg
 
 ## 网页上有视频，但 U 盘里看不到 / 可用空间不变
 
-网页读的是归档区 `/archive`，U 盘是 `teslacam.img` 镜像区，归档不会回写镜像——两个区域本来就是分开的。
+网页读的是归档区（内部虚拟前缀 `/archive`，F50 实际在 `/mnt/sdcard/tesla-sentry/archive`），U 盘是 `teslacam.img` 镜像区，归档不会回写镜像——两个区域本来就是分开的。
 
 - 先确认镜像正常：`cat /sys/kernel/config/usb_gadget/*/functions/mass_storage.0/lun.0/file`
 - 需要把归档内容放回 U 盘（演示或恢复）：用 `sh tesla-img.sh exec '<命令>'`，不要直接往导出的镜像里写
@@ -146,7 +150,7 @@ losetup 失败 / 挂载失败
 
 1. 车机端要手动选：**Toybox → Boombox → Lock Sound → USB**
 2. 文件必须：WAV / 44.1kHz / 16-bit / < 1MB / 1–5 秒
-3. 归档任务还没跑 → 手工执行 `tesla-sync.sh`，然后看 `<镜像>/Boombox/LockChime.wav` 是否存在
+3. 音频同步还没跑 → 手工执行 `tesla-sync.sh`，然后看 `<镜像>/Boombox/LockChime.wav`（锁车音在镜像根目录）是否存在
 
 ## 服务起不来
 

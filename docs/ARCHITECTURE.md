@@ -31,6 +31,8 @@
 
 **关键设计**：镜像（exFAT）与归档区（ext4）是两块**物理隔离**的存储。车机永远只碰镜像，网页永远只碰归档区，两者不会同时读写同一个 exFAT 文件系统。
 
+2.8.48 起，两者统一由 `TSF_VIDEO_ROOT` 派生：`<根>/img/teslacam.img`、`<根>/archive/`，转码缓存为 `<根>/archive/transcode_cache/`。F50 检测到 TF 卡（`/dev/mmcblk1p1`）时根目录默认是 `/mnt/sdcard/tesla-sentry`，未检测到时回退 `/archive`。
+
 ## 2. 为什么能"伪装 U 盘"
 
 Linux 内核的 USB Gadget 框架允许设备扮演 USB 外设。通过 configfs（`/sys/kernel/config/usb_gadget/`）可以动态拼装一个复合设备：
@@ -54,9 +56,9 @@ tesla-live-sync.py (常驻, 默认 15 秒一轮)
   1. 拿 flock 共享锁 (网页管理/定时归档持排他锁时跳过本轮)
   2. 只读打开 teslacam.img, 按 exFAT 规范解析引导扇区/FAT/目录项 (os.pread)
   3. 连续两轮 (DataLength, ValidDataLength, mtime) 一致才认为片段写完
-  4. 跳过 /archive/.pruned 墓碑里的事件 (盒子侧已清理的)
+  4. 跳过 <归档>/.pruned 墓碑里的事件 (盒子侧已清理的)
   5. RecentClips 只收滚动窗口内 (TSF_RECENT_ROLL_MIN, 默认 60 分钟)
-  6. 拷到 /archive/<cat>/<事件名>/
+  6. 拷到 <归档>/<cat>/<事件名>/
   -> 全程不 mount、不写镜像, 车机无感
 
 tesla-sync.sh (cron, 每 10 分钟; 只负责写 Boombox 音频)
@@ -104,7 +106,7 @@ IDLE ───────────────────────► MA
 
 | 入口 | 限制 |
 |---|---|
-| `/api/browse`、`/dl`、`/api/file` | 路径 realpath 必须以 `/archive` 开头，防 `../` 逃逸 |
+| `/api/browse`、`/dl`、`/api/file` | 路径 realpath 必须落在归档区（`/archive` 是内部虚拟前缀，实际映射到 `TSF_ARCHIVE`），防 `../` 逃逸 |
 | `/api/usb/browse`、`/usbdl`、`/api/usb` | 路径 realpath 必须落在镜像挂载点内 |
 | 上传 | 单文件 ≤ 100MB；文件名仅允许 `[\w\-. ]`，自动去除目录部分 |
 | 音频 | ≤ 1MB（车机限制）；锁车音必须 WAV |
@@ -159,8 +161,9 @@ Tesla 在**车辆行驶中录制**的片段里，会把行车数据作为 SEI（
 
 | 区域 | 路径 | 写入方 | 读取方 |
 | --- | --- | --- | --- |
-| 镜像区（虚拟 U 盘） | `teslacam.img` | 车机 | 车机、插上的电脑 |
-| 归档区 | `/archive` | 归档任务从镜像拷出 | 网页查看器 |
+| 镜像区（虚拟 U 盘） | `<TSF_VIDEO_ROOT>/img/teslacam.img` | 车机 | 车机、插上的电脑 |
+| 归档区 | `<TSF_VIDEO_ROOT>/archive` | 归档任务从镜像拷出 | 网页查看器 |
+| 转码缓存 | `<TSF_VIDEO_ROOT>/archive/transcode_cache` | 查看器后台转码 | 网页播放器 |
 
 网页只读归档区，因此「网页上有、U 盘里没有」属于正常现象：归档是镜像的副本，不是同一份数据。
 
@@ -170,6 +173,8 @@ Tesla 在**车辆行驶中录制**的片段里，会把行车数据作为 SEI（
 sh tesla-img.sh exec 'cp -r /archive/SentryClips/2026-11-04_12-30-00 /tmp/imgrw/TeslaCam/SentryClips/'
 ```
 
+（示例中的 `/archive` 为默认路径；归档区在 `/mnt/sdcard/tesla-sentry/archive` 时请替换为实际路径。）
+
 脚本会先 detach LUN 再挂载镜像写入，避免主机侧 FAT / 目录缓存与设备侧写入互相覆盖。
 
 ## 10. 已知限制
@@ -177,6 +182,6 @@ sh tesla-img.sh exec 'cp -r /archive/SentryClips/2026-11-04_12-30-00 /tmp/imgrw/
 - 编码实测为 **H.264 High 1280×960**（2022 Model Y / 本仓库开发车）；部分新车型或新固件改用 HEVC，浏览器需相应解码支持（Edge/Chrome 需系统 HEVC 扩展，Safari 原生支持）
 - SEI 遥测并非每段都有：**行驶中录制**的片段基本每帧都有，**停车状态**的哨兵片段大多没有。没有时遥测面板隐藏，属数据源缺失而非解析失败
 - 刹车只有布尔量（没有踏板开度），面板只给「刹车」状态徽章不给百分比；方向盘、油门为真实连续值
-- 单线程 HTTP 服务器（`ThreadingHTTPServer`），并发播放多路视频会吃 CPU；遥测解码首次约 0.3–0.5s/段（24s 片段），命中 eMMC 缓存后毫秒级
+- 多线程 HTTP 服务器（`ThreadingHTTPServer`，每连接一线程），并发播放多路视频会吃 CPU；遥测解码首次约 0.3–0.5s/段（24s 片段），命中 eMMC 缓存后毫秒级
 - 归档以"事件目录"为单位，未做增量文件级同步
 - USB 3.0 总带宽与 eMMC 写入速度决定录制稳定性；实测 eMMC 写 80–130MB/s，哨兵写入峰值仅 20–40MB/s

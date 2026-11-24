@@ -44,7 +44,7 @@ U 盘管理、锁车音写入这类功能会不可用（没有镜像可挂），
 |---|---|
 | Python 3.7+ | 完全跑不起来（查看器与实时同步都是 Python） |
 | ffmpeg / ffprobe | 列表缩略图不显示；单路"转码导出"不可用（网页端 canvas 合成不依赖它） |
-| cron / systemd timer | 归档不会自动触发，需手动跑 `tesla-sync.sh` |
+| cron | Boombox 音频不会自动写入镜像（视频实时同步由常驻的 `tesla-live-sync.py` 完成，不依赖 cron） |
 | 内核 ext4 | 归档区建不了（可换 f2fs/xfs，只影响断电自愈强度） |
 | 温度传感器 | 无影响（仅少了状态上报） |
 
@@ -156,7 +156,7 @@ CPU 实测参考（F50，8 核 A76/A55 混合）：SEI 遥测 40 秒片段首次
 3. **在 x86 上用 `g_mass_storage` 模块** —— 模块存在但找不到 UDC，`modprobe` 成功、`echo udc > UDC` 必然失败。
 4. **Android 手机不 root 就想当 U 盘** —— 系统不给 configfs 写权限。
 5. **用 exFAT 之外的文件系统做镜像** —— 车机只认 exFAT/FAT32，且大于 32G 必须 exFAT。
-6. **镜像容量选太大** —— 稀疏文件平时只按实际写入占空间，但**车机首次使用会格式化整个虚拟 U 盘**，之后镜像就按标称容量实占。170G 镜像放在 200G 出头的存储上，再加归档区，磁盘写满后车机会报"U 盘读不出/需要格式化"。默认 64G（可滚 7 小时以上）适合绝大多数设备；空间紧张可以用 `--size 32`，存储充裕想留长回看可手动加大（如 `--size 128`），但请保证 镜像容量 + 20G < 空闲空间。
+6. **镜像容量选太大** —— 稀疏文件平时只按实际写入占空间，但车机一旦写满就会报"U 盘读不出/需要格式化"，且镜像 + 归档共用同一块盘。2.8.35 起安装器会预置 exFAT 与 `TeslaCam` 目录，车机不再需要格式化；默认 64G（可滚 7 小时以上）适合绝大多数设备，空间紧张可用 `--size 32`，存储充裕可加大到 `--size 128`（超过 128G 会回退为空白盘，由车机格式化一次）。请保证 镜像容量 + 归档上限 + 缓存与预留 < 空闲空间。
 
 ---
 
@@ -166,18 +166,20 @@ CPU 实测参考（F50，8 核 A76/A55 混合）：SEI 遥测 40 秒片段首次
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `TSF_ARCHIVE` | `/archive` | 归档区路径（ext4 目录）。档位 B/C 部署时指到已有目录即可 |
+| `TSF_VIDEO_ROOT` | F50 为 `/mnt/sdcard/tesla-sentry`，否则 `/archive` | 视频存储根目录；镜像、归档、转码缓存都从它派生（2.8.48 起） |
+| `TSF_ARCHIVE` | `$TSF_VIDEO_ROOT/archive` | 归档区路径（ext4 目录）。档位 B/C 部署时指到已有目录即可 |
 | `TSF_PORT` | `8080` | 网页端口 |
-| `TSF_IMG` | `/root/teslacam.img` 或 `$TSF_DIR/teslacam.img` | 虚拟 U 盘镜像 |
+| `TSF_IMG` | `$TSF_VIDEO_ROOT/img/teslacam.img` | 虚拟 U 盘镜像 |
+| `TSF_TRANSCODE_DIR` | `$TSF_ARCHIVE/transcode_cache` | 转码缓存，单独计入缓存预算；删除归档文件时同步清理 |
 | `TSF_MNT` | `/tmp/teslamnt` | 镜像临时挂载点 |
 | `TSF_LOOP` | `/dev/loop3` | 归档用的 loop 设备 |
 | `TSF_LOSETUP` | 有 `/opt/mu300/busybox-bin/losetup` 就用它，否则走 PATH | 精简系统可指定 busybox 版 |
 | `TSF_GADGET` | `/sys/kernel/config/usb_gadget/linux` | 现有 gadget 目录名各设备不同，自检脚本不会改它，装错时手工指定 |
-| `TSF_CACHE` | `$TSF_DIR/cache`（安装目录下，按用途分子目录） | 缩略图/遥测/合成临时缓存 |
-| `TSF_FFMPEG` / `TSF_FFPROBE` | 同上策略，否则走 PATH | 缩略图与转码 |
+| `TSF_CACHE` | `$TSF_DIR/cache`（安装目录下，按 `res-cache` / `thumbs` / `stitch-tmp` / `tel-cache` 分类） | 缩略图、遥测与合成临时缓存 |
+| `TSF_FFMPEG` / `TSF_FFPROBE` | F50 固定 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`，其它设备走 PATH | 缩略图与转码 |
 | `TSF_MEDIA_CONN` | `8` | 视频流并发上限（弱设备调小） |
 | `TSF_TEL_CONN` | `1` | 遥测解码并发（单核设备保持 1） |
-| `TSF_IDLE` | `600` | 镜像空闲多少秒后才归档 |
+| `TSF_IDLE` | `600` | 镜像空闲多少秒后才允许 cron 挂载写 Boombox 音频 |
 
 > `/archive/...` 这种虚拟前缀在内部会自动映射到 `TSF_ARCHIVE`，所以网页深链、导出、缩略图在自定义归档区下依然可用。
 

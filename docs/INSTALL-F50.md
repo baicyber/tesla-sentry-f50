@@ -2,11 +2,11 @@
 
 本流程安装当前仓库的查看器、录像同步、虚拟 U 盘和开机服务。目标是已能通过 SSH 登录的 aarch64 F50，运行兼容的 OpenWrt/procd 固件。仓库不包含刷机、解锁或内核安装程序；原厂系统尚未具备这些条件时，需先完成固件环境准备。
 
-`./install.sh f50` 默认只检查。指定 `--apply` 才写入文件，`--apply --start` 在安装后启动服务。脚本不分区、不格式化物理存储卡、不替换已有安装、不重启设备。请在**新 F50** 上执行，勿把现役设备地址作为安装目标。
+`./install.sh f50` 默认只检查。指定 `--apply` 才写入文件，`--apply --start` 在安装后启动服务；也可用等价子命令 `./install.sh f50-check`（仅检查）、`f50-apply`（检查 + 安装）、`f50-install`（检查 + 安装 + 启动服务）。脚本不分区、不格式化物理存储卡、不替换已有安装、不重启设备。请在**新 F50** 上执行，勿把现役设备地址作为安装目标。
 
 ## 1. 选择离线完整包
 
-维护者可使用 `scripts/build-offline-package.py` 制作 `f50-offline-*.tar.gz`；本 PR 不附带运行环境二进制或已发布的离线包。以下完整包说明适用于含已校验 `runtime/` 的构建：Python 3.13.18、标准库和配套动态库、FFmpeg/FFprobe 7.0.2 aarch64 静态构建、BusyBox、blkid、flock、Noto Sans SC 字体及公共 CA 根证书。安装不下载运行依赖，不执行 pip、apk 或 opkg。
+维护者可使用 `scripts/build-offline-package.py` 制作 `f50-offline-*.tar.gz`；仓库不附带运行环境二进制或已发布的离线包。以下完整包说明适用于含已校验 `runtime/` 的构建：Python 3.13.18、标准库和配套动态库、FFmpeg/FFprobe 7.0.2 aarch64 静态构建、BusyBox、blkid、flock、Noto Sans SC 字体及公共 CA 根证书。安装不下载运行依赖，不执行 pip、apk 或 opkg。
 
 把压缩包传到新设备的已挂载数据盘，在新设备 SSH 终端解压：
 
@@ -102,6 +102,7 @@ sh install.sh f50 --check
 sh install.sh f50 --apply --start
 ```
 
+以上两条也可写成 `sh install.sh f50-check` 与 `sh install.sh f50-install`，参数含义相同。
 自定义容量、路径或工具时，两次命令应使用相同参数。例如：
 
 ```sh
@@ -133,16 +134,17 @@ sh install.sh f50 --apply --install-deps
 | --- | --- |
 | `/opt/tesla-sentry/` | 程序、脚本、安装记录、网页登录凭据、设置 |
 | `/etc/tesla-sentry.conf` | 本设备 UUID、控制器、路径、配额和端口 |
-| `/mnt/sdcard/tesla-sentry/teslacam.img` | 含 TeslaCam 目录的 exFAT 镜像 |
+| `/mnt/sdcard/tesla-sentry/img/teslacam.img` | 含 TeslaCam 目录的 exFAT 镜像 |
 | `/mnt/sdcard/tesla-sentry/archive/` | 哨兵、手动保存、最近一小时和行车记录 |
-| `/opt/tesla-sentry/cache/` | 缩略图、转码及遥测缓存（按用途分子目录） |
+| `/mnt/sdcard/tesla-sentry/archive/transcode_cache/` | 转码缓存，单独计入缓存预算，随归档文件删除自动清理 |
+| `/opt/tesla-sentry/cache/` | 缩略图、遥测及合成临时缓存（按用途分子目录） |
 | `/mnt/sdcard/tesla-sentry/logs/` | 项目脚本日志 |
 | `/etc/init.d/` | 四个项目服务，仅 `tsf-mount` 注册开关机启动链接 |
 | `/etc/crontabs/root` | 追加项目区块，保留原有任务 |
 
-启动门控先核验 UUID、ext4 和读写挂载，再启动 USB 导出、同步、查看器。定时任务仅在服务运行且磁盘匹配时执行；音频队列为空时不运行音频同步。
+启动门控先核验 UUID、ext4 和读写挂载，再启动 USB 导出、同步、查看器。上表路径以默认的 `TSF_VIDEO_ROOT=/mnt/sdcard/tesla-sentry` 为例；用 `--video-root` 指定其他根目录，或未检测到 TF 卡回退 `/archive` 时，镜像与归档会随根目录整体移动（固定结构为 `<根>/img/` 与 `<根>/archive/`）。定时任务仅在服务运行且磁盘匹配时执行；音频队列为空时不运行音频同步。
 
-网页为 `http://新设备IP:8080`。用户名为 `admin`，随机密码和独立会话密钥写入权限为 `0600` 的 `auth.conf`。通过 SSH 在设备上查看密码后登录；不要把该文件提交到 GitHub。默认 `settings.json` 为 `{"auto_update":false}`。本改动增加了配套 Python 模块；维护者完成发布及升级兼容处理前，请保持自动更新关闭，并使用完整源码部署。
+网页为 `http://新设备IP:8080`。用户名为 `admin`，随机密码和独立会话密钥写入权限为 `0600` 的 `auth.conf`。通过 SSH 在设备上查看密码后登录；不要把该文件提交到 GitHub。默认 `settings.json` 为 `{"auto_update":false}`。2.8.43 起 OTA 支持多文件升级（模块与主程序一起下载、校验、安装，探活失败自动回滚）；从更早版本手工升级时，仍须把 `storage_allocation.py`、`storage_resize.py` 等模块与主程序一起部署。
 
 未使用 `--start` 时可稍后运行：
 
@@ -154,7 +156,7 @@ sh install.sh f50 --apply --install-deps
 
 ## 存储分配与容量调整
 
-登录后打开“设置 → 存储分配”。数据盘容量只读，各输入框右侧的问号解释用途。页面按实际文件系统位置计算预算：车机 U 盘容量＋归档总额＋本盘缓存预算＋安全预留，不重复计入行车记录额度；缓存放在其他分区时不占本盘预算。1 GiB = 1024³ 字节。
+登录后打开“设置 → 存储分配”。数据盘容量只读；「存储路径」可查看并修改镜像与归档所在路径，保存后写回 `/etc/tesla-sentry.conf`，重启后生效（2.8.48 起）。各输入框右侧的问号解释用途。页面按实际文件系统位置计算预算：车机 U 盘容量＋归档总额＋本盘缓存预算＋安全预留，不重复计入行车记录额度；缓存放在其他分区时不占本盘预算。1 GiB = 1024³ 字节。
 
 - 归档总容量：哨兵、手动保存、最近一小时与行车记录共用的额度。
 - 行车记录容量：归档总额内的行车记录上限。
