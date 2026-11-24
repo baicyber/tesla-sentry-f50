@@ -233,7 +233,7 @@ class Installer:
                         TSF_FFMPEG=ffmpeg, TSF_FFPROBE=ffprobe,
                         TSF_USB_LOCK='/tmp/tsf-usb.lock', TSF_RECENT_ROLL_MIN=60,
                         TSF_RECENT_KEEP_MIN=60, TSF_RECENT_MAX_GB=12,
-                        TSF_BOX_KEEP_DAYS=14, TSF_BOX_MAX_GB=12,
+                        TSF_BOX_KEEP_DAYS=14,
                         TSF_DRIVE_MAX_GB=self.args.drive_gb, TSF_ARCHIVE_TOTAL_GB=self.args.archive_gb,
                         TSF_DISK_GUARD_INTERVAL=60, TSF_FREE_MIN_MB=4096, TSF_FREE_TARGET_MB=10240,
                         TSF_LIVE_INTERVAL=15, TSF_SYNC_FAIL_RETRY_SEC=300,

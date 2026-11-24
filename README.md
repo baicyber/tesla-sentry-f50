@@ -103,7 +103,7 @@ sudo ./uninstall.sh --purge      # 连镜像和归档一起删（不可恢复）
 | `TSF_LIVE_INTERVAL` | `15` | 在线只读同步轮询秒数 |
 | `TSF_IDLE` | `600` | 镜像空闲秒数，仅用于 cron 挂载写 Boombox 音频 |
 | `TSF_RECENT_ROLL_MIN` | `60` | RecentClips 滚动窗口（分钟），0 = 不滚动 |
-| `TSF_BOX_KEEP_DAYS` / `TSF_BOX_MAX_GB` | `14` / `12` | 盒子侧哨兵 / 手动保存归档的保留天数与单分类上限，0 = 不限 |
+| `TSF_BOX_KEEP_DAYS` | `14` | 盒子侧哨兵 / 手动保存归档的保留天数，0 = 不限 |
 | `TSF_FREE_MIN_MB` / `TSF_FREE_TARGET_MB` | `4096` / `10240` | 空间兜底清理的触发阈值与目标 |
 | `TSF_CACHE` | 自动 | 缩略图 / 遥测 / 转码缓存目录 |
 

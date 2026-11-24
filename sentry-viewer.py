@@ -359,7 +359,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.48"
+APP_VERSION = "2.8.49"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -1227,7 +1227,6 @@ RETENTION_FIELDS = {
     "recent_keep_min": (0, 1440),   # 空间兜底清理时最近必留(分钟)
     "recent_max_gb": (0, 4096),     # 「最近1小时监控」体积上限(GiB), 0=不限; 归档不限量时仍独立生效
     "box_keep_days": (0, 3650),     # 哨兵/手动保存按天数保留, 0=不按天数清理
-    "box_max_gb": (0, 4096),        # 哨兵/手动保存单个分类体积上限(GiB), 0=不限
 }
 
 
@@ -1244,8 +1243,7 @@ def load_settings():
          "recent_roll_min": _retention_default("TSF_RECENT_ROLL_MIN", 60),
          "recent_keep_min": _retention_default("TSF_RECENT_KEEP_MIN", 60),
          "recent_max_gb": _retention_default("TSF_RECENT_MAX_GB", 12),
-         "box_keep_days": _retention_default("TSF_BOX_KEEP_DAYS", 14),
-         "box_max_gb": _retention_default("TSF_BOX_MAX_GB", 12)}
+         "box_keep_days": _retention_default("TSF_BOX_KEEP_DAYS", 14)}
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
             j = json.load(f)
@@ -1609,9 +1607,38 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .pscroll { flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:2px 14px 14px; display:flex; flex-direction:column; gap:12px; }
 .pscroll > * { flex:0 0 auto; }
 .vwrap { position:relative; border-radius:14px; overflow:hidden; max-width:980px; width:100%; margin:0 auto; background:var(--stage); }
-.netspeed { position:absolute; right:10px; top:10px; z-index:6; padding:3px 9px; border-radius:999px;
+.netspeed { position:absolute; right:10px; bottom:10px; z-index:6; padding:3px 9px; border-radius:999px;
   background:rgba(10,13,18,.72); color:#dfe6ee; font-size:12px; font-variant-numeric:tabular-nums;
   pointer-events:none; backdrop-filter:blur(4px); }
+/* 右上角动画遥测 HUD: 方向盘 / 转向灯 / 加减速 / 车速 (行车记录与最近1小时监控没有 event.json 也能看) */
+.telhud { position:absolute; right:10px; top:10px; z-index:7; display:none; width:154px; padding:8px 10px 7px;
+  border-radius:14px; background:rgba(10,14,20,.62); border:1px solid rgba(255,255,255,.16);
+  color:#eef3f8; backdrop-filter:blur(8px); pointer-events:none;
+  box-shadow:0 6px 20px rgba(0,0,0,.35); font-variant-numeric:tabular-nums; }
+.telhud.show { display:block; animation:thIn .28s ease-out; }
+@keyframes thIn { from { opacity:0; transform:translateY(-6px) scale(.96) } to { opacity:1; transform:none } }
+.th-top { display:flex; align-items:center; justify-content:center; gap:14px; }
+.th-sig { display:inline-flex; opacity:.26; color:#9aa4ae; }
+.th-sig svg { width:22px; height:22px; display:block; }
+.th-sig.on { opacity:1; color:#ffb340; animation:tpBlink 1.05s steps(1,end) infinite; }
+.th-gear { min-width:22px; height:22px; padding:0 4px; border-radius:11px; background:#34c759; color:#fff;
+  font-size:12px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
+.th-mid { display:flex; align-items:center; gap:10px; margin-top:2px; }
+.th-wheel { width:52px; height:52px; flex:none; color:#dfe6ee; transition:transform .1s linear; }
+.th-wheel.ap { color:#5aa2ff; filter:drop-shadow(0 0 6px rgba(90,162,255,.55)); }
+.th-spdbox { display:flex; align-items:baseline; gap:2px; }
+.th-spdbox b { font-size:30px; line-height:1; font-weight:800; letter-spacing:-.5px; }
+.th-spdbox i { font-size:10.5px; font-style:normal; color:#aab4bf; }
+.th-acc { display:flex; align-items:center; gap:5px; margin-top:4px; height:16px; }
+.th-bar { position:relative; flex:1; height:5px; border-radius:3px; background:rgba(255,255,255,.16); overflow:hidden; }
+.th-bar i { position:absolute; left:50%; top:0; bottom:0; width:0; border-radius:3px; background:#8e99a5;
+  transition:left .12s linear, width .12s linear, background .18s; }
+.th-acc.acc .th-bar i { background:#34c759; }
+.th-acc.dec .th-bar i { background:#ff453a; }
+.th-acct { font-size:10.5px; color:#aab4bf; min-width:30px; text-align:right; }
+.th-acct.acc { color:#34c759; }
+.th-acct.dec { color:#ff6b60; }
+@media (prefers-reduced-motion: reduce) { .telhud.show { animation:none } .th-sig.on { animation:none } }
 .vcell .cload { flex-wrap:wrap; text-align:center; padding:8px; word-break:break-word; }
 .vcell .cload .chint { flex-basis:100%; max-width:92%; font-size:11px; line-height:1.45; color:#9aa4ae; }
 .vcell .cload button { margin-top:4px; }
@@ -2308,6 +2335,13 @@ body.settings-open { overflow:hidden; }
 #storage-retention { margin-top:26px; }
 #storage-retention .storage-row { max-width:420px; }
 .retention-unit { color:var(--muted); font-size:12.5px; flex:0 0 auto; }
+/* 备注列常被挤成 28px：保留时间/存储路径改成按内容自适应宽度 */
+#tab-storage .storage-row.note { grid-template-columns:minmax(0,1fr) minmax(68px,96px) minmax(0,auto); max-width:none; }
+#tab-storage .storage-row.path { grid-template-columns:minmax(0,1fr) minmax(0,2.4fr) auto; max-width:none; }
+#tab-storage .storage-row.path .ninput { min-width:0; }
+.usage-actions { display:flex; align-items:center; gap:8px; }
+.usage-clear { min-height:26px !important; padding:2px 9px !important; font-size:11.5px !important; }
+#storage-cleanup-status { margin-top:6px; min-height:0; }
 .storage-danger h3 { color:var(--danger); }
 .storage-danger .storage-row { max-width:420px; }
 #storage-resize { border-color:var(--danger); color:var(--danger); background:transparent; }
@@ -2586,6 +2620,18 @@ body.settings-open { overflow:hidden; }
     <div class="vwrap">
       <button type="button" class="startmask" id="startmask">▶ 轻触开始同步播放</button>
       <div class="vgrid" id="vgrid"></div>
+      <div class="telhud" id="telhud" aria-hidden="true">
+        <div class="th-top">
+          <span class="th-sig" id="th-bl" title="左转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M17 12H8.2M12.2 7.3 7.5 12l4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span class="th-gear" id="th-gear">D</span>
+          <span class="th-sig" id="th-br" title="右转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M7 12h8.8M11.8 7.3 16.5 12l-4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </div>
+        <div class="th-mid">
+          <svg class="th-wheel" id="th-wheel" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" aria-hidden="true"><circle cx="32" cy="32" r="21"/><circle cx="32" cy="32" r="5" fill="currentColor" stroke="none"/><path d="M11 32h13M40 32h13M32 38v13"/></svg>
+          <div class="th-spdbox"><b id="th-spd">0</b><i>km/h</i></div>
+        </div>
+        <div class="th-acc" id="th-acc"><span class="th-bar"><i id="th-bar"></i></span><span class="th-acct" id="th-acct">定速</span></div>
+      </div>
       <span class="netspeed" id="netspeed" hidden></span>
     </div>
     <div class="cambar" id="cambar" aria-label="摄像头"></div>
@@ -2681,7 +2727,7 @@ body.settings-open { overflow:hidden; }
     <div class="hint" id="storage-budget" role="status"></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
     <div class="storage-row"><label for="storage-archive">盒子归档总上限</label><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
-    <div class="storage-nested"><div class="storage-row"><label for="storage-drive">其中：行车记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="行车记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div></div>
+    <div class="storage-nested"><div class="storage-row"><label for="storage-drive">其中：行车记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="行车记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row"><label for="retention-recentmax">其中：最近1小时监控上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="最近1小时监控上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div></div>
     <div class="storage-row"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
     <details class="storage-advanced"><summary>高级保护</summary>
       <div class="storage-row"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
@@ -2689,38 +2735,42 @@ body.settings-open { overflow:hidden; }
     <div class="updbtns"><button class="mini primary" id="storage-save" onclick="storageSave()" disabled>保存归档设置</button><button class="mini" onclick="storageLoad()">重新加载</button></div>
     <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
     </section><details class="storage-advanced" id="storage-usage" open><summary>实际用量 · 已用／上限</summary>
-      <div class="storage-usage"><div class="usage-row"><span>车机 U 盘</span><output id="storage-used-usb">—</output><meter id="storage-meter-usb" min="0" max="100" value="0" aria-label="车机 U 盘用量"></meter></div><div class="usage-row"><span>盒子归档</span><output id="storage-used-archive">—</output><meter id="storage-meter-archive" min="0" max="100" value="0" aria-label="盒子归档用量"></meter></div><div class="usage-row nested"><span>其中：行车记录</span><output id="storage-used-drive">—</output><meter id="storage-meter-drive" min="0" max="100" value="0" aria-label="行车记录用量"></meter></div><div class="usage-row free"><span>存储卡当前空闲</span><output id="storage-used-free">—</output></div></div>
+      <div class="storage-usage">
+        <div class="usage-row"><span>车机 U 盘</span><output id="storage-used-usb">—</output><meter id="storage-meter-usb" min="0" max="100" value="0" aria-label="车机 U 盘用量"></meter></div>
+        <div class="usage-row"><span>盒子归档</span><span class="usage-actions"><output id="storage-used-archive">—</output><button class="mini usage-clear" onclick="storageClearUsage('archive')">全部清空</button></span><meter id="storage-meter-archive" min="0" max="100" value="0" aria-label="盒子归档用量"></meter></div>
+        <div class="usage-row nested"><span>其中：行车记录</span><output id="storage-used-drive">—</output><meter id="storage-meter-drive" min="0" max="100" value="0" aria-label="行车记录用量"></meter></div>
+        <div class="usage-row nested"><span>其中：哨兵</span><span class="usage-actions"><output id="storage-used-sentry">—</output><button class="mini usage-clear" onclick="storageClearUsage('sentry')">清空</button></span></div>
+        <div class="usage-row nested"><span>其中：手动保存</span><span class="usage-actions"><output id="storage-used-saved">—</output><button class="mini usage-clear" onclick="storageClearUsage('saved')">清空</button></span></div>
+        <div class="usage-row nested"><span>其中：缓存目录</span><span class="usage-actions"><output id="storage-used-cache">—</output><button class="mini usage-clear" onclick="storageClearUsage('cache')">清空</button></span></div>
+        <div class="usage-row free"><span>存储卡当前空闲</span><output id="storage-used-free">—</output></div>
+        <div class="hint" id="storage-cleanup-status" role="status" aria-live="polite"></div>
+      </div>
     </details></div>
     <section class="storage-quota" id="storage-retention">
       <h3>保留时间与自动清理</h3>
-      <div class="hint">时间限制立即作用于后台清理，并同步写入 /etc/tesla-sentry.conf，重启后仍然生效。归档总上限填 0 时「最近1小时监控」仍按下面的窗口滚动清理，并可单独用体积上限控制（6 路 1 小时约 12GiB）。</div>
-      <div class="storage-row"><label for="retention-roll">最近1小时监控保留</label><input class="ninput" id="retention-roll" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟（0 = 不限制）</span></div>
-      <div class="storage-row"><label for="retention-recentmax">最近1小时监控体积上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">GiB（0 = 不限；6 路 1 小时约 12GiB）</span></div>
-      <div class="storage-row"><label for="retention-keep">空间紧张时最近必留</label><input class="ninput" id="retention-keep" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div>
-      <div class="storage-row"><label for="retention-days">哨兵 / 手动保存保留</label><input class="ninput" id="retention-days" type="number" min="0" max="3650" step="1" inputmode="numeric"><span class="retention-unit">天（0 = 不限）</span></div>
-      <div class="storage-row"><label for="retention-maxgb">单个分类体积上限</label><input class="ninput" id="retention-maxgb" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">GiB（0 = 不限）</span></div>
+      <div class="hint">时间限制立即作用于后台清理，并同步写入 /etc/tesla-sentry.conf，重启后仍然生效。</div>
+      <div class="storage-row note"><label for="retention-roll">最近1小时监控保留</label><input class="ninput" id="retention-roll" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟（0 = 不限制）</span></div>
+      <div class="storage-row note"><label for="retention-keep">空间紧张时最近必留</label><input class="ninput" id="retention-keep" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div>
+      <div class="storage-row note"><label for="retention-days">哨兵 / 手动保存保留</label><input class="ninput" id="retention-days" type="number" min="0" max="3650" step="1" inputmode="numeric"><span class="retention-unit">天（0 = 不限）</span></div>
       <div class="updbtns"><button class="mini primary" id="retention-save" onclick="storageSaveRetention()" disabled>保存时间限制</button></div>
       <div class="hint" id="retention-msg" role="status" aria-live="polite"></div>
     </section>
     <section class="storage-quota" id="storage-paths">
       <h3>存储路径</h3>
-      <div class="hint">程序本体在 /opt/tesla-sentry。视频存储建议放在 TF 卡（F50 默认 /dev/mmcblk1p1，挂载 /mnt/sdcard）。目录结构固定为「根目录/img/teslacam.img」和「根目录/archive/transcode_cache」。修改后需重启服务生效，现有录像不会自动迁移。</div>
-      <div class="storage-row"><label for="storage-path-root">视频存储根目录</label><input class="ninput" id="storage-path-root" type="text" spellcheck="false" style="min-width:320px"><span class="retention-unit">绝对路径</span></div>
-      <div class="storage-row"><label>车机 U 盘镜像</label><input class="ninput" id="storage-path-img" type="text" disabled style="min-width:360px"></div>
-      <div class="storage-row"><label>归档区目录</label><input class="ninput" id="storage-path-archive" type="text" disabled style="min-width:360px"></div>
-      <div class="storage-row"><label>转码缓存目录</label><input class="ninput" id="storage-path-transcode" type="text" disabled style="min-width:360px"></div>
-      <div class="storage-row"><label>程序缓存目录</label><input class="ninput" id="storage-path-cache" type="text" disabled style="min-width:360px"></div>
+      <div class="hint">程序本体在 /opt/tesla-sentry。视频存储建议放在 TF 卡（F50 默认 /dev/mmcblk1p1，挂载 /mnt/sdcard）。目录结构固定为「视频存储根目录/img/teslacam.img」和「视频存储根目录/archive/transcode_cache」。修改后需重启服务生效，现有录像不会自动迁移。</div>
+      <div class="storage-row path"><label for="storage-path-root">视频存储根目录</label><input class="ninput" id="storage-path-root" type="text" spellcheck="false"><span class="retention-unit">绝对路径</span></div>
+      <div class="storage-row path"><label>车机 U 盘镜像</label><input class="ninput" id="storage-path-img" type="text" disabled></div>
+      <div class="storage-row path"><label>归档区目录</label><input class="ninput" id="storage-path-archive" type="text" disabled></div>
+      <div class="storage-row path"><label>转码缓存目录</label><input class="ninput" id="storage-path-transcode" type="text" disabled></div>
+      <div class="storage-row path"><label>程序缓存目录</label><input class="ninput" id="storage-path-cache" type="text" disabled></div>
       <div class="updbtns"><button class="mini primary" id="paths-save" onclick="storageSavePaths()" disabled>保存路径设置</button></div>
       <div class="hint" id="paths-msg" role="status" aria-live="polite"></div>
     </section>
-    <section class="storage-danger" id="storage-cleanup">
-      <h3>一键清理</h3>
-      <div class="hint">以下操作会立即清空对应目录下的所有文件，不可恢复。目录结构本身会保留。</div>
-      <div class="storage-row"><label>转码缓存</label><button class="mini" id="cleanup-transcode" onclick="storageCleanup('transcode')">清空转码缓存（保留目录）</button><span class="retention-unit" id="cleanup-transcode-status"></span></div>
-      <div class="storage-row"><label>归档区录像</label><button class="mini" id="cleanup-archive" onclick="storageCleanup('archive')">清空归档区录像（保留目录）</button><span class="retention-unit" id="cleanup-archive-status"></span></div>
-    </section>
     <section class="storage-danger"><h3>调整车机 U 盘容量</h3><div class="storage-row"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
     <div class="hint">调整会清空车机 U 盘全部内容，盒子归档保留。容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div><button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button><div id="storage-resize-status"></div></section>
+    <section class="storage-danger"><h3>重启服务</h3>
+    <div class="hint">修改存储路径、容量分配后，点此重启服务让设置生效。重启期间网页会短暂断开（约 5 秒），刷新后自动恢复。</div>
+    <button class="mini" id="storage-restart" onclick="storageRestartService()">重启服务</button><div id="storage-restart-status"></div></section>
   </div>
   <div id="tab-brand" style="display:none">
     <div class="hint">标题栏左侧的图标与名称 · 改完立即生效, 访客刷新页面后看到新的; 名称留空即用默认「哨兵一剪梅」</div>
@@ -4069,7 +4119,11 @@ function previewStream(video, file, seconds, quality, signal, failed) {
       const response = await fetch('/api/playback-preview/part.mp4?' + params, {signal:request.signal});
       if (response.status === 503) {
         if (status) status.textContent = '仍在转码…';
-        if (performance.now() - waitingSince > 30000) throw Error('preview timeout');
+        if (performance.now() - waitingSince > 30000) {
+          const slow = Error('preview timeout');
+          slow.hint = '设备转码超时：请确认 FFmpeg 可用（安装脚本 --install-deps），或稍后重试';
+          throw slow;
+        }
         return;
       }
       if (!response.ok) {
@@ -4576,6 +4630,8 @@ function loadTelemetry(url, meta) {
   TEL_META = meta || {};
   const p = document.getElementById('tpanel'), card = document.getElementById('infocard');
   p.classList.remove('show', 'plain');
+  const hud = document.getElementById('telhud');
+  if (hud) hud.classList.remove('show');
   if (card) card.classList.remove('plain');
   p.classList.add('folded');   // 详细数据默认折叠
   document.getElementById('tp-fold').textContent = '展开详细数据 ⌄';
@@ -4621,6 +4677,8 @@ function loadTelemetry(url, meta) {
 function showPlainPanel() {
   const p = document.getElementById('tpanel'), card = document.getElementById('infocard');
   p.classList.add('show', 'plain');
+  const hud = document.getElementById('telhud');
+  if (hud) hud.classList.remove('show');
   if (card) card.classList.add('plain');
   ['time', 'city', 'street', 'camera'].forEach(k => {
     const el = document.querySelector('#ic-rows > div[data-k="' + k + '"]');
@@ -4652,6 +4710,26 @@ function renderHud(f) {
   st.title = '方向盘角度 ' + f[4] + '° · ' + (apv ? ((apNames[apv] || 'AP') + ' 已启动') : '自动驾驶未启动');
   const ang = Math.max(-400, Math.min(400, Number(f[4]) || 0));
   st.querySelector('svg').style.transform = 'rotate(' + ang + 'deg)';
+  // 右上角动画 HUD: 方向盘随角度转动, 转向灯闪烁, 加减速用中间向两侧伸出的能量条
+  const th = id => document.getElementById(id);
+  if (th('th-gear')) {
+    th('th-gear').textContent = f[1];
+    th('th-spd').textContent = Math.max(0, Math.round(f[2]));
+    th('th-bl').classList.toggle('on', f[6] === 1);
+    th('th-br').classList.toggle('on', f[6] === 2);
+    const wheel = th('th-wheel');
+    wheel.style.transform = 'rotate(' + ang + 'deg)';
+    wheel.classList.toggle('ap', !!apv);
+    const ay = Math.max(-4, Math.min(4, Number(f[12]) || 0));
+    const pct = Math.abs(ay) / 4 * 50;
+    th('th-bar').style.left = (ay >= 0 ? 50 : 50 - pct) + '%';
+    th('th-bar').style.width = pct + '%';
+    const state = ay > 0.35 ? 'acc' : ay < -0.35 ? 'dec' : '';
+    th('th-acc').className = 'th-acc' + (state ? ' ' + state : '');
+    th('th-acct').className = 'th-acct' + (state ? ' ' + state : '');
+    th('th-acct').textContent = state === 'acc' ? '加速' : state === 'dec' ? '减速' : '定速';
+    th('telhud').classList.add('show');
+  }
   const md = TEL_META || {};
   q('tp-rows').innerHTML =
     (md.est_lat && md.est_lon ? '<div><span class="k">坐标</span>' + md.est_lat + ', ' + md.est_lon + '</div>' : '') +
@@ -4868,6 +4946,11 @@ function addLiveCameras(previous) {
     cell.style.order = index;
   }
   cur = group.event;
+  // 监控模式每分钟换一段: 同步刷新右上角遥测 HUD (无 event.json 也能读到 SEI)
+  if (previous.key !== group.key) {
+    const metaFile = group.vids.find(file => file.cam === camSel) || group.vids[0];
+    if (metaFile) loadTelemetry(metaFile.url, cur.meta);
+  }
   grid.classList.toggle('one', channels.length === 1);
   updateDemand();
   renderInfo();
@@ -5536,6 +5619,7 @@ function closePlayer() {
   if (document.fullscreenElement === document.documentElement) document.exitFullscreen().catch(() => {});
   closePlayback(); liveMode = false;
   byId('vgrid').replaceChildren();
+  byId('telhud').classList.remove('show');
   byId('player').classList.remove('open', 'expanded', 'library-open');
   byId('livep').hidden = true;
   document.body.classList.remove('watching');
@@ -5667,7 +5751,8 @@ function playSave() {
 const STORAGE_HELP = {
   total: '设备识别到的文件系统容量。可分配空间已扣除其他文件和文件系统保留量。1 GiB = 1024³ 字节，通常小于存储卡包装上的 GB 数值。',
   usb: '车机可用的录像 U 盘容量，支持 1～128 GiB。调整会清空车机 U 盘中的全部内容，盒子归档保留；期间车机暂停录像。',
-  archive: '哨兵、手动保存、最近1小时监控和行车记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。填 0 表示不设上限：不再按总量清理，只保留磁盘空闲保护线兜底；此时「最近1小时监控」仍可单独按体积上限清理。',
+  archive: '哨兵、手动保存、最近1小时监控和行车记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。填 0 表示不设上限：不再按总量清理，只保留磁盘空闲保护线兜底。',
+  recentmax: '最近1小时监控单独的容量上限，已包含在归档总容量内。6 路 1 小时约 12 GiB；填 0 表示不限制，只按保留分钟数滚动清理。',
   drive: '行车记录的容量上限，已包含在归档总容量内。超限时从最旧行程开始清理，保留最新片段。',
   reserve: '空间不足时，希望清理后恢复的空闲容量，不创建独立分区。增大此值可能使旧归档更早被清理。',
   minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间。这条保护线不另占容量，不能高于安全预留空间。'
@@ -5768,6 +5853,10 @@ function storageRenderUsage() {
     meter.value = limit > 0 ? Math.min(100, used / 1073741824 / limit * 100) : 0;
   }
   document.getElementById('storage-used-free').textContent = (disk.free_bytes / 1073741824).toFixed(1) + ' GiB';
+  for (const [name, bytes] of [['sentry', disk.sentry_bytes], ['saved', disk.saved_bytes], ['cache', disk.cache_bytes]]) {
+    const output = document.getElementById('storage-used-' + name);
+    if (output) output.textContent = bytes == null ? '—' : (bytes / 1073741824).toFixed(2) + ' GiB';
+  }
 }
 document.querySelectorAll('#tab-storage input').forEach(input => input.addEventListener('input', storageRenderAllocation));
 async function storageLoad() {
@@ -5782,7 +5871,7 @@ async function storageLoad() {
     document.getElementById('storage-total').textContent = (data.disk.total_bytes / 1073741824).toFixed(1);
     document.getElementById('storage-usb').value = data.usb_gib;
     for (const [id, key] of [['archive','archive_gib'],['drive','drive_gib'],['reserve','free_target_gib'],['minimum','free_min_gib']]) document.getElementById('storage-' + id).value = data.values[key];
-    if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days'],['maxgb','box_max_gb']]) document.getElementById('retention-' + id).value = data.retention[key];
+    if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days']]) document.getElementById('retention-' + id).value = data.retention[key];
     if (data.paths) {
       document.getElementById('storage-path-root').value = data.paths.video_root;
       document.getElementById('storage-path-img').value = data.paths.img;
@@ -5836,7 +5925,7 @@ async function storageSave() {
   finally { storageDisable(false); }
 }
 async function storageSaveRetention() {
-  const ids = [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days'],['maxgb','box_max_gb']];
+  const ids = [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days']];
   const body = {};
   for (const [id, key] of ids) {
     const input = document.getElementById('retention-' + id);
@@ -5884,11 +5973,11 @@ async function storageSavePaths() {
     if (msg) msg.textContent = '保存失败：' + error.message;
   } finally { button.disabled = false; }
 }
-async function storageCleanup(target) {
-  const labels = {transcode:'转码缓存', archive:'归档区录像'};
+async function storageClearUsage(target) {
+  const labels = {sentry:'哨兵录像', saved:'手动保存', cache:'转码缓存目录', archive:'盒子归档（含哨兵、手动保存、最近1小时、行车记录与缓存）'};
   const label = labels[target] || target;
-  const status = document.getElementById('cleanup-' + target + '-status');
-  if (!confirm('即将清空' + label + '目录下的全部文件（保留目录本身），操作不可恢复。确认继续？')) return;
+  const status = document.getElementById('storage-cleanup-status');
+  if (!confirm('即将清空' + label + '中的全部文件（目录本身保留），操作不可恢复。确认继续？')) return;
   if (status) status.textContent = '清理中…';
   try {
     const response = await fetch('/api/admin/cleanup-' + target, {method:'POST'});
@@ -5899,6 +5988,23 @@ async function storageCleanup(target) {
     if (storageData) storageLoad();
   } catch (error) {
     if (status) status.textContent = '清理失败：' + error.message;
+  }
+}
+async function storageRestartService() {
+  const status = document.getElementById('storage-restart-status');
+  const button = document.getElementById('storage-restart');
+  if (!confirm('重启后网页会短暂断开（约 5 秒），存储路径与容量分配调整才会生效。确认重启？')) return;
+  if (button) button.disabled = true;
+  if (status) status.textContent = '正在重启服务…';
+  try {
+    const response = await fetch('/api/admin/restart', {method:'POST'});
+    const result = await response.json();
+    if (!result.ok) throw Error(result.msg || '重启失败');
+    if (status) status.textContent = '服务正在重启，请稍候刷新页面…';
+    setTimeout(() => { location.reload(); }, 6000);
+  } catch (error) {
+    if (status) status.textContent = '重启失败：' + error.message;
+    if (button) button.disabled = false;
   }
 }
 async function storageResize() {
@@ -8047,7 +8153,7 @@ def sys_status():
     if _SYS_CACHE["t"] and now - _SYS_CACHE["t"] < 3:
         return _SYS_CACHE["v"]
     d = {"cpu_temp": None, "cpu_pct": None, "mem_total": 0, "mem_used": 0,
-         "ffmpeg": ffmpeg_ready()}
+         "ffmpeg": _binary_ok(FFMPEG_BIN), "ffprobe": _binary_ok(FFPROBE_BIN)}
     # CPU 温度: thermal_zone 里取读数合理的热区最大值 (SoC 通常只有一两个)
     temps = []
     for thermal_file in glob.glob('/sys/class/thermal/thermal_zone*/temp'):
@@ -8511,8 +8617,8 @@ def prune_orphan_transcodes(force=False):
 # (8.4GB/小时), 一晚上就能吃掉几十 GB —— 这才是盒子镜像被撑爆的真正原因。
 # 现在让盒子副本按同样窗口滚动: 只留最近 ROLL_MIN 分钟, 更旧的从盒子归档里删掉。
 # 车机 U 盘那份完全不碰 (同步脚本只读 U 盘, 靠 exFAT 解析器读, 从不删源文件);
-# SentryClips / SavedClips 属于哨兵事件 + 用户主动保存的录像, 由下方 BOX_KEEP_DAYS /
-# BOX_MAX_GB 定期清理管理 (只删盒子归档副本, 车机 U 盘那份同样不碰)。
+# SentryClips / SavedClips 属于哨兵事件 + 用户主动保存的录像, 由下方 BOX_KEEP_DAYS
+# 定期清理管理 (只删盒子归档副本, 车机 U 盘那份同样不碰)。
 RECENT_ROLL_MIN = int(os.environ.get("TSF_RECENT_ROLL_MIN", "60"))    # 归档滚动窗口(分钟), 0=关闭滚动
 FREE_MIN_MB = int(os.environ.get("TSF_FREE_MIN_MB", "4096"))          # 剩余低于此值开始兜底清理
 FREE_TARGET_MB = int(os.environ.get("TSF_FREE_TARGET_MB", "10240"))   # 兜底清理到恢复到该值为止
@@ -8520,17 +8626,15 @@ RECENT_KEEP_MIN = int(os.environ.get("TSF_RECENT_KEEP_MIN", "60"))    # 兜底�
 RECENT_MAX_GB = int(os.environ.get("TSF_RECENT_MAX_GB", "12"))        # 「最近1小时监控」体积上限(GiB), 0=不限; 6 路 1 小时约 12GiB
 # 盒子侧 SentryClips / SavedClips 定期清理 (方案B):
 # 哨兵开着时 4 路约 8.4GB/小时, 哨兵事件 + 手动保存的录像只增不删, 盘迟早被吃满。
-# 车机 U 盘那份永远不碰, 这里只清盒子归档副本。三个维度独立生效:
+# 车机 U 盘那份永远不碰, 这里只清盒子归档副本。两个维度独立生效:
 #   1) 按天数: 只保留最新事件往前 N 天内的归档 (锚点是最新事件而不是当前时间,
 #      停车几天没新事件不会被误清空);
-#   2) 按体积: 单个分类超过 MAX_GB 就从最旧的开始删, 直到回到上限以内。
-#   3) 按总量: SentryClips / SavedClips / RecentClips 合计不超过 ARCHIVE_TOTAL_GB。
+#   2) 按总量: SentryClips / SavedClips / RecentClips 合计不超过 ARCHIVE_TOTAL_GB。
 #      64GB 卡 + 40GB 镜像时，录像归档总量控制在 30GB 左右并保留 10GB 可用余量。
 # 同步进行中的目录 (1 小时内有改动) 跳过, 非时间戳命名的目录一律不动。
 # 清掉的分类/事件会记入 /archive/.pruned 墓碑文件, 同步端读到就跳过 —— 否则车机 U 盘上
 # 还留着的旧事件会被当成新片段重抄回来, 形成 删除→重抄 的死循环 (和 RecentClips 同理)。
 BOX_KEEP_DAYS = int(os.environ.get("TSF_BOX_KEEP_DAYS", "14"))        # 盒子侧哨兵/手动保存保留天数, 0=不按天数清
-BOX_MAX_GB = int(os.environ.get("TSF_BOX_MAX_GB", "12"))              # 盒子侧单个分类体积上限(GB), 0=不按体积清
 ARCHIVE_TOTAL_GB = int(os.environ.get("TSF_ARCHIVE_TOTAL_GB", "30"))  # 所有录像归档总量上限(GB), 0=不按总量清
 DISK_GUARD_INTERVAL = max(30, int(os.environ.get("TSF_DISK_GUARD_INTERVAL", "60")))
 PRUNED_FILE = os.path.join(ARCHIVE, ".pruned")                        # 墓碑: 每行 "分类/事件名", 同步端跳过
@@ -8558,7 +8662,7 @@ if storage_resize.pending_recovery(IMG):
 
 def refresh_storage_settings():
     global ARCHIVE_TOTAL_GB, DRIVE_MAX_GB, FREE_MIN_MB, FREE_TARGET_MB
-    global RECENT_ROLL_MIN, RECENT_KEEP_MIN, RECENT_MAX_GB, BOX_KEEP_DAYS, BOX_MAX_GB
+    global RECENT_ROLL_MIN, RECENT_KEEP_MIN, RECENT_MAX_GB, BOX_KEEP_DAYS
     try:
         values = storage_allocation.load()
     except (OSError, ValueError, TypeError):
@@ -8573,7 +8677,6 @@ def refresh_storage_settings():
     RECENT_KEEP_MIN = int(saved['recent_keep_min'])
     RECENT_MAX_GB = int(saved['recent_max_gb'])
     BOX_KEEP_DAYS = int(saved['box_keep_days'])
-    BOX_MAX_GB = int(saved['box_max_gb'])
 
 
 refresh_storage_settings()
@@ -8592,6 +8695,14 @@ def storage_status():
     values = storage_allocation.load()
     disk = storage_allocation.snapshot(IMG, ARCHIVE, TRANSCODE_DIR)
     disk['usb_used_bytes'] = _exfat_used(IMG)
+    # 实际用量分项: 哨兵 / 手动保存 / 转码缓存目录 (盒子归档内)
+    for name, target in (('sentry_bytes', os.path.join(ARCHIVE, 'SentryClips')),
+                         ('saved_bytes', os.path.join(ARCHIVE, 'SavedClips')),
+                         ('cache_bytes', TRANSCODE_DIR)):
+        try:
+            disk[name] = storage_allocation.tree_usage(target)[0]
+        except OSError:
+            disk[name] = 0
     return dict(ok=True, values=values, disk=disk, revision=storage_allocation.revision(values, IMG),
                 job=storage_job(), usb_gib=disk['usb_bytes'] / storage_allocation.GIB,
                 retention=retention_values(),
@@ -8629,7 +8740,6 @@ def save_retention(body):
         'TSF_RECENT_KEEP_MIN': current['recent_keep_min'],
         'TSF_RECENT_MAX_GB': current['recent_max_gb'],
         'TSF_BOX_KEEP_DAYS': current['box_keep_days'],
-        'TSF_BOX_MAX_GB': current['box_max_gb'],
     })
     return dict(ok=True, values=current, conf_synced=written)
 
@@ -8673,13 +8783,11 @@ def save_paths(body):
                            transcode=transcode, cache=CACHE_ROOT))
 
 
-def cleanup_transcode():
-    """清空 TRANSCODE_DIR (转码缓存) 下的全部文件, 保留目录本身。"""
-    if not os.path.isdir(TRANSCODE_DIR):
-        return dict(ok=True, removed_files=0, freed_bytes=0)
+def _clear_tree(root):
+    """清空目录下的文件, 保留目录本身; 返回 (文件数, 字节数)。"""
     removed = 0
     freed = 0
-    for dirpath, dirnames, filenames in os.walk(TRANSCODE_DIR):
+    for dirpath, _dirnames, filenames in os.walk(root):
         for name in filenames:
             p = os.path.join(dirpath, name)
             try:
@@ -8688,35 +8796,88 @@ def cleanup_transcode():
                 removed += 1
             except OSError:
                 pass
+    return removed, freed
+
+
+def cleanup_category(category):
+    """清空单个录像分类 (可指定 SentryClips / SavedClips 等), 并给事件目录写墓碑。
+
+    不写墓碑的话, 车机 U 盘上的同名事件会被同步端当成新片段重抄回来。
+    """
+    base = os.path.join(ARCHIVE, category)
+    removed = 0
+    freed = 0
+    if not os.path.isdir(base):
+        return removed, freed
+    for entry in sorted(os.listdir(base)):
+        p = os.path.join(base, entry)
+        if entry.startswith('.') or os.path.islink(p):
+            continue
+        if os.path.isdir(p):
+            _tombstone(category, entry)
+            r, f = _clear_tree(p)
+            removed += r
+            freed += f
+            shutil.rmtree(p, ignore_errors=True)
+        elif os.path.isfile(p):
+            try:
+                freed += os.path.getsize(p)
+                os.remove(p)
+                removed += 1
+            except OSError:
+                pass
+    return removed, freed
+
+
+def cleanup_transcode():
+    """清空 TRANSCODE_DIR (转码缓存) 下的全部文件, 保留目录本身。"""
+    if not os.path.isdir(TRANSCODE_DIR):
+        return dict(ok=True, removed_files=0, freed_bytes=0)
+    removed, freed = _clear_tree(TRANSCODE_DIR)
     return dict(ok=True, removed_files=removed, freed_bytes=freed,
                 msg='已清空转码缓存 (%d 个文件, %.1f MiB)' % (removed, freed / (1 << 20)))
 
 
 def cleanup_archive():
-    """清空 ARCHIVE 下的录像分类 (CATS) 里的全部文件, 保留目录结构与非录像目录。
-
-    会保留 files/ (索引), transcode_cache/ (转码缓存), .skins/, boombox-queue/, boombox-done/
-    等非录像目录, 避免误删非视频数据。
-    """
+    """总清空盒子归档: 四个录像分类 + 转码缓存目录, 保留目录结构与索引文件。"""
     removed = 0
     freed = 0
     if not os.path.isdir(ARCHIVE):
         return dict(ok=True, removed_files=0, freed_bytes=0)
     for cat in CATS:
-        cat_dir = os.path.join(ARCHIVE, cat)
-        if not os.path.isdir(cat_dir):
-            continue
-        for dirpath, dirnames, filenames in os.walk(cat_dir):
-            for name in filenames:
-                p = os.path.join(dirpath, name)
-                try:
-                    freed += os.path.getsize(p)
-                    os.remove(p)
-                    removed += 1
-                except OSError:
-                    pass
+        r, f = cleanup_category(cat)
+        removed += r
+        freed += f
+    r, f = _clear_tree(TRANSCODE_DIR) if os.path.isdir(TRANSCODE_DIR) else (0, 0)
+    removed += r
+    freed += f
     return dict(ok=True, removed_files=removed, freed_bytes=freed,
-                msg='已清空归档录像 (%d 个文件, %.1f MiB)' % (removed, freed / (1 << 20)))
+                msg='已清空盒子归档 (%d 个文件, %.1f MiB)' % (removed, freed / (1 << 20)))
+
+
+def restart_service():
+    """重启本服务进程, 让存储路径/容量分配等启动期设置生效。
+
+    优先用 OpenWrt procd 的 init 脚本; 没有 init 脚本时退回 systemd。
+    调用方先返回 HTTP 响应, 再延迟执行, 避免网页在重启时拿不到结果。
+    """
+    commands = []
+    for name in ('tesla-viewer', 'tesla-sentry', 'sentry-viewer'):
+        path = '/etc/init.d/' + name
+        if os.path.isfile(path):
+            commands.append('%s restart' % path)
+    if shutil.which('systemctl'):
+        for unit in ('tesla-viewer', 'tesla-sentry', 'sentry-viewer'):
+            commands.append('systemctl restart ' + unit)
+    if not commands:
+        return False
+    try:
+        subprocess.Popen(['sh', '-c', 'sleep 1; ' + ' || '.join(commands)],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
 
 
 def storage_apply(body):
@@ -9187,23 +9348,6 @@ def roll_box():
                         shutil.rmtree(p, ignore_errors=True)
                         if not os.path.isdir(p):
                             n += 1
-        # 2) 按体积: 超出 BOX_MAX_GB 从最旧开始删
-        if BOX_MAX_GB > 0:
-            left = [(dt, e, p, sz) for dt, e, p, sz in sized if os.path.isdir(p)]
-            left.sort()
-            total = sum(sz for _, _, _, sz in left)
-            budget = BOX_MAX_GB * (1 << 30)
-            for dt, e, p, sz in left:
-                if total <= budget:
-                    break
-                if cat + '/' + e in locks:
-                    continue
-                if not _tombstone(cat, e):
-                    continue
-                shutil.rmtree(p, ignore_errors=True)
-                if not os.path.isdir(p):
-                    total -= sz
-                    n += 1
     return n
 
 
@@ -10550,9 +10694,19 @@ def preview_cores():
             except (ValueError, OSError):
                 continue
         hot = max(readings, default=None)
-        rising = (hot is not None and _thermal_value is not None and elapsed <= 2
+        if hot is None:
+            # 设备没有可读的 thermal_zone（部分固件权限受限）不等于过热：
+            # 以前会一直 hold，结果缩略图之外的所有转码都被静默禁用。
+            # 读不到温度时按保守档位运行，不要永久停掉转码。
+            _thermal_hold = False
+            _thermal_recovering = False
+            _thermal_cool_since = None
+            _thermal_mode = 2
+            _thermal_last, _thermal_value = now, None
+            return _thermal_mode
+        rising = (_thermal_value is not None and elapsed <= 2
                   and hot >= 65 and hot - _thermal_value >= 3 * elapsed)
-        if hot is None or hot >= 78:
+        if hot >= 78:
             _thermal_hold = True
             _thermal_recovering = False
         if _thermal_hold:
@@ -10928,7 +11082,7 @@ def playback_variant_info(fp, qv):
     """给页面的转码状态：ready / pending(带 percent) / cooling / failed(带原因与建议)。"""
     if _variant_ready(fp, qv):
         return {"state": "ready", "percent": 100}
-    if not ffmpeg_ready():
+    if not _binary_ok(FFMPEG_BIN):
         return {"state": "failed", "percent": 0,
                 "error": "设备未配置 FFmpeg", "hint": transcode_hint("ffmpeg not found")}
     state = transcode_info(fp, qv)
@@ -13293,7 +13447,7 @@ class Handler(BaseHTTPRequestHandler):
             ss_t = max(0.0, min(float(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("t", ["1"])[0]), 3600.0))
         except ValueError:
             ss_t = 1.0
-        if not ffmpeg_ready():
+        if not _binary_ok(FFMPEG_BIN):
             self.send_response(503)
             self.send_header("X-TSF-Reason", "ffmpeg-missing")
             self.send_header("Content-Length", "0")
@@ -13576,21 +13730,34 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(result)
             return
-        if path == "/api/admin/cleanup-transcode":
+        if path.startswith("/api/admin/cleanup-"):
+            target = path[len("/api/admin/cleanup-"):]
             try:
-                result = cleanup_transcode()
+                if target in ("transcode", "cache"):
+                    result = cleanup_transcode()
+                elif target == "archive":
+                    result = cleanup_archive()
+                elif target in ("sentry", "saved"):
+                    category = "SentryClips" if target == "sentry" else "SavedClips"
+                    removed, freed = cleanup_category(category)
+                    result = dict(ok=True, removed_files=removed, freed_bytes=freed,
+                                  msg="已清空 %s（%d 个文件, %.1f MiB）" % (
+                                      "哨兵录像" if target == "sentry" else "手动保存",
+                                      removed, freed / (1 << 20)))
+                else:
+                    self._json({"ok": False, "msg": "未知清理目标"}, 400)
+                    return
             except OSError as exc:
                 self._json({"ok": False, "msg": str(exc)}, 500)
                 return
             self._json(result)
             return
-        if path == "/api/admin/cleanup-archive":
-            try:
-                result = cleanup_archive()
-            except OSError as exc:
-                self._json({"ok": False, "msg": str(exc)}, 500)
+        if path == "/api/admin/restart":
+            ok = restart_service()
+            if ok:
+                self._json({"ok": True, "msg": "服务正在重启"})
                 return
-            self._json(result)
+            self._json({"ok": False, "msg": "未找到 tesla-viewer 服务，无法自动重启"}, 500)
             return
         if path == "/api/playback/quality":
             body = self._read_json()
