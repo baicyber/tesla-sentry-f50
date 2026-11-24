@@ -84,7 +84,7 @@ def refresh_storage_settings():
         FREE_MIN_MB = int(storage_allocation.load()['free_min_gib'] * 1024)
     except (OSError, ValueError, TypeError):
         pass
-    # 网页里设置的「最近1小时监控」窗口优先于静态 conf, 与 sentry-viewer.py 保持一致
+    # 网页里设置的「最近1小时记录」窗口优先于静态 conf, 与 sentry-viewer.py 保持一致
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as stream:
             saved = json.load(stream)
@@ -508,7 +508,13 @@ def scan(exfat, cats=CATS):
             except Exception:
                 continue
             for e in items:
-                if e.is_dir or not e.name.lower().endswith(".mp4") or e.size <= 0 or not e.valid:
+                if e.is_dir or e.size <= 0 or not e.valid:
+                    continue
+                if e.name.lower() == "event.json":
+                    # 平铺目录里的 event.json: 复制时跟随每个分钟分组各存一份
+                    found[(cat, "_event", "event.json")] = e
+                    continue
+                if not e.name.lower().endswith(".mp4"):
                     continue
                 m = TS_RE.match(e.name)
                 group = m.group(1) if m else "_misc"
@@ -662,6 +668,8 @@ def do_sync(exfat, state, quiet=False, cats=CATS, recent=None):
     copied = 0
     bytes_ = 0
     for (cat, ev, name), e in cur.items():
+        if ev == "_event":
+            continue            # 平铺目录的 event.json 由片段复制时顺带写入
         if "%s/%s" % (cat, ev) in pruned:
             continue            # 已被盒子侧定期清理, 不再重抄
         if cut is not None and cat == "RecentClips":
@@ -701,6 +709,12 @@ def do_sync(exfat, state, quiet=False, cats=CATS, recent=None):
             bytes_ += n
             if recent_check and cat == "RecentClips":
                 recent.publish_archived(cur, ev)
+                ev_entry = cur.get((cat, "_event", "event.json"))
+                if ev_entry is not None:
+                    try:
+                        copy_entry(exfat, ev_entry, safe_dest(cat, ev, "event.json"))
+                    except Exception:
+                        pass
             log("已同步 %s (%d KB)" % (key, n // 1024))
         except ClipNotReady:
             new_pending[key] = sig

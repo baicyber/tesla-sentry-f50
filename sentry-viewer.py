@@ -334,7 +334,7 @@ def lang_from_accept(hdr, default="zh"):
     return default
 
 CAT_NAMES = {"SentryClips": "哨兵告警", "SavedClips": "手动保存",
-             "RecentClips": "最近1小时监控", "DriveClips": "行车记录"}
+             "RecentClips": "最近1小时记录", "DriveClips": "行车记录"}
 for language, recent_label in (
     ("de", "Letzte Stunde"),
     ("en", "Last hour"),
@@ -347,7 +347,7 @@ for language, recent_label in (
     ("ru", "Последний час"),
 ):
     LANG_TABLE[language].update({"最近1小时": recent_label, "1小时监控": recent_label,
-                                  "最近1小时监控": recent_label})
+                                  "最近1小时记录": recent_label})
 # 注入页面用的 JSON (预生成, 避免每次请求都序列化)
 I18N_JS = json.dumps(LANG_TABLE, ensure_ascii=False, separators=(",", ":"))
 LANG_JS = json.dumps([[c, n] for c, n in LANG_NAMES], ensure_ascii=False, separators=(",", ":"))
@@ -359,23 +359,74 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.50"
+APP_VERSION = "2.8.51"
 VIEWER_BUILD = APP_VERSION
-OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
-_OTA_DEFAULT = ",".join([
-    "https://ghfast.top/https://raw.githubusercontent.com/%s/main" % OTA_REPO,       # 1.1s
-    "https://gcore.jsdelivr.net/gh/%s@main" % OTA_REPO,                              # 1.1s
-    "https://ghproxy.net/https://raw.githubusercontent.com/%s/main" % OTA_REPO,      # 2.4s
-    "https://gh-proxy.org/https://raw.githubusercontent.com/%s/main" % OTA_REPO,     # 3.2s
-    "https://gh-proxy.com/https://raw.githubusercontent.com/%s/main" % OTA_REPO,     # 时通时断, 兜底
-    "https://raw.githubusercontent.com/%s/main" % OTA_REPO,                          # 海外线路
-    "https://cdn.jsdelivr.net/gh/%s@main" % OTA_REPO,                                # 海外线路
-])
-OTA_SOURCES = [s.strip().rstrip("/") for s in os.environ.get("TSF_OTA_SOURCES", _OTA_DEFAULT).split(",") if s.strip()]
+OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
+OTA_DEFAULT_REPO = OTA_REPOS[0]
+OTA_DEFAULT_BRANCH = "main"
 OTA_BACKUP = os.environ.get("TSF_OTA_BACKUP", "/opt/tesla-sentry/sentry-viewer.bak.py")
 OTA_STATE = os.environ.get("TSF_OTA_STATE", "/opt/tesla-sentry/ota-state.json")
+OTA_TARGET = os.path.join(os.path.dirname(OTA_STATE) or ".", "ota-target.json")
 OTA_SRC_PREF = os.path.join(os.path.dirname(OTA_STATE) or ".", "ota-src.json")  # 记住上次最快的源
-_OTA_CACHE = {"t": 0.0, "data": None}
+_OTA_CACHE = {"t": 0.0, "data": None, "key": ""}
+_OTA_BR = {"t": 0.0, "repo": "", "data": []}
+_OTA_TGT = {}
+
+
+def ota_target():
+    """当前更新目标 (仓库 / 分支)。优先环境变量, 其次 ota-target.json, 最后默认值"""
+    if _OTA_TGT:
+        return _OTA_TGT
+    repo = os.environ.get("TSF_OTA_REPO", "").strip()
+    branch = os.environ.get("TSF_OTA_BRANCH", "").strip()
+    try:
+        with open(OTA_TARGET, encoding="utf-8") as f:
+            j = json.load(f) or {}
+        repo = repo or str(j.get("repo") or "").strip()
+        branch = branch or str(j.get("branch") or "").strip()
+    except Exception:
+        pass
+    _OTA_TGT.update({"repo": repo or OTA_DEFAULT_REPO, "branch": branch or OTA_DEFAULT_BRANCH})
+    return _OTA_TGT
+
+
+def ota_set_target(repo, branch):
+    """切换更新仓库与分支; 保存后清空清单缓存"""
+    repo = (repo or "").strip().strip("/")
+    branch = (branch or "").strip()
+    if not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
+        return False, "仓库地址格式应为 owner/repo"
+    if not branch or not re.match(r"^[A-Za-z0-9_.\-/]+$", branch):
+        return False, "分支名不合法"
+    try:
+        os.makedirs(os.path.dirname(OTA_TARGET) or ".", exist_ok=True)
+        with open(OTA_TARGET + ".tmp", "w", encoding="utf-8") as f:
+            json.dump({"repo": repo, "branch": branch}, f)
+        os.replace(OTA_TARGET + ".tmp", OTA_TARGET)
+    except OSError as ex:
+        return False, "写入失败: %s" % str(ex)[:80]
+    _OTA_TGT.clear()
+    _OTA_TGT.update({"repo": repo, "branch": branch})
+    _OTA_CACHE.update({"t": 0.0, "data": None, "key": ""})
+    return True, "更新源已切换为 %s@%s" % (repo, branch)
+
+
+def _ota_sources():
+    """按当前仓库/分支生成并发竞速的下载源"""
+    env = os.environ.get("TSF_OTA_SOURCES", "").strip()
+    if env:
+        return [s.strip().rstrip("/") for s in env.split(",") if s.strip()]
+    t = ota_target()
+    repo, branch = t["repo"], t["branch"]
+    return [
+        "https://ghfast.top/https://raw.githubusercontent.com/%s/%s" % (repo, branch),
+        "https://gcore.jsdelivr.net/gh/%s@%s" % (repo, branch),
+        "https://ghproxy.net/https://raw.githubusercontent.com/%s/%s" % (repo, branch),
+        "https://gh-proxy.org/https://raw.githubusercontent.com/%s/%s" % (repo, branch),
+        "https://gh-proxy.com/https://raw.githubusercontent.com/%s/%s" % (repo, branch),
+        "https://raw.githubusercontent.com/%s/%s" % (repo, branch),
+        "https://cdn.jsdelivr.net/gh/%s@%s" % (repo, branch),
+    ]
 
 
 def _http_get(url, timeout=10, limit=8 << 20):
@@ -386,7 +437,7 @@ def _http_get(url, timeout=10, limit=8 << 20):
 
 def _src_order():
     """上次成功的源排最前 (竞速同时成功时优先选它)"""
-    order = list(OTA_SOURCES)
+    order = list(_ota_sources())
     try:
         with open(OTA_SRC_PREF, encoding="utf-8") as f:
             good = json.load(f).get("last_good")
@@ -487,7 +538,8 @@ def _api_manifest(timeout=5):
     """GitHub API 实时读 version.json (返回 base64 内容), 不受 raw/镜像 CDN 缓存影响。
     国内不可达时静默失败, 由调用方退回原有的多源竞速结果。"""
     try:
-        url = "https://api.github.com/repos/%s/contents/version.json?ref=main" % OTA_REPO
+        t = ota_target()
+        url = "https://api.github.com/repos/%s/contents/version.json?ref=%s" % (t["repo"], urllib.parse.quote(t["branch"]))
         req = urllib.request.Request(url, headers={
             "User-Agent": "tsf-ota/" + APP_VERSION,
             "Accept": "application/vnd.github+json",
@@ -502,7 +554,9 @@ def _api_manifest(timeout=5):
 def ota_latest(force=False):
     """读仓库 version.json (含版本号/日期/更新说明), 并发竞速多个源, 结果缓存 10 分钟"""
     now = time.time()
-    if not force and _OTA_CACHE["data"] and now - _OTA_CACHE["t"] < 600:
+    tgt = ota_target()
+    key = "%s@%s" % (tgt["repo"], tgt["branch"])
+    if not force and _OTA_CACHE["data"] and _OTA_CACHE.get("key") == key and now - _OTA_CACHE["t"] < 600:
         return _OTA_CACHE["data"]
 
     def ok(raw):
@@ -568,8 +622,29 @@ def ota_latest(force=False):
     else:
         j = raced
     j["_base"] = base
-    _OTA_CACHE.update({"t": now, "data": j})
+    _OTA_CACHE.update({"t": now, "data": j, "key": key})
     return j
+
+
+def ota_branches(repo=""):
+    """列 GitHub 仓库分支 (供更新页选择); 失败返回空列表"""
+    r = (repo or ota_target()["repo"]).strip()
+    if not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", r):
+        return []
+    now = time.time()
+    if _OTA_BR["data"] and _OTA_BR["repo"] == r and now - _OTA_BR["t"] < 600:
+        return _OTA_BR["data"]
+    for u in ("https://api.github.com/repos/%s/branches?per_page=100" % r,
+              "https://ghfast.top/https://api.github.com/repos/%s/branches?per_page=100" % r):
+        try:
+            j = json.loads(_http_get(u, timeout=6, limit=1 << 20).decode("utf-8", "replace"))
+            out = [str(b.get("name")) for b in j if isinstance(b, dict) and b.get("name")]
+            if out:
+                _OTA_BR.update({"t": now, "repo": r, "data": out})
+                return out
+        except Exception:
+            continue
+    return []
 
 
 def ota_check(force=False):
@@ -1223,9 +1298,9 @@ PLAYBACK_QUALITIES = ("orig", "720p", "480p", "360p")
 
 # 时间/保留策略: 默认值来自 /etc/tesla-sentry.conf 或环境变量, 网页保存后以 settings.json 为准
 RETENTION_FIELDS = {
-    "recent_roll_min": (0, 1440),   # 「最近1小时监控」滚动窗口(分钟), 0=不按时间滚动
+    "recent_roll_min": (0, 1440),   # 「最近1小时记录」滚动窗口(分钟), 0=不按时间滚动
     "recent_keep_min": (0, 1440),   # 空间兜底清理时最近必留(分钟)
-    "recent_max_gb": (0, 4096),     # 「最近1小时监控」体积上限(GiB), 0=不限; 归档不限量时仍独立生效
+    "recent_max_gb": (0, 4096),     # 「最近1小时记录」体积上限(GiB), 0=不限; 归档不限量时仍独立生效
     "box_keep_days": (0, 3650),     # 哨兵/手动保存按天数保留, 0=不按天数清理
 }
 
@@ -1607,37 +1682,50 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .pscroll { flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:2px 14px 14px; display:flex; flex-direction:column; gap:12px; }
 .pscroll > * { flex:0 0 auto; }
 .vwrap { position:relative; border-radius:14px; overflow:hidden; max-width:980px; width:100%; margin:0 auto; background:var(--stage); }
-.netspeed { position:absolute; right:10px; bottom:10px; z-index:6; padding:3px 9px; border-radius:999px;
-  background:rgba(10,13,18,.72); color:#dfe6ee; font-size:12px; font-variant-numeric:tabular-nums;
-  pointer-events:none; backdrop-filter:blur(4px); }
-/* 右上角动画遥测 HUD: 方向盘 / 转向灯 / 加减速 / 车速 (行车记录与最近1小时监控没有 event.json 也能看) */
-.telhud { position:absolute; right:10px; top:10px; z-index:7; display:none; width:154px; padding:8px 10px 7px;
-  border-radius:14px; background:rgba(10,14,20,.62); border:1px solid rgba(255,255,255,.16);
-  color:#eef3f8; backdrop-filter:blur(8px); pointer-events:none;
-  box-shadow:0 6px 20px rgba(0,0,0,.35); font-variant-numeric:tabular-nums; }
-.telhud.show { display:block; animation:thIn .28s ease-out; }
+.netspeed { padding:2px 8px; border-radius:999px; background:var(--panel2); border:1px solid var(--line);
+  color:var(--text); font-variant-numeric:tabular-nums; }
+.netspeed[hidden] { display:none; }
+.netspeed .netk { color:var(--muted); font-weight:600; margin-right:4px; }
+/* 视频上方的动画遥测 HUD: 方向盘 / 转向灯 / 加减速 / 车速 (居中一条, 手机端同样单行) */
+.telhud { display:none; align-items:center; justify-content:center; gap:14px; flex-wrap:nowrap;
+  width:max-content; max-width:100%; margin:8px auto 2px; padding:7px 14px 6px;
+  border-radius:12px; background:var(--panel2); border:1px solid var(--line);
+  color:var(--text); overflow:hidden; font-variant-numeric:tabular-nums; }
+.telhud.show { display:flex; animation:thIn .28s ease-out; }
 @keyframes thIn { from { opacity:0; transform:translateY(-6px) scale(.96) } to { opacity:1; transform:none } }
-.th-top { display:flex; align-items:center; justify-content:center; gap:14px; }
-.th-sig { display:inline-flex; opacity:.26; color:#9aa4ae; }
-.th-sig svg { width:22px; height:22px; display:block; }
+.th-top { display:flex; align-items:center; justify-content:center; gap:8px; }
+.th-sig { display:inline-flex; opacity:.26; color:var(--muted); }
+.th-sig svg { width:21px; height:21px; display:block; }
 .th-sig.on { opacity:1; color:#ffb340; animation:tpBlink 1.05s steps(1,end) infinite; }
 .th-gear { min-width:22px; height:22px; padding:0 4px; border-radius:11px; background:#34c759; color:#fff;
   font-size:12px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
-.th-mid { display:flex; align-items:center; gap:10px; margin-top:2px; }
-.th-wheel { width:52px; height:52px; flex:none; color:#dfe6ee; transition:transform .1s linear; }
+.th-mid { display:flex; align-items:center; gap:8px; }
+.th-wheel { width:42px; height:42px; flex:none; color:var(--text); transition:transform .1s linear; }
 .th-wheel.ap { color:#5aa2ff; filter:drop-shadow(0 0 6px rgba(90,162,255,.55)); }
 .th-spdbox { display:flex; align-items:baseline; gap:2px; }
-.th-spdbox b { font-size:30px; line-height:1; font-weight:800; letter-spacing:-.5px; }
-.th-spdbox i { font-size:10.5px; font-style:normal; color:#aab4bf; }
-.th-acc { display:flex; align-items:center; gap:5px; margin-top:4px; height:16px; }
-.th-bar { position:relative; flex:1; height:5px; border-radius:3px; background:rgba(255,255,255,.16); overflow:hidden; }
+.th-spdbox b { font-size:25px; line-height:1; font-weight:800; letter-spacing:-.5px; }
+.th-spdbox i { font-size:10.5px; font-style:normal; color:var(--muted); }
+.th-acc { display:flex; align-items:center; gap:5px; height:16px; min-width:96px; }
+.th-bar { position:relative; flex:1; height:5px; border-radius:3px; background:var(--line2); overflow:hidden; }
 .th-bar i { position:absolute; left:50%; top:0; bottom:0; width:0; border-radius:3px; background:#8e99a5;
   transition:left .12s linear, width .12s linear, background .18s; }
 .th-acc.acc .th-bar i { background:#34c759; }
 .th-acc.dec .th-bar i { background:#ff453a; }
-.th-acct { font-size:10.5px; color:#aab4bf; min-width:30px; text-align:right; }
+.th-acct { font-size:10.5px; color:var(--muted); min-width:30px; text-align:right; }
 .th-acct.acc { color:#34c759; }
 .th-acct.dec { color:#ff6b60; }
+@media (max-width:640px) {
+  .telhud { gap:8px; padding:5px 9px; border-radius:10px; margin:6px auto 2px; }
+  .telhud .th-top { gap:6px; }
+  .telhud .th-sig svg { width:17px; height:17px; }
+  .telhud .th-gear { min-width:19px; height:19px; font-size:11px; border-radius:9px; }
+  .telhud .th-wheel { width:30px; height:30px; }
+  .telhud .th-spdbox b { font-size:19px; }
+  .telhud .th-spdbox i { font-size:9px; }
+  .telhud .th-acc { min-width:56px; height:14px; }
+  .telhud .th-acct { font-size:9.5px; min-width:22px; }
+  .system-status .netspeed { font-size:10.5px; padding:1px 6px; }
+}
 @media (prefers-reduced-motion: reduce) { .telhud.show { animation:none } .th-sig.on { animation:none } }
 .vcell .cload { flex-wrap:wrap; text-align:center; padding:8px; word-break:break-word; }
 .vcell .cload .chint { flex-basis:100%; max-width:92%; font-size:11px; line-height:1.45; color:#9aa4ae; }
@@ -1860,7 +1948,30 @@ select.ninput { cursor:pointer; }
 .fm-bar .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
 .fm-bar button { background:var(--panel2); border:1px solid var(--line2); color:var(--text); border-radius:8px; padding:7px 10px; font-size:12px; cursor:pointer; }
 .fm-bar button:hover { border-color:var(--accent); color:var(--accent); }
-.fm-bar button.fm-danger { color:var(--accent); border-color:var(--accent); }
+.fm-bar button.fm-danger { color:#e8443f; border-color:#e8443f; }
+.fm-bar button.fm-danger:hover { background:#e8443f; color:#fff; border-color:#e8443f; }
+.fm-tool { display:inline-flex; align-items:center; gap:4px; background:var(--panel2); border:1px solid var(--line2); color:var(--text); border-radius:8px; padding:7px 10px; font-size:12px; line-height:1.2; cursor:pointer; margin:0 0 10px; user-select:none; }
+.fm-tool:hover { border-color:var(--accent); color:var(--accent); }
+.fm-tool .ic { width:13px; height:13px; }
+/* 移动/复制目标目录树 */
+.fm-picker { position:fixed; inset:0; z-index:420; background:rgba(4,8,12,.62); display:flex; align-items:center; justify-content:center; padding:18px; }
+.fm-picker[hidden] { display:none; }
+.fm-picker-box { width:min(520px,100%); max-height:min(78vh,640px); display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line2); border-radius:14px; overflow:hidden; box-shadow:0 18px 50px rgba(0,0,0,.45); }
+.fm-picker-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 16px; border-bottom:1px solid var(--line); }
+.fm-picker-head b { font-size:14px; }
+.fm-picker-x { background:none; border:none; color:var(--muted); font-size:16px; line-height:1; cursor:pointer; padding:4px; }
+.fm-picker-path { padding:8px 16px; font-size:12px; color:var(--muted); border-bottom:1px solid var(--line); word-break:break-all; }
+.fm-picker-tree { flex:1; overflow:auto; padding:8px 10px; font-size:13px; -webkit-overflow-scrolling:touch; }
+.fm-pnode { display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:8px; cursor:pointer; }
+.fm-pnode:hover { background:var(--panel2); }
+.fm-pnode.sel { background:var(--panel2); box-shadow:inset 0 0 0 1px var(--accent); color:var(--accent); }
+.fm-pnode .tw { flex:0 0 16px; text-align:center; color:var(--muted); font-size:10px; }
+.fm-pnode .nm { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fm-pchildren[hidden] { display:none; }
+.fm-picker-foot { display:flex; justify-content:flex-end; gap:8px; padding:12px 16px; border-top:1px solid var(--line); }
+.fm-picker-foot button { background:var(--panel2); border:1px solid var(--line2); color:var(--text); border-radius:8px; padding:7px 12px; font-size:12.5px; cursor:pointer; }
+.fm-picker-foot button.fm-go { background:var(--accent); border-color:var(--accent); color:#fff; }
+.fm-picker-foot button[disabled] { opacity:.5; cursor:not-allowed; }
 .fm-bar button.fm-go { background:var(--accent); border-color:var(--accent); color:#fff; }
 .fm-bar button.fm-go:hover { color:#fff; }
 .fm-bar .fm-dest-input { flex:1; min-width:130px; background:var(--bg); border:1px solid var(--line2); border-radius:8px; color:var(--text); padding:7px 9px; font-size:12px; outline:none; }
@@ -2334,6 +2445,9 @@ body.settings-open { overflow:hidden; }
 .storage-danger { margin-top:26px; padding-top:22px; border-top:1px solid var(--line); position:relative; }
 #storage-retention { margin-top:26px; }
 #storage-retention .storage-row { max-width:420px; }
+#storage-retention .storage-nested .storage-row { max-width:408px; }
+#storage-paths > summary { font-size:17px; color:var(--text); font-weight:600; padding:0 0 18px; cursor:pointer; list-style-position:inside; }
+#storage-paths[open] > summary { padding-bottom:12px; }
 .retention-unit { color:var(--muted); font-size:12.5px; flex:0 0 auto; }
 /* 备注列常被挤成 28px：保留时间/存储路径改成按内容自适应宽度 */
 #tab-storage .storage-row.note { grid-template-columns:minmax(0,1fr) minmax(68px,96px) minmax(0,auto); max-width:none; }
@@ -2555,7 +2669,7 @@ body.settings-open { overflow:hidden; }
 <symbol id="i-brand" viewBox="0 0 24 24"><path d="M12 3.6l2.35 4.05 4.55.7-3.3 3.2.8 4.55L12 13.95 7.6 16.1l.8-4.55-3.3-3.2 4.55-.7z"/></symbol>
 </defs></svg>
 <header class="app-header"><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">哨兵一剪梅</span></h1><span class="sub" id="stat"></span>
-<div class="system-status" aria-label="系统状态"><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
+<div class="system-status" aria-label="系统状态"><span class="netspeed" id="netspeed" hidden></span><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
 <div class="ffwarn" id="ffwarn" role="status" hidden><b>FFmpeg 未配置</b><span>列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。F50 请执行 <code>apk add ffmpeg</code>，然后运行 <code>install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。</span></div>
 <nav class="tabs" id="tabs" aria-label="录像分类"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button><button id="gear" title="设置" aria-expanded="false" aria-controls="panel"><svg class="ic"><use href="#i-gear"/></svg><span>设置</span></button></header>
 <main class="library-page">
@@ -2614,25 +2728,24 @@ body.settings-open { overflow:hidden; }
             <span class="tp-c st" id="tp-st" title="方向盘角度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/><path d="M3.2 10.5h6M14.8 10.5h6M12 14.6V21"/></svg></span>
           </span>
         </div>
+        <div class="telhud" id="telhud" aria-hidden="true">
+          <div class="th-top">
+            <span class="th-sig" id="th-bl" title="左转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M17 12H8.2M12.2 7.3 7.5 12l4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="th-gear" id="th-gear">D</span>
+            <span class="th-sig" id="th-br" title="右转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M7 12h8.8M11.8 7.3 16.5 12l-4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          </div>
+          <div class="th-mid">
+            <svg class="th-wheel" id="th-wheel" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" aria-hidden="true"><circle cx="32" cy="32" r="21"/><circle cx="32" cy="32" r="5" fill="currentColor" stroke="none"/><path d="M11 32h13M40 32h13M32 38v13"/></svg>
+            <div class="th-spdbox"><b id="th-spd">0</b><i>km/h</i></div>
+          </div>
+          <div class="th-acc" id="th-acc"><span class="th-bar"><i id="th-bar"></i></span><span class="th-acct" id="th-acct">定速</span></div>
+        </div>
         <button class="tp-fold" id="tp-fold" onclick="toggleTelRows()">收起详细数据 ⌃</button>
         <div class="tp-rows" id="tp-rows"></div>
     </div>
     <div class="vwrap">
       <button type="button" class="startmask" id="startmask">▶ 轻触开始同步播放</button>
       <div class="vgrid" id="vgrid"></div>
-      <div class="telhud" id="telhud" aria-hidden="true">
-        <div class="th-top">
-          <span class="th-sig" id="th-bl" title="左转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M17 12H8.2M12.2 7.3 7.5 12l4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="th-gear" id="th-gear">D</span>
-          <span class="th-sig" id="th-br" title="右转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M7 12h8.8M11.8 7.3 16.5 12l-4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-        </div>
-        <div class="th-mid">
-          <svg class="th-wheel" id="th-wheel" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" aria-hidden="true"><circle cx="32" cy="32" r="21"/><circle cx="32" cy="32" r="5" fill="currentColor" stroke="none"/><path d="M11 32h13M40 32h13M32 38v13"/></svg>
-          <div class="th-spdbox"><b id="th-spd">0</b><i>km/h</i></div>
-        </div>
-        <div class="th-acc" id="th-acc"><span class="th-bar"><i id="th-bar"></i></span><span class="th-acct" id="th-acct">定速</span></div>
-      </div>
-      <span class="netspeed" id="netspeed" hidden></span>
     </div>
     <div class="cambar" id="cambar" aria-label="摄像头"></div>
     <section class="transport" aria-label="回放控制">
@@ -2727,7 +2840,7 @@ body.settings-open { overflow:hidden; }
     <div class="hint" id="storage-budget" role="status"></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
     <div class="storage-row"><label for="storage-archive">盒子归档总上限</label><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
-    <div class="storage-nested"><div class="storage-row"><label for="storage-drive">其中：行车记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="行车记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row"><label for="retention-recentmax">其中：最近1小时监控上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="最近1小时监控上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div></div>
+    <div class="storage-nested"><div class="storage-row"><label for="storage-drive">其中：行车记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="行车记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row"><label for="retention-recentmax">其中：最近1小时记录上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="最近1小时记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div></div>
     <div class="storage-row"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
     <details class="storage-advanced"><summary>高级保护</summary>
       <div class="storage-row"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
@@ -2747,30 +2860,34 @@ body.settings-open { overflow:hidden; }
       </div>
     </details></div>
     <section class="storage-quota" id="storage-retention">
-      <h3>保留时间与自动清理</h3>
-      <div class="hint">时间限制立即作用于后台清理，并同步写入 /etc/tesla-sentry.conf，重启后仍然生效。</div>
-      <div class="storage-row note"><label for="retention-roll">最近1小时监控保留</label><input class="ninput" id="retention-roll" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟（0 = 不限制）</span></div>
-      <div class="storage-row note"><label for="retention-keep">空间紧张时最近必留</label><input class="ninput" id="retention-keep" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div>
-      <div class="storage-row note"><label for="retention-days">哨兵 / 手动保存保留</label><input class="ninput" id="retention-days" type="number" min="0" max="3650" step="1" inputmode="numeric"><span class="retention-unit">天（0 = 不限）</span></div>
+      <h3>保留时间设置</h3>
+      <div class="hint">填 0 表示不限制：最近1小时记录按滚动窗口保留，哨兵 / 手动保存按天数保留。时间限制立即作用于后台清理，并同步写入 /etc/tesla-sentry.conf，重启后仍然生效。</div>
+      <div class="storage-row note"><label for="retention-roll">最近1小时记录保留</label><input class="ninput" id="retention-roll" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div>
+      <div class="storage-nested"><div class="storage-row note"><label for="retention-keep">空间紧张时至少保留</label><input class="ninput" id="retention-keep" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div></div>
+      <div class="storage-row note"><label for="retention-days">哨兵 / 手动保存保留</label><input class="ninput" id="retention-days" type="number" min="0" max="3650" step="1" inputmode="numeric"><span class="retention-unit">天</span></div>
       <div class="updbtns"><button class="mini primary" id="retention-save" onclick="storageSaveRetention()" disabled>保存时间限制</button></div>
       <div class="hint" id="retention-msg" role="status" aria-live="polite"></div>
     </section>
-    <section class="storage-quota" id="storage-paths">
-      <h3>存储路径</h3>
+    <details class="storage-quota" id="storage-paths">
+      <summary>存储路径</summary>
       <div class="hint">程序本体在 /opt/tesla-sentry。视频存储建议放在 TF 卡（F50 默认 /dev/mmcblk1p1，挂载 /mnt/sdcard）。目录结构固定为「视频存储根目录/img/teslacam.img」和「视频存储根目录/archive/transcode_cache」。修改后需重启服务生效，现有录像不会自动迁移。</div>
-      <div class="storage-row path"><label for="storage-path-root">视频存储根目录</label><input class="ninput" id="storage-path-root" type="text" spellcheck="false"><span class="retention-unit">绝对路径</span></div>
+      <div class="storage-row path"><label for="storage-path-root">视频存储根目录</label><input class="ninput" id="storage-path-root" type="text" spellcheck="false"></div>
       <div class="storage-row path"><label>车机 U 盘镜像</label><input class="ninput" id="storage-path-img" type="text" disabled></div>
       <div class="storage-row path"><label>归档区目录</label><input class="ninput" id="storage-path-archive" type="text" disabled></div>
       <div class="storage-row path"><label>转码缓存目录</label><input class="ninput" id="storage-path-transcode" type="text" disabled></div>
       <div class="storage-row path"><label>程序缓存目录</label><input class="ninput" id="storage-path-cache" type="text" disabled></div>
       <div class="updbtns"><button class="mini primary" id="paths-save" onclick="storageSavePaths()" disabled>保存路径设置</button></div>
       <div class="hint" id="paths-msg" role="status" aria-live="polite"></div>
-    </section>
+    </details>
     <section class="storage-danger"><h3>调整车机 U 盘容量</h3><div class="storage-row"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
     <div class="hint">调整会清空车机 U 盘全部内容，盒子归档保留。容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div><button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button><div id="storage-resize-status"></div></section>
     <section class="storage-danger"><h3>重启服务</h3>
     <div class="hint">修改存储路径、容量分配后，点此重启服务让设置生效。重启期间网页会短暂断开（约 5 秒），刷新后自动恢复。</div>
     <button class="mini" id="storage-restart" onclick="storageRestartService()">重启服务</button><div id="storage-restart-status"></div></section>
+    <section class="storage-danger"><h3>转码诊断</h3>
+    <div class="hint">转码失败或没有缩略图时点一下，会现场测试目录写入、ffmpeg 编码器/解码器、温度热区，并真的抽一帧、编 2 秒视频；结果可直接复制反馈。</div>
+    <button class="mini" id="storage-diag" onclick="storageDiag()">运行诊断</button>
+    <pre id="storage-diag-out" style="display:none;white-space:pre-wrap;word-break:break-all;font-size:11.5px;line-height:1.45;margin:10px 0 0;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);max-height:340px;overflow:auto"></pre></section>
   </div>
   <div id="tab-brand" style="display:none">
     <div class="hint">标题栏左侧的图标与名称 · 改完立即生效, 访客刷新页面后看到新的; 名称留空即用默认「哨兵一剪梅」</div>
@@ -2782,7 +2899,7 @@ body.settings-open { overflow:hidden; }
       <input class="ninput" id="brand-name" maxlength="24" placeholder="哨兵一剪梅" autocomplete="off" autocapitalize="none" onkeydown="if(event.key==='Enter')saveBrandName()">
       <button class="primary" onclick="saveBrandName()">保存</button>
     </div>
-    <label class="upbtn">＋ 上传图标 (png/jpg/webp, ≤3MB)<input type="file" id="brand-file" accept=".png,.jpg,.jpeg,.webp" hidden></label>
+    <label class="fm-tool">＋ 上传图标 (png/jpg/webp, ≤3MB)<input type="file" id="brand-file" accept=".png,.jpg,.jpeg,.webp" hidden></label>
     <div style="margin-top:4px"><button class="brandreset" onclick="resetBrand()">恢复默认图标与名称</button></div>
   </div>
   <div id="tab-skin" style="display:none">
@@ -2795,12 +2912,12 @@ body.settings-open { overflow:hidden; }
     </div>
     <div class="hint">上传 CSS 皮肤文件或背景图 (jpg/png/webp)。CSS 中引用图片请用 /skin-media/文件名。</div>
     <div class="hint"><code>body{background:url(/skin-media/bg.jpg) center/cover}</code></div>
-    <label class="upbtn">＋ 上传皮肤文件 (css/jpg/png/webp)<input type="file" id="skin-file" accept=".css,.jpg,.jpeg,.png,.webp" hidden></label>
+    <label class="fm-tool">＋ 上传皮肤文件 (css/jpg/png/webp)<input type="file" id="skin-file" accept=".css,.jpg,.jpeg,.png,.webp" hidden></label>
     <div id="skin-list"></div>
   </div>
   <div id="tab-audio" style="display:none">
     <div class="hint">上传的音频 (wav/mp3, &lt;1MB) 会直接写入车机U盘根目录；文件名为 LockChime.wav 的即锁车音 (特斯拉只认根目录这个文件名)。文件在归档同步时写入车机U盘。</div>
-    <label class="upbtn">＋ 上传音频 (wav/mp3, &lt;1MB)<input type="file" id="audio-file" accept=".wav,.mp3" hidden></label>
+    <label class="fm-tool">＋ 上传音频 (wav/mp3, &lt;1MB)<input type="file" id="audio-file" accept=".wav,.mp3" hidden></label>
     <div class="hint" style="color:#4cc38a">⏳ 待写入车机U盘:</div>
     <div id="audio-list"></div>
     <div class="hint" style="color:#4cc38a">✅ 已写入:</div>
@@ -2809,7 +2926,7 @@ body.settings-open { overflow:hidden; }
   <div id="tab-wraps" style="display:none">
     <div class="hint">车机涂装/牌照图片: 上传 png/jpg/webp, 直接写入车机U盘根目录 Wraps/ (车机端设置里选)。连接时会临时断开车机读取几秒, 用完点「恢复车机导出」; 5 分钟无操作也会自动恢复。</div>
     <div id="wraps-status" style="margin-bottom:10px"></div>
-    <label class="upbtn" id="wraps-upbtn">＋ 上传图片到 Wraps/ (png/jpg/webp, ≤100MB)<input type="file" id="wraps-file" accept=".png,.jpg,.jpeg,.webp" hidden multiple></label>
+    <label class="fm-tool" id="wraps-upbtn">＋ 上传图片到 Wraps/ (png/jpg/webp, ≤100MB)<input type="file" id="wraps-file" accept=".png,.jpg,.jpeg,.webp" hidden multiple></label>
     <div id="wraps-grid" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:12px"></div>
   </div>
   <div id="tab-files">
@@ -2830,7 +2947,7 @@ body.settings-open { overflow:hidden; }
         <button onclick="goDir(document.getElementById('dest-dir').value)" style="background:#e8443f;border:none;color:#fff;border-radius:8px;padding:0 14px;font-size:12px;cursor:pointer">跳转</button>
       </div>
       <div id="crumb" style="font-size:12px;color:#5ea9ff;margin-bottom:8px;line-height:1.8"></div>
-      <label class="upbtn" id="upbtn">＋ 上传文件到当前目录 (任意类型, ≤100MB)<input type="file" id="anyfile-file" hidden></label>
+      <label class="fm-tool" id="upbtn"><svg class="ic"><use href="#i-copy"/></svg>＋ 上传文件到当前目录 (≤100MB)<input type="file" id="anyfile-file" hidden></label>
       <div id="fm-bar" class="fm-bar">
         <div class="row" style="justify-content:space-between;margin-bottom:8px">
           <label class="row" style="cursor:pointer;font-size:12.5px;gap:6px">
@@ -2844,17 +2961,21 @@ body.settings-open { overflow:hidden; }
           <button onclick="fmOp('copy')"><svg class="ic"><use href="#i-copy"/></svg>复制</button>
           <button onclick="fmOp('rename')"><svg class="ic"><use href="#i-pen"/></svg>重命名</button>
         </div>
-        <div class="row" id="fm-dest" style="display:none;margin-top:8px">
-          <input class="fm-dest-input" id="fm-dest-input" placeholder="目标目录">
-          <button class="fm-go" onclick="fmDestGo()">执行</button>
-          <button onclick="fmDestCancel()">取消</button>
-        </div>
+        <div class="row" id="fm-dest" style="display:none;margin-top:8px"></div>
       </div>
       <div id="file-list"></div>
     </div>
   </div>
+  <div class="fm-picker" id="fm-picker" hidden role="dialog" aria-modal="true" aria-labelledby="fm-picker-title">
+    <div class="fm-picker-box">
+      <div class="fm-picker-head"><b id="fm-picker-title">选择目标目录</b><button type="button" class="fm-picker-x" onclick="fmPickClose()" aria-label="关闭">✕</button></div>
+      <div class="fm-picker-path" id="fm-picker-path">/</div>
+      <div class="fm-picker-tree" id="fm-picker-tree"></div>
+      <div class="fm-picker-foot"><button type="button" onclick="fmPickClose()">取消</button><button type="button" class="fm-go" id="fm-picker-ok" onclick="fmPickGo()" disabled>选择此目录</button></div>
+    </div>
+  </div>
   <div id="tab-play" style="display:none">
-    <div class="hint">内网访问自动用原画，不转码，加载最快；外网访问默认用下面选择的画质。选择非「原画」时，设备会在空闲时按该画质预先转码哨兵/手动保存事件的片段（最近1小时监控影像不预热）。</div>
+    <div class="hint">内网访问自动用原画，不转码，加载最快；外网访问默认用下面选择的画质。选择非「原画」时，设备会在空闲时按该画质预先转码哨兵/手动保存事件的片段（最近1小时记录影像不预热）。</div>
     <label class="nrow"><span>外网默认画质</span>
       <select class="ninput" id="play-quality" onchange="playSave()">
         <option value="orig">原画 — 不转码，最清晰但外网流量大</option>
@@ -2867,7 +2988,7 @@ body.settings-open { overflow:hidden; }
     <div class="hint" id="play-msg"></div>
   </div>
   <div id="tab-notify" style="display:none">
-    <div class="hint">哨兵触发时把时间/位置/触发原因和触发画面推到飞书。默认走自建应用私聊(只有你本人可见)；也可切到群机器人 webhook(群里都能看到)。视频推送只支持私聊。</div>
+    <div class="hint">哨兵触发时把时间/位置/触发原因和触发画面推到飞书；也可以只开微信提醒（爱语飞飞）。默认走自建应用私聊(只有你本人可见)；也可切到群机器人 webhook(群里都能看到)。视频推送只支持私聊。</div>
     <label class="nrow"><span>启用推送</span><input type="checkbox" id="nt-en"></label>
     <label class="nrow"><span>也推手动保存</span><input type="checkbox" id="nt-saved"></label>
     <select class="ninput" id="nt-mode">
@@ -2896,6 +3017,13 @@ body.settings-open { overflow:hidden; }
     <input class="ninput" id="nt-hook" placeholder="群机器人 webhook (仅群推送需要): https://open.feishu.cn/open-apis/bot/v2/hook/...">
     <input class="ninput" id="nt-url" placeholder="查看链接前缀 (可选): http://你的域名:端口">
     <div class="nrow"><span>延迟推送</span><input class="ninput num" id="nt-delay" type="number" min="5" max="600"> <span class="hint2">秒 (等片段写完再推)</span></div>
+    <div class="hint" style="margin-top:16px">微信提醒（爱语飞飞）</div>
+    <label class="nrow"><span>启用微信提醒</span><input type="checkbox" id="nt-wx-en"></label>
+    <select class="ninput" id="nt-wx-api">
+      <option value="iyuu">接口：爱语飞飞 iyuu.cn</option>
+    </select>
+    <input class="ninput" id="nt-wx-token" type="password" placeholder="爱语飞飞 Token (IYUU 开头，已保存则留空表示不修改)">
+    <div class="hint">开启后，每个推送会同时发一条微信提醒；可以只用微信、不配飞书。Token 在 iyuu.cn 注册后获取，免费额度有限。</div>
     <div class="updbtns">
       <button class="mini primary" onclick="ntSave()">保存设置</button>
       <button class="mini" onclick="ntTest()">发送测试</button>
@@ -2909,11 +3037,20 @@ body.settings-open { overflow:hidden; }
     <input class="ninput" id="pw-new2" type="password" placeholder="再输一次新密码" autocomplete="new-password">
     <div class="updbtns"><button class="mini primary" onclick="pwSave()">修改密码</button></div>
     <div class="hint" id="pw-msg"></div>
-    <div class="hint" style="margin-top:12px"><span>用户名</span>: <b id="pw-user">admin</b></div>
-    <div class="hint">要改用户名请编辑设备上 /opt/tesla-sentry/auth.conf 的 user=</div>
+    <div class="hint" style="margin-top:12px">当前用户名: <b id="pw-user">admin</b></div>
+    <input class="ninput" id="user-new" placeholder="新用户名 (3~32 位, 字母/数字/_ . @ -)" autocomplete="off" autocapitalize="none">
+    <input class="ninput" id="user-pass" type="password" placeholder="当前密码 (确认身份)" autocomplete="current-password">
+    <div class="updbtns"><button class="mini primary" onclick="userSave()">修改用户名</button></div>
+    <div class="hint" id="user-msg"></div>
     <div class="updbtns" style="margin-top:16px"><button class="mini logout" onclick="doLogout()">退出登录</button></div>
   </div>
   <div id="tab-update" style="display:none">
+    <div class="updrow" style="flex-wrap:wrap;gap:8px;align-items:center">
+      <span class="updk">更新源</span>
+      <select class="ninput" id="upd-repo" style="flex:1 1 180px;min-width:0" onchange="otaReloadBranches()"></select>
+      <select class="ninput" id="upd-branch" style="flex:0 0 110px;min-width:0"></select>
+      <button class="mini" onclick="otaSaveTarget()">切换</button>
+    </div>
     <div class="updrow"><span class="updk">当前版本</span><b id="upd-cur">—</b></div>
     <div class="updrow"><span class="updk">最新版本</span><b id="upd-new">—</b><span class="updtag" id="upd-tag">未检查</span></div>
     <div class="updnotes" id="upd-notes"></div>
@@ -3261,7 +3398,7 @@ async function load() {
     b.className = 'tab' + ((liveOpen && c === 'RecentClips') || (!liveOpen && c === currentCat) ? ' active' : '');
     b.dataset.category = c;
     b.innerHTML = `<span class="tl">${t(CATS_NAME[c] || c)}</span><span class="tn">${data[c].length}</span>`;
-    /* 「最近1小时监控」页签 = 最近 1 小时滚动录像列表 + 页内的「实时预览」入口,
+    /* 「最近1小时记录」页签 = 最近 1 小时滚动录像列表 + 页内的「实时预览」入口,
        两者是同一个功能, 合并为一个页面 */
     b.onclick = () => {
       closePanel(); closePlayer();
@@ -3888,7 +4025,7 @@ async function openPlayer(ev, live = false, camera = '', clipName = '') {
   byId('player').classList.add('open');
   document.body.classList.add('watching');
   byId('livep').hidden = !live;
-  byId('ptitle').textContent = live ? t('最近1小时监控') : evTime(ev);
+  byId('ptitle').textContent = live ? t('最近1小时记录') : evTime(ev);
   byId('vgrid').textContent = '正在加载录像…';
   byId('vgrid').classList.add('loading');
   byId('trigger-marker').hidden = true;
@@ -4512,7 +4649,7 @@ function showClip(ix, offset, continuous = false, seekStartup = false) {
 
 function renderInfo() {
   const md = cur.meta || {};
-  byId('ptitle').textContent = liveMode ? t('最近1小时监控') : (reasonLabel(md.reason) || t(CATS_NAME[libraryCat])) + ' · ' + evTime(cur);
+  byId('ptitle').textContent = liveMode ? t('最近1小时记录') : (reasonLabel(md.reason) || t(CATS_NAME[libraryCat])) + ' · ' + evTime(cur);
   byId('ic-rows').replaceChildren();
   const fields = [['录像时间', evTime(cur)], ['分类', t(CATS_NAME[libraryCat])], ['大小', fmtSize(cur.size || 0)],
     ['本段时长', fmtSec(currentClip().length)], ['画面', curVids().length + ' 路'], ['触发原因', reasonLabel(md.reason)], ['位置', [md.city, md.street].filter(Boolean).join(' · ')],
@@ -5505,15 +5642,22 @@ function fmtBitrate(bps) {
   if (bps >= 1024 * 1024) return (bps / 1048576).toFixed(bps >= 10 * 1048576 ? 0 : 1) + ' MB/s';
   return Math.max(1, Math.round(bps / 1024)) + ' KB/s';
 }
+function netZoneLabel() {
+  const h = String(location.hostname || '').toLowerCase();
+  if (h === 'localhost' || h === '[::1]' || h === '::1' || /^127\./.test(h) ||
+      /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+      /^169\.254\./.test(h) || /\.local$/.test(h)) return '内网';
+  return '外网';
+}
 function showNetSpeed(bps) {
   const el = document.getElementById('netspeed');
   if (!el) return;
   const text = fmtBitrate(bps);
   if (!text) return;
-  el.textContent = '↓ ' + text;
+  el.innerHTML = '<span class="netk">' + netZoneLabel() + '</span>↓ ' + esc(text);
   el.hidden = false;
   clearTimeout(NET.timer);
-  NET.timer = setTimeout(hideNetSpeed, 2200);
+  NET.timer = setTimeout(hideNetSpeed, 2600);
 }
 function hideNetSpeed() {
   const el = document.getElementById('netspeed');
@@ -5751,8 +5895,8 @@ function playSave() {
 const STORAGE_HELP = {
   total: '设备识别到的文件系统容量。可分配空间已扣除其他文件和文件系统保留量。1 GiB = 1024³ 字节，通常小于存储卡包装上的 GB 数值。',
   usb: '车机可用的录像 U 盘容量，支持 1～128 GiB。调整会清空车机 U 盘中的全部内容，盒子归档保留；期间车机暂停录像。',
-  archive: '哨兵、手动保存、最近1小时监控和行车记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。填 0 表示不设上限：不再按总量清理，只保留磁盘空闲保护线兜底。',
-  recentmax: '最近1小时监控单独的容量上限，已包含在归档总容量内。6 路 1 小时约 12 GiB；填 0 表示不限制，只按保留分钟数滚动清理。',
+  archive: '哨兵、手动保存、最近1小时记录和行车记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。填 0 表示不设上限：不再按总量清理，只保留磁盘空闲保护线兜底。',
+  recentmax: '最近1小时记录单独的容量上限，已包含在归档总容量内。6 路 1 小时约 12 GiB；填 0 表示不限制，只按保留分钟数滚动清理。',
   drive: '行车记录的容量上限，已包含在归档总容量内。超限时从最旧行程开始清理，保留最新片段。',
   reserve: '空间不足时，希望清理后恢复的空闲容量，不创建独立分区。增大此值可能使旧归档更早被清理。',
   minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间。这条保护线不另占容量，不能高于安全预留空间。'
@@ -5990,6 +6134,22 @@ async function storageClearUsage(target) {
     if (status) status.textContent = '清理失败：' + error.message;
   }
 }
+async function storageDiag() {
+  const out = document.getElementById('storage-diag-out');
+  const btn = document.getElementById('storage-diag');
+  if (!out) return;
+  out.style.display = 'block';
+  out.textContent = '诊断中，请稍候（需要几秒）…';
+  if (btn) btn.disabled = true;
+  try {
+    const r = await (await fetch('/api/admin/diag', {method:'POST'})).json();
+    out.textContent = JSON.stringify(r, null, 2);
+  } catch (e) {
+    out.textContent = '诊断失败: ' + e;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
 async function storageRestartService() {
   const status = document.getElementById('storage-restart-status');
   const button = document.getElementById('storage-restart');
@@ -6085,14 +6245,18 @@ async function ntLoad() {
     document.getElementById('nt-secret').dataset.has = j.has_secret ? '1' : '0';
     document.getElementById('nt-url').value = j.public_url || '';
     document.getElementById('nt-delay').value = j.delay || 20;
+    document.getElementById('nt-wx-en').checked = !!j.wx_enabled;
+    document.getElementById('nt-wx-api').value = j.wx_api || 'iyuu';
+    document.getElementById('nt-wx-token').value = '';
+    document.getElementById('nt-wx-token').dataset.has = j.has_wx_token ? '1' : '0';
     ntSetEye(ntHidden);
     const m = document.getElementById('nt-msg');
     if (j.last && j.last.msg) {
       m.textContent = t('最近一次') + ': ' + (j.last.ok ? '✅ ' : '❌ ') + j.last.msg + ' (' + new Date(j.last.at * 1000).toLocaleString() + ')';
       m.style.color = j.last.ok ? '#4cc38a' : 'var(--accent)';
     } else if (!j.enabled) { m.textContent = t('未启用'); m.style.color = ''; }
-    else if (j.dm_ready) { m.textContent = t('已启用私聊推送, 等下一个哨兵事件'); m.style.color = ''; }
-    else { m.textContent = t('已启用, 但接收人/应用凭据未配全'); m.style.color = 'var(--accent)'; }
+    else if (j.dm_ready || j.wx_ready) { m.textContent = t('已启用推送, 等下一个哨兵事件'); m.style.color = ''; }
+    else { m.textContent = t('已启用, 但接收人/应用凭据/微信 Token 未配全'); m.style.color = 'var(--accent)'; }
   } catch (e) { document.getElementById('nt-msg').textContent = t('读取设置失败') + ': ' + e; }
 }
 async function ntSave() {
@@ -6109,12 +6273,19 @@ async function ntSave() {
     app_secret: document.getElementById('nt-secret').value.trim(),
     public_url: ntReal('nt-url'),
     delay: +document.getElementById('nt-delay').value || 20,
+    wx_enabled: document.getElementById('nt-wx-en').checked,
+    wx_api: document.getElementById('nt-wx-api').value,
+    wx_token: document.getElementById('nt-wx-token').value.trim(),
   };
   if (body.enabled) {
     const secSaved = document.getElementById('nt-secret').dataset.has === '1';
+    const wxSaved = document.getElementById('nt-wx-token').dataset.has === '1';
     const hasApp = body.app_id && (body.app_secret || secSaved);
-    if (body.mode === 'dm' && (!hasApp || !body.receive_id)) { toast('私聊需要 App ID / Secret + 接收人'); return; }
-    if (body.mode === 'group' && !body.webhook) { toast('请先填群机器人 webhook'); return; }
+    const hasWx = body.wx_enabled && (body.wx_token || wxSaved);
+    if (!hasWx) {
+      if (body.mode === 'dm' && (!hasApp || !body.receive_id)) { toast('私聊需要 App ID / Secret + 接收人，或改用微信提醒'); return; }
+      if (body.mode === 'group' && !body.webhook) { toast('请先填群机器人 webhook，或改用微信提醒'); return; }
+    }
   }
   const m = document.getElementById('nt-msg');
   m.textContent = t('保存中…');
@@ -6174,10 +6345,73 @@ async function pwSave() {
   } catch (e) { m.textContent = t('修改失败') + ': ' + e; m.style.color = 'var(--accent)'; }
 }
 
+async function userSave() {
+  const m = document.getElementById('user-msg');
+  const u = document.getElementById('user-new').value.trim();
+  const p = document.getElementById('user-pass').value;
+  if (!u) { m.textContent = t('请输入新用户名'); m.style.color = 'var(--accent)'; return; }
+  if (!/^[A-Za-z0-9_.@-]{3,32}$/.test(u)) { m.textContent = t('用户名需 3~32 位，只能字母/数字/_ . @ -'); m.style.color = 'var(--accent)'; return; }
+  m.textContent = t('提交中…'); m.style.color = '';
+  try {
+    const j = await (await fetch('/api/auth/user', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user: u, pass: p }) })).json();
+    if (!j.ok) { m.textContent = '❌ ' + t(j.msg); m.style.color = 'var(--accent)'; return; }
+    // 旧 cookie 已随用户名变化失效, 用新用户名 + 当前密码重新登录
+    try {
+      await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'u=' + encodeURIComponent(j.user || u) + '&p=' + encodeURIComponent(p) });
+    } catch (e) {}
+    document.getElementById('pw-user').textContent = j.user || u;
+    document.getElementById('user-new').value = '';
+    document.getElementById('user-pass').value = '';
+    m.textContent = '✅ ' + j.msg;
+    m.style.color = '#4cc38a';
+  } catch (e) { m.textContent = t('修改失败') + ': ' + e; m.style.color = 'var(--accent)'; }
+}
+
 /* ---------- 系统更新 (OTA) ---------- */
 let otaInfo = null;
 function esc(s) { return String(s == null ? '' : s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
+async function otaLoadTarget() {
+  try {
+    const j = await (await fetch('/api/ota/target', { cache: 'no-store' })).json();
+    const r = document.getElementById('upd-repo');
+    if (!r.options.length) {
+      r.innerHTML = (j.repos || []).map(x => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join('');
+    }
+    r.value = j.repo || r.value;
+    otaFillBranches(j.branches, j.branch);
+  } catch (e) {}
+}
+function otaFillBranches(list, cur) {
+  const b = document.getElementById('upd-branch');
+  let bs = (list && list.length) ? list.slice() : ['main', 'master'];
+  if (cur && bs.indexOf(cur) < 0) bs.unshift(cur);
+  b.innerHTML = bs.map(x => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join('');
+  b.value = cur || bs[0];
+}
+async function otaReloadBranches() {
+  const repo = document.getElementById('upd-repo').value;
+  try {
+    const j = await (await fetch('/api/ota/target?repo=' + encodeURIComponent(repo), { cache: 'no-store' })).json();
+    otaFillBranches(j.branches, document.getElementById('upd-branch').value);
+  } catch (e) {}
+}
+async function otaSaveTarget() {
+  const repo = document.getElementById('upd-repo').value;
+  const branch = document.getElementById('upd-branch').value;
+  const msg = document.getElementById('upd-msg');
+  if (!repo || !branch) { toast('请选择仓库和分支'); return; }
+  msg.textContent = t('切换更新源…');
+  try {
+    const j = await (await fetch('/api/ota/target', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo, branch }) })).json();
+    msg.textContent = (j.ok ? '✅ ' : '❌ ') + t(j.msg || '');
+    if (j.ok) otaCheck(true);
+  } catch (e) { msg.textContent = t('切换失败') + ': ' + e; }
+}
 async function otaCheck(force) {
+  otaLoadTarget();
   const tag = document.getElementById('upd-tag'), msg = document.getElementById('upd-msg');
   tag.className = 'updtag'; tag.textContent = t('检查中…');
   msg.textContent = t('正在连接 GitHub…');
@@ -6491,10 +6725,95 @@ function fmAll(checked) {
   });
   fmUpdate();
 }
-function fmDestCancel() {
+function fmPickPathText(p) {
+  return area === 'usb' ? ('车机U盘 / ' + (p || '')) : (p || '/archive');
+}
+function fmPickClose() {
   fmPending = null;
-  const box = document.getElementById('fm-dest');
-  if (box) box.style.display = 'none';
+  const box = document.getElementById('fm-picker');
+  if (box) box.hidden = true;
+}
+function fmDestCancel() { fmPickClose(); }
+let fmPickSel = '';
+function fmPickChoose(row, path) {
+  fmPickSel = path;
+  document.querySelectorAll('#fm-picker-tree .fm-pnode.sel').forEach(n => n.classList.remove('sel'));
+  row.classList.add('sel');
+  document.getElementById('fm-picker-path').textContent = fmPickPathText(path);
+  document.getElementById('fm-picker-ok').disabled = false;
+}
+function fmPickNode(path, depth, label, isRoot) {
+  const row = document.createElement('div');
+  row.className = 'fm-pnode';
+  row.style.paddingLeft = (8 + depth * 14) + 'px';
+  row.dataset.path = path;
+  const tw = document.createElement('span');
+  tw.className = 'tw';
+  tw.textContent = '▸';
+  const nm = document.createElement('span');
+  nm.className = 'nm';
+  nm.textContent = label;
+  row.appendChild(tw);
+  row.appendChild(nm);
+  const kids = document.createElement('div');
+  kids.className = 'fm-pchildren';
+  kids.hidden = true;
+  const node = { row, kids, path, depth };
+  row.addEventListener('click', (ev) => {
+    if (ev.target === tw || isRoot) { fmPickExpand(node); return; }
+    fmPickChoose(row, path);
+  });
+  return node;
+}
+async function fmPickExpand(node) {
+  const { row, kids, path, depth } = node;
+  if (kids.dataset.loaded === '1') {
+    kids.hidden = !kids.hidden;
+    row.querySelector('.tw').textContent = kids.hidden ? '▸' : '▾';
+    return;
+  }
+  if (kids.dataset.loading === '1') return;
+  kids.dataset.loading = '1';
+  row.querySelector('.tw').textContent = '…';
+  let dirs = [];
+  try {
+    const url = area === 'usb'
+      ? '/api/usb/browse?dir=' + encodeURIComponent(path)
+      : '/api/browse?dir=' + encodeURIComponent(path);
+    const j = await (await fetch(url)).json();
+    dirs = (j && j.dirs) || [];
+  } catch (e) { dirs = []; }
+  kids.innerHTML = '';
+  for (const d of dirs) {
+    const full = area === 'usb'
+      ? (path ? path + '/' + d : d)
+      : (path === '/' ? '/' + d : path + '/' + d);
+    const child = fmPickNode(full, depth + 1, d, false);
+    kids.appendChild(child.row);
+    kids.appendChild(child.kids);
+  }
+  kids.dataset.loaded = '1';
+  kids.dataset.loading = '';
+  row.querySelector('.tw').textContent = dirs.length ? '▾' : '·';
+  kids.hidden = false;
+}
+function fmPickOpen() {
+  if (!fmPending) return;
+  const root = area === 'usb' ? '' : '/archive';
+  const tree = document.getElementById('fm-picker-tree');
+  document.getElementById('fm-picker-title').textContent =
+    (fmPending.op === 'move' ? '移动' : '复制') + ' · 选择目标目录';
+  document.getElementById('fm-picker-ok').textContent =
+    fmPending.op === 'move' ? '移动到这里' : '复制到这里';
+  document.getElementById('fm-picker-ok').disabled = true;
+  document.getElementById('fm-picker-path').textContent = fmPickPathText(root);
+  fmPickSel = '';
+  tree.innerHTML = '';
+  const node = fmPickNode(root, 0, area === 'usb' ? 'U盘根目录' : '/archive', true);
+  tree.appendChild(node.row);
+  tree.appendChild(node.kids);
+  document.getElementById('fm-picker').hidden = false;
+  fmPickExpand(node);
 }
 function fmOp(op) {
   if (!fmSel.size) { toast('请先勾选文件或文件夹'); return; }
@@ -6515,22 +6834,15 @@ function fmOp(op) {
     return;
   }
   fmPending = { area, op, items };
-  const box = document.getElementById('fm-dest');
-  const inp = document.getElementById('fm-dest-input');
-  box.style.display = 'flex';
-  inp.value = curDir;
-  inp.placeholder = area === 'usb' ? '目标目录, 留空=U盘根目录' : '目标目录, 如 /archive/files';
-  inp.focus();
+  fmPickOpen();
 }
-function fmDestGo() {
-  if (!fmPending) return;
-  const dest = document.getElementById('fm-dest-input').value.trim();
-  if (area === 'usb' && dest.startsWith('/')) { toast('车机U盘请填相对路径 (留空=根目录)'); return; }
-  if (area === 'archive' && !dest.startsWith('/archive')) { toast('归档区请填 /archive 开头的绝对路径'); return; }
+function fmPickGo() {
+  if (!fmPending || !fmPickSel) return;
   const b = fmPending;
-  fmDestCancel();
+  const dest = fmPickSel;
+  fmPickClose();
   const verb = b.op === 'move' ? '移动' : '复制';
-  if (!confirm('把选中的 ' + b.items.length + ' 项' + verb + '到\n' + (dest || '(U盘根目录)') +
+  if (!confirm('把选中的 ' + b.items.length + ' 项' + verb + '到\n' + dest +
     ' ?\n\n同名会被跳过；复制大视频可能占满U盘空间。')) return;
   fmSend({ area: b.area, op: b.op, items: b.items, dest });
 }
@@ -8307,11 +8619,6 @@ def active_skin():
 # ---------------- 多路合成导出 (ffmpeg) ----------------
 # F50 是 aarch64/OpenWrt，推荐 `apk add ffmpeg` 安装到 /usr/bin；
 # 不再优先使用来源不明的 aarch64 静态包。
-FFMPEG_BIN = os.environ.get("TSF_FFMPEG") or (
-    "/usr/bin/ffmpeg" if os.path.exists("/usr/bin/ffmpeg") else "ffmpeg")
-FFPROBE_BIN = os.environ.get("TSF_FFPROBE") or (
-    "/usr/bin/ffprobe" if os.path.exists("/usr/bin/ffprobe") else "ffprobe")
-_FF_OK = {"t": 0.0, "v": None}
 
 
 def _binary_ok(path):
@@ -8322,15 +8629,33 @@ def _binary_ok(path):
     return bool(shutil.which(path))
 
 
+def _pick_bin(env_name, candidates):
+    """优先环境变量, 但它指向的文件已不存在时自动回退到系统路径 (固件升级常把 /opt 冲掉)"""
+    want = (os.environ.get(env_name) or "").strip()
+    if want and _binary_ok(want):
+        return want
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    found = shutil.which(os.path.basename(candidates[-1])) if candidates else None
+    return found or want or candidates[-1]
+
+
+FFMPEG_BIN = _pick_bin("TSF_FFMPEG", ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "ffmpeg"])
+FFPROBE_BIN = _pick_bin("TSF_FFPROBE", ["/usr/bin/ffprobe", "/usr/local/bin/ffprobe", "ffprobe"])
+_FF_OK = {"t": 0.0, "v": None}
+_FF_PROBE = {"t": 0.0, "v": None}
+
+
 def ffmpeg_ready(refresh=False):
-    """ffmpeg/ffprobe 是否真的可用。安装时没配好 (或固件升级把 /opt/mu300 冲掉) 的话,
-    缩略图和清晰度转码会全部静默失效 —— 这里给页面和 /thumb 一个明确答复,
-    不要再让用户在点开视频、等缩略图时才撞上。"""
+    """ffmpeg 是否真的可用。缩略图/转码只依赖 ffmpeg, 不再因为缺 ffprobe 一起失效;
+    ffprobe 只用于读取时长/分辨率, 缺了也能播放。"""
     now = time.monotonic()
     if not refresh and _FF_OK["v"] is not None and now - _FF_OK["t"] < 30:
         return _FF_OK["v"]
-    ok = _binary_ok(FFMPEG_BIN) and _binary_ok(FFPROBE_BIN)
+    ok = _binary_ok(FFMPEG_BIN)
     _FF_OK.update(t=now, v=ok)
+    _FF_PROBE.update(t=now, v=_binary_ok(FFPROBE_BIN))
     return ok
 APP_HOME = os.path.dirname(os.path.realpath(__file__))
 # 程序缓存 (缩略图/遥测/多路合成临时) 放在安装目录 cache/ 下, 不占数据卡:
@@ -8623,7 +8948,7 @@ RECENT_ROLL_MIN = int(os.environ.get("TSF_RECENT_ROLL_MIN", "60"))    # 归档�
 FREE_MIN_MB = int(os.environ.get("TSF_FREE_MIN_MB", "4096"))          # 剩余低于此值开始兜底清理
 FREE_TARGET_MB = int(os.environ.get("TSF_FREE_TARGET_MB", "10240"))   # 兜底清理到恢复到该值为止
 RECENT_KEEP_MIN = int(os.environ.get("TSF_RECENT_KEEP_MIN", "60"))    # 兜底清理时最近 N 分钟必留
-RECENT_MAX_GB = int(os.environ.get("TSF_RECENT_MAX_GB", "12"))        # 「最近1小时监控」体积上限(GiB), 0=不限; 6 路 1 小时约 12GiB
+RECENT_MAX_GB = int(os.environ.get("TSF_RECENT_MAX_GB", "12"))        # 「最近1小时记录」体积上限(GiB), 0=不限; 6 路 1 小时约 12GiB
 # 盒子侧 SentryClips / SavedClips 定期清理 (方案B):
 # 哨兵开着时 4 路约 8.4GB/小时, 哨兵事件 + 手动保存的录像只增不删, 盘迟早被吃满。
 # 车机 U 盘那份永远不碰, 这里只清盒子归档副本。两个维度独立生效:
@@ -8716,7 +9041,7 @@ def retention_values():
 
 
 def save_retention(body):
-    """保存「最近1小时监控」/哨兵归档的时间与容量限制, 并同步写回 /etc/tesla-sentry.conf。"""
+    """保存「最近1小时记录」/哨兵归档的时间与容量限制, 并同步写回 /etc/tesla-sentry.conf。"""
     if not isinstance(body, dict):
         raise ValueError('参数错误')
     current = retention_values()
@@ -8878,6 +9203,89 @@ def restart_service():
         return True
     except OSError:
         return False
+
+
+def transcode_diag():
+    """转码/缩略图现场诊断: 目录可写、ffmpeg 能力、热区、真实抽帧与编码样本。
+
+    返回的 stderr 就是设备上 ffmpeg 的真实报错，便于定位「装了 ffmpeg 仍不可用」。
+    """
+    rep = {"version": APP_VERSION, "dirs": {}, "ffmpeg": {}, "thermal": {}, "sample": None}
+
+    def run(cmd, timeout=30):
+        try:
+            p = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
+                               text=True, timeout=timeout, errors="replace")
+            return {"ok": p.returncode == 0, "code": p.returncode,
+                    "out": (p.stdout or "").strip()[-500:],
+                    "err": (p.stderr or "").strip()[-800:]}
+        except Exception as ex:
+            return {"ok": False, "err": str(ex)[:300]}
+
+    for key, path in (("cache", CACHE_ROOT), ("thumb", THUMB_DIR), ("archive", ARCHIVE),
+                      ("transcode", TRANSCODE_DIR)):
+        try:
+            os.makedirs(path, exist_ok=True)
+            probe = os.path.join(path, ".diag-write")
+            with open(probe, "w") as f:
+                f.write("ok")
+            os.remove(probe)
+            rep["dirs"][key] = {"path": path, "writable": True}
+        except Exception as ex:
+            rep["dirs"][key] = {"path": path, "writable": False, "error": str(ex)[:160]}
+
+    rep["ffmpeg"]["bin"] = FFMPEG_BIN
+    rep["ffmpeg"]["exists"] = bool(shutil.which(FFMPEG_BIN) or os.path.isfile(FFMPEG_BIN))
+    rep["ffmpeg"]["version"] = run([FFMPEG_BIN, "-hide_banner", "-version"], 12)
+    enc = run([FFMPEG_BIN, "-hide_banner", "-encoders"], 15)
+    rep["ffmpeg"]["x264"] = "libx264" in (enc.get("out", "") + enc.get("err", ""))
+    dec = run([FFMPEG_BIN, "-hide_banner", "-decoders"], 15)
+    rep["ffmpeg"]["hevc"] = "hevc" in (dec.get("out", "") + dec.get("err", ""))
+
+    zones = []
+    for path in glob.glob("/sys/class/thermal/thermal_zone*/temp"):
+        try:
+            with open(path) as f:
+                c = int(f.read()) / 1000
+        except Exception:
+            c = None
+        zones.append({"zone": os.path.basename(os.path.dirname(path)),
+                      "type": _thermal_zone_type(path) or "?", "c": c})
+    rep["thermal"] = {"zones": zones,
+                      "used_c": _thermal_hot([(z["c"], z["type"]) for z in zones if z["c"]]),
+                      "mode": preview_cores()}
+
+    sample = None
+    for cat in ("SentryClips", "SavedClips", "DriveClips", "RecentClips"):
+        base = os.path.join(ARCHIVE, cat)
+        if not os.path.isdir(base):
+            continue
+        for root, _dirs, fs in os.walk(base):
+            hit = next((f for f in fs if f.lower().endswith(".mp4")), None)
+            if hit:
+                sample = os.path.join(root, hit)
+                break
+        if sample:
+            break
+    rep["sample"] = sample
+    if sample:
+        tmp = tempfile.mkdtemp(prefix="tsf-diag-")
+        try:
+            png = os.path.join(tmp, "thumb.jpg")
+            rep["thumb"] = run([FFMPEG_BIN, "-y", "-hide_banner", "-loglevel", "error",
+                                "-ss", "1", "-i", sample, "-frames:v", "1",
+                                "-vf", "scale=400:-2", "-q:v", "7", png], 35)
+            rep["thumb"]["file"] = os.path.getsize(png) if os.path.isfile(png) else 0
+            mp4 = os.path.join(tmp, "preview.mp4")
+            rep["encode"] = run([FFMPEG_BIN, "-y", "-hide_banner", "-loglevel", "error",
+                                 "-ss", "0", "-t", "2", "-i", sample, "-an",
+                                 "-vf", "scale=-2:360", "-c:v", "libx264", "-preset", "ultrafast",
+                                 "-b:v", "320k", "-r", "24", "-movflags", "+faststart", mp4], 45)
+            rep["encode"]["file"] = os.path.getsize(mp4) if os.path.isfile(mp4) else 0
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    rep["ok"] = bool(rep.get("thumb", {}).get("file") and rep.get("encode", {}).get("file"))
+    return rep
 
 
 def storage_apply(body):
@@ -9101,6 +9509,9 @@ class DriveArchive:
             if not set(DRIVE_CAMERAS) <= cams:
                 continue
             files = [os.path.join(folder, f) for f in order_files(present)]
+            evp = os.path.join(folder, "event.json")
+            if os.path.isfile(evp):
+                files.append(evp)
             try:
                 stats = [os.stat(p) for p in files]
             except FileNotFoundError:
@@ -9224,7 +9635,7 @@ def roll_recent():
 
 
 def roll_recent_size():
-    """「最近1小时监控」体积上限 (RECENT_MAX_GB): 归档区设为 0(不限量) 时也独立生效。
+    """「最近1小时记录」体积上限 (RECENT_MAX_GB): 归档区设为 0(不限量) 时也独立生效。
 
     超过上限时从最旧事件开始删, 但保留最近 RECENT_KEEP_MIN 分钟内、正在写入和受
     保护的片段。0 = 不按体积限制。6 路 1 小时约 12GiB, 默认 12。
@@ -9469,11 +9880,11 @@ def disk_guard_cycle(drive):
             recent_ready = True
         except Exception as ex:
             print("行车记录检查失败: %s" % ex, flush=True)
-        try:   # 「最近1小时监控」滚动窗口独立执行: 归档区设为 0(不限量) 时也必须继续按时间淘汰
+        try:   # 「最近1小时记录」滚动窗口独立执行: 归档区设为 0(不限量) 时也必须继续按时间淘汰
             roll_recent()
         except Exception as ex:
             print("最近1小时滚动清理失败: %s" % ex, flush=True)
-        try:   # 「最近1小时监控」体积上限: 归档不限量时也独立生效 (6 路 1 小时约 12GiB)
+        try:   # 「最近1小时记录」体积上限: 归档不限量时也独立生效 (6 路 1 小时约 12GiB)
             roll_recent_size()
         except Exception as ex:
             print("最近1小时体积清理失败: %s" % ex, flush=True)
@@ -9512,6 +9923,7 @@ _NC_DEFAULT = {
     "enabled": False, "mode": "dm", "webhook": "", "app_id": "", "app_secret": "",
     "receive_id": "", "receive_id_type": "", "public_url": "", "saved": False, "delay": 20,
     "media": "thumb", "quality": "480p", "vdur": 30,
+    "wx_enabled": False, "wx_api": "iyuu", "wx_token": "",
 }
 _TOK = {"v": "", "exp": 0}
 CAM_NUM = {0: "前视", 3: "左B柱", 4: "右B柱", 5: "左翼子板", 6: "右翼子板", 7: "后视"}
@@ -10485,7 +10897,54 @@ def _feishu_send_dm(conf, card):
     return True
 
 
-def notify_push(cat, name, test=False):
+def _wx_ready(conf):
+    return bool(conf.get("wx_enabled") and str(conf.get("wx_token") or "").strip())
+
+
+def _event_text(cat, name, test=False):
+    """把事件信息拼成适合微信推送的纯文本"""
+    d = os.path.join(ARCHIVE, cat, name)
+    meta = {}
+    try:
+        with open(os.path.join(d, "event.json"), encoding="utf-8", errors="ignore") as f:
+            meta = json.load(f) or {}
+    except Exception:
+        pass
+    cat_name, _color, detail = _reason_info(meta.get("reason"))
+    if cat == "SavedClips" and not str(meta.get("reason", "")).startswith("sentry_"):
+        cat_name = "手动保存"
+    cam = CAM_NUM.get(int(meta["camera"])) if str(meta.get("camera", "")).strip().isdigit() else ""
+    when = str(meta.get("timestamp") or name)[:19].replace("T", " ").replace("_", " ")
+    loc = " ".join(x for x in (meta.get("city") or "", meta.get("street") or "") if x).strip() or "位置未知"
+    head = ("[测试] " if test else "") + "哨兵提醒 · " + cat_name + (" · " + cam if cam else "")
+    return "%s\n时间：%s\n位置：%s\n原因：%s" % (head, when, loc, detail)
+
+
+def _wx_send(conf, text):
+    """微信提醒: 爱语飞飞 (iyuu.cn) 接口"""
+    tok = str(conf.get("wx_token") or "").strip()
+    if not tok:
+        return False, "未配置爱语飞飞 Token"
+    if str(conf.get("wx_api") or "iyuu") != "iyuu":
+        return False, "暂不支持该微信接口"
+    url = "https://iyuu.cn/%s.send?text=%s" % (urllib.parse.quote(tok, safe=""), urllib.parse.quote(text))
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "tesla-sentry-f50"})
+        with urllib.request.urlopen(req, timeout=20, context=_tls12()) as r:
+            raw = r.read(4096).decode("utf-8", "ignore")
+        try:
+            j = json.loads(raw)
+        except Exception:
+            j = {}
+        code = j.get("errcode", j.get("code", 0))
+        if code in (0, 200, None):
+            return True, "微信提醒已发送"
+        return False, "微信提醒失败: %s" % (j.get("errmsg") or raw[:120])
+    except Exception as ex:
+        return False, "微信提醒失败: %s" % str(ex)[:120]
+
+
+def _feishu_push(cat, name, test=False):
     """推一条到飞书; 返回 (成功?, 提示)"""
     conf = notify_conf()
     dm = _dm_ready(conf)
@@ -10538,6 +10997,23 @@ def notify_push(cat, name, test=False):
     return True, "已推送到飞书群" + warn
 
 
+def notify_push(cat, name, test=False):
+    """按配置推送: 飞书 + 微信提醒(爱语飞飞); 任一渠道成功即算成功"""
+    conf = notify_conf()
+    has_fs = _dm_ready(conf) or bool(str(conf.get("webhook") or "").strip())
+    has_wx = _wx_ready(conf)
+    if not (has_fs or has_wx):
+        return False, "未配置: 需要飞书 App ID/Secret + 接收人, 或群机器人 webhook, 或微信提醒 Token"
+    fs_ok, fs_msg = (False, "")
+    if has_fs:
+        fs_ok, fs_msg = _feishu_push(cat, name, test)
+    wx_ok, wx_msg = (False, "")
+    if has_wx:
+        wx_ok, wx_msg = _wx_send(conf, _event_text(cat, name, test))
+    parts = [m for m in (fs_msg, wx_msg) if m]
+    return bool(fs_ok or wx_ok), " · ".join(parts)
+
+
 def _ev_ts(name):
     """从事件目录名 YYYY-MM-DD_HH-MM-SS 解析事件真实发生时间; 失败返回 0"""
     try:
@@ -10549,7 +11025,7 @@ def _ev_ts(name):
 def notify_scan():
     """扫一遍归档, 把新出现的哨兵事件推给飞书; 返回本轮推送条数"""
     conf = notify_conf()
-    if not conf.get("enabled") or not (_dm_ready(conf) or str(conf.get("webhook") or "").strip()):
+    if not conf.get("enabled") or not (_dm_ready(conf) or str(conf.get("webhook") or "").strip() or _wx_ready(conf)):
         return 0
     st = _nstate_load()
     seen = st.setdefault("seen", {})
@@ -10644,6 +11120,10 @@ def notify_status():
         "media": conf.get("media") or "thumb",
         "quality": conf.get("quality") or "480p",
         "vdur": int(conf.get("vdur") or 30),
+        "wx_enabled": bool(conf.get("wx_enabled")),
+        "wx_api": conf.get("wx_api") or "iyuu",
+        "has_wx_token": bool(str(conf.get("wx_token") or "").strip()),
+        "wx_ready": _wx_ready(conf),
         "last": st.get("last") or {},
         "sent_total": len(st.get("seen") or {}),
     }
@@ -10675,10 +11155,41 @@ _thermal_mode = 0
 _thermal_hold = False
 _thermal_recovering = False
 _thermal_cool_since = None
+_thermal_hold_since = None
+# 4G CPE（如中兴 F50 MU300）的 thermal_zone 常混有 modem / PA / WiFi 热区，
+# 这些区域常年 80~95°C，取最大值会把 SoC 误判成永久过热，转码直接被禁用。
+_THERMAL_SOC_HINTS = ("cpu", "soc", "tsens", "cluster", "core", "little", "big", "gpu", "npu", "ap-")
+_THERMAL_SKIP_HINTS = ("modem", "pa-", "-pa", "wifi", "wlan", "lte", "nr-", "-nr", "rf", "batt",
+                       "charger", "usb", "pmic", "xo", "ddr", "vdd")
+
+
+def _thermal_zone_type(temp_path):
+    try:
+        with open(temp_path[:-4] + "type") as f:
+            return f.read().strip().lower()
+    except OSError:
+        return ""
+
+
+def _thermal_hot(readings):
+    """从所有热区里挑出 SoC 温度；过滤外设热区，避免 4G 模块把整机判成过热"""
+    if not readings:
+        return None
+    soc = [v for v, t in readings
+           if any(h in t for h in _THERMAL_SOC_HINTS) and not any(s in t for s in _THERMAL_SKIP_HINTS)]
+    if soc:
+        return max(soc)
+    rest = sorted(v for v, t in readings if not any(s in t for s in _THERMAL_SKIP_HINTS))
+    if not rest:
+        return statistics.median([v for v, _ in readings])
+    # 没有任何明确命名的 SoC 热区时，单个异常高的外设热区(常见于 4G/PA)不应代表整机温度
+    if len(rest) >= 3 and rest[-1] - rest[-2] > 15:
+        return rest[-2]
+    return rest[-1]
 
 
 def preview_cores():
-    global _thermal_last, _thermal_value, _thermal_mode, _thermal_hold, _thermal_recovering, _thermal_cool_since
+    global _thermal_last, _thermal_value, _thermal_mode, _thermal_hold, _thermal_recovering, _thermal_cool_since, _thermal_hold_since
     with _thermal_lock:
         now = time.monotonic()
         elapsed = now - _thermal_last
@@ -10690,10 +11201,10 @@ def preview_cores():
                 with open(path) as f:
                     value = int(f.read()) / 1000
                 if 0 < value < 150:
-                    readings.append(value)
+                    readings.append((value, _thermal_zone_type(path)))
             except (ValueError, OSError):
                 continue
-        hot = max(readings, default=None)
+        hot = _thermal_hot(readings)
         if hot is None:
             # 设备没有可读的 thermal_zone（部分固件权限受限）不等于过热：
             # 以前会一直 hold，结果缩略图之外的所有转码都被静默禁用。
@@ -10707,6 +11218,8 @@ def preview_cores():
         rising = (_thermal_value is not None and elapsed <= 2
                   and hot >= 65 and hot - _thermal_value >= 3 * elapsed)
         if hot >= 78:
+            if not _thermal_hold:
+                _thermal_hold_since = now
             _thermal_hold = True
             _thermal_recovering = False
         if _thermal_hold:
@@ -10717,10 +11230,16 @@ def preview_cores():
                     _thermal_hold = False
                     _thermal_recovering = True
                     _thermal_cool_since = None
+                    _thermal_hold_since = None
             else:
                 _thermal_cool_since = None
         if _thermal_hold:
-            _thermal_mode = 0
+            # 一直高温也不要永久停掉转码：超过 10 分钟且未到危险温度时，
+            # 退回单核慢速编码，至少能出缩略图和播放画面。
+            if hot is not None and hot < 88 and _thermal_hold_since and now - _thermal_hold_since > 600:
+                _thermal_mode = 1
+            else:
+                _thermal_mode = 0
         elif _thermal_recovering:
             # Resume at reduced load; require a second stable cool interval before
             # returning to normal throughput and the existing startup boost.
@@ -12464,6 +12983,52 @@ def auth_set_pass(old, new):
     return True, "密码已更新, 其它设备需要重新登录"
 
 
+def auth_set_user(new, cur_pass):
+    """改网页登录用户名; 需当前密码确认。返回 (成功?, 提示)"""
+    global AUTH_USER
+    if os.environ.get("TSF_AUTH_USER"):
+        return False, "用户名由环境变量 TSF_AUTH_USER 控制, 改文件不生效"
+    if AUTH_ON and not pw_ok(cur_pass or ""):
+        return False, "当前密码不对"
+    u = (new or "").strip()
+    if not 3 <= len(u) <= 32:
+        return False, "用户名长度需 3~32 位"
+    if not re.match(r"^[A-Za-z0-9_.@-]+$", u):
+        return False, "用户名只能包含字母、数字、下划线、点、@ 或 -"
+    if u == AUTH_USER:
+        return False, "新用户名与当前一致"
+    try:
+        with open(AUTH_FILE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    out, has_user = [], False
+    for ln in lines:
+        s = ln.strip()
+        k = s.split("=", 1)[0].strip().lower() if ("=" in s and not s.startswith("#")) else ""
+        if k == "user":
+            out.append("user=" + u)
+            has_user = True
+        else:
+            out.append(ln)
+    if not has_user:
+        out.insert(0, "user=" + u)
+    try:
+        os.makedirs(os.path.dirname(AUTH_FILE) or ".", exist_ok=True)
+        tmp = AUTH_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, AUTH_FILE)
+    except OSError as ex:
+        return False, "写入失败: %s" % str(ex)[:80]
+    AUTH_USER = u
+    return True, "用户名已更新, 其它设备需要重新登录"
+
+
 def sess_token(exp):
     raw = "%s|%d" % (AUTH_USER, exp)
     sig = hmac.new(AUTH_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()[:32]
@@ -13134,6 +13699,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/ota/check":
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             self._json(ota_check(force=q.get("force", ["0"])[0] == "1"))
+        elif path == "/api/ota/target":
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            repo = (q.get("repo") or [""])[0]
+            t = ota_target()
+            self._json({"ok": True, "repo": t["repo"], "branch": t["branch"],
+                        "repos": OTA_REPOS, "branches": ota_branches(repo),
+                        "version": APP_VERSION})
         elif path in ("/api/storage", "/api/storage/job"):
             try:
                 self._json(dict(ok=True, job=storage_job()) if path.endswith('/job') else storage_status())
@@ -13591,6 +14163,17 @@ class Handler(BaseHTTPRequestHandler):
             ok, msg = auth_set_pass(str(body.get("old") or ""), str(body.get("new") or ""))
             self._json({"ok": ok, "msg": msg, "user": AUTH_USER})
             return
+        if path == "/api/auth/user":
+            body = self._read_json()
+            if body == "TOOBIG":
+                self._json({"ok": False, "msg": "请求体过大 (上限 1MB)"}, 413)
+                return
+            if not isinstance(body, dict):
+                self._json({"ok": False, "msg": "参数错误"}, 400)
+                return
+            ok, msg = auth_set_user(str(body.get("user") or ""), str(body.get("pass") or ""))
+            self._json({"ok": ok, "msg": msg, "user": AUTH_USER})
+            return
         if path == "/api/notify/save":
             body = self._read_json()
             if body == "TOOBIG":
@@ -13600,13 +14183,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "msg": "参数错误"}, 400)
                 return
             patch = {}
-            for k in ("enabled", "saved"):
+            for k in ("enabled", "saved", "wx_enabled"):
                 if k in body:
                     patch[k] = bool(body.get(k))
             for k in ("mode", "media", "quality", "webhook", "app_id", "receive_id",
-                      "receive_id_type", "public_url"):
+                      "receive_id_type", "public_url", "wx_api"):
                 if k in body:
                     patch[k] = str(body.get(k) or "").strip()
+            if str(body.get("wx_token") or "").strip():
+                patch["wx_token"] = str(body["wx_token"]).strip()
             if str(body.get("app_secret") or "").strip():
                 patch["app_secret"] = str(body["app_secret"]).strip()
             if "delay" in body:
@@ -13628,8 +14213,10 @@ class Handler(BaseHTTPRequestHandler):
                 warn = "" if (conf.get("public_url") or "").strip() else "私聊已可用; 填「查看链接前缀」后卡片上会有查看按钮"
             elif str(conf.get("webhook") or "").strip():
                 warn = "私聊未就绪 (需 App ID/Secret + 接收人), 当前会推到群里"
+            elif _wx_ready(conf):
+                warn = "飞书未配置, 当前只发微信提醒 (爱语飞飞)"
             else:
-                warn = "还没配接收人: 私聊需要 App ID/Secret + 接收人, 或填群机器人 webhook"
+                warn = "还没配接收人: 私聊需要 App ID/Secret + 接收人, 或填群机器人 webhook, 或开启微信提醒"
             self._json({"ok": True, "msg": "已保存", "status": notify_status(), "warn": warn})
             return
         if path == "/api/notify/test":
@@ -13685,6 +14272,14 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError:
                     pass
             self._json({"ok": ok, "msg": msg})
+            return
+        if path == "/api/ota/target":
+            body = self._read_json()
+            if body == "TOOBIG" or not isinstance(body, dict):
+                self._json({"ok": False, "msg": "参数错误"}, 400)
+                return
+            ok, msg = ota_set_target(str(body.get("repo") or ""), str(body.get("branch") or ""))
+            self._json({"ok": ok, "msg": msg, "repo": ota_target()["repo"], "branch": ota_target()["branch"]})
             return
         if path == "/api/ota/apply":
             ok, msg = ota_apply()
@@ -13751,6 +14346,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "msg": str(exc)}, 500)
                 return
             self._json(result)
+            return
+        if path == "/api/admin/diag":
+            self._json(transcode_diag())
             return
         if path == "/api/admin/restart":
             ok = restart_service()
