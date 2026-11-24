@@ -84,7 +84,7 @@ def refresh_storage_settings():
         FREE_MIN_MB = int(storage_allocation.load()['free_min_gib'] * 1024)
     except (OSError, ValueError, TypeError):
         pass
-    # 网页里设置的「最近1小时记录」窗口优先于静态 conf, 与 sentry-viewer.py 保持一致
+    # 网页里设置的「实时滚动记录」窗口优先于静态 conf, 与 sentry-viewer.py 保持一致
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as stream:
             saved = json.load(stream)

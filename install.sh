@@ -138,8 +138,17 @@ if [ -r /proc/config.gz ]; then
 fi
 
 FREE_MB=$(df -Pm "$(dirname "$TSF_DIR")" 2>/dev/null | awk 'NR==2{print $4}')
+TOTAL_MB=$(df -Pm "$(dirname "$TSF_DIR")" 2>/dev/null | awk 'NR==2{print $2}')
 [ -z "$FREE_MB" ] && FREE_MB="?"
 say "存储空闲: ${FREE_MB}MB, 计划镜像 ${SIZE_GB}G (稀疏文件, 按实际写入占用)"
+
+# 镜像最多占存储卡实际容量的一半: 归档区要与车机内容一致(车机录像会复制过来),
+# 还要放转码缓存、铃声、涂装等; 超过一半时归档区很容易被挤爆。
+if [ -n "$TOTAL_MB" ] && [ "$TOTAL_MB" != "?" ] && [ $((SIZE_GB * 1024)) -gt $((TOTAL_MB / 2)) ]; then
+    echo "  [警告] 镜像 ${SIZE_GB}G 超过存储卡实际容量的一半 ($((TOTAL_MB / 2))MB)。"
+    echo "         归档区要与车机内容保持一致，还要存放转码缓存、铃声、涂装等，建议:"
+    echo "           sudo ./install.sh --size $((TOTAL_MB / 2048))"
+fi
 
 # 容量余量: 镜像是稀疏文件, 预置文件系统后初始只占几十 KB; 但车机持续录像会
 # 逐步把它写满, 镜像 + 归档 + 系统必须留出余量, 否则磁盘写满后块设备返回
@@ -252,7 +261,13 @@ if [ -n "$TSF_TRANSCODE_DIR" ]; then
     esac
 fi
 
-# 旧版迁移: 如果用户没传 --video-root 且旧 conf 也没有 TSF_VIDEO_ROOT,
+# 旧版迁移: TSF_CACHE 早期默认指向 /opt/mu300, 该目录已废弃; 清空后改用安装目录下的 cache
+case "${TSF_CACHE:-}" in
+    /opt/mu300|/opt/mu300/|/opt/mu300/cache)
+        say "迁移 TSF_CACHE: $TSF_CACHE -> $CACHE_DIR"
+        TSF_CACHE=""
+        ;;
+esac
 # 尝试从旧分散键 TSF_ARCHIVE 反推一个合理的 VIDEO_ROOT
 if [ -z "$VIDEO_ROOT" ] && [ -z "$TSF_VIDEO_ROOT" ] && [ -n "$TSF_ARCHIVE" ]; then
     VIDEO_ROOT=$(dirname "$TSF_ARCHIVE")
@@ -328,6 +343,8 @@ TSF_BOX_KEEP_DAYS=${TSF_BOX_KEEP_DAYS:-14}
 TSF_FREE_MIN_MB=${TSF_FREE_MIN_MB:-4096}
 TSF_FREE_TARGET_MB=${TSF_FREE_TARGET_MB:-10240}
 TSF_LIVE_INTERVAL=${TSF_LIVE_INTERVAL:-15}
+TSF_PREWARM_SENTRY=${TSF_PREWARM_SENTRY:-5}
+TSF_PREWARM_SAVED=${TSF_PREWARM_SAVED:-5}
 EOF
 mv "$TMP_CONF" "$CONF"
 chmod 644 "$CONF"

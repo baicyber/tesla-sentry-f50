@@ -125,7 +125,7 @@ class Installer:
         if not 1 <= self.args.size_gb <= 128:
             raise InstallError('镜像容量须在 1～128 GiB 范围内')
         if not 1 <= self.args.drive_gb <= self.args.archive_gb:
-            raise InstallError('行车记录配额须大于 0 且不超过总归档配额')
+            raise InstallError('驾驶记录配额须大于 0 且不超过总归档配额')
         storage_allocation.validate_values(dict(archive_gib=self.args.archive_gb, drive_gib=self.args.drive_gb,
                                                 free_min_gib=4, free_target_gib=10), self.args.size_gb)
         if not 1 <= self.args.port <= 65535:
@@ -134,7 +134,7 @@ class Installer:
             raise InstallError('--start 需要同时指定 --apply')
 
     def required_bytes(self):
-        # 转码缓存放在归档区内(数据卡), 需按缓存预算预留; 程序缓存(缩略图等)在安装目录不占卡。
+        # 缓存不再单独预留预算: 转码缓存按实际文件占用计入磁盘用量, 安装估算只算镜像+归档+安全预留。
         return storage_allocation.required_bytes(dict(archive_gib=self.args.archive_gb, free_target_gib=10),
                                                  self.args.size_gb)
 
@@ -428,8 +428,12 @@ class Installer:
         uuid = run([self.tool('blkid'), '-o', 'value', '-s', 'UUID', mounted[0]]).strip()
         if not re.fullmatch(r'[A-Za-z0-9-]+', uuid):
             raise InstallError('无法读取数据盘 UUID')
-        if shutil.disk_usage(self.path(self.args.data_mount)).free < self.required_bytes():
-            raise InstallError('数据盘至少需要 %d GiB 空闲空间（镜像、归档、缓存、余量）' %
+        usage = shutil.disk_usage(self.path(self.args.data_mount))
+        if self.args.size_gb > usage.total / GIB / 2:
+            raise InstallError('镜像容量不能超过数据盘实际容量的一半（%.1f GiB）：归档区要与车机内容一致，'
+                               '还要存放转码缓存、铃声、涂装等文件' % (usage.total / GIB / 2))
+        if usage.free < self.required_bytes():
+            raise InstallError('数据盘至少需要 %d GiB 空闲空间（镜像、归档、安全预留）' %
                                (self.required_bytes() // GIB))
         app_bytes = sum(info['size'] for info in runtime_files.values()) + 128 * 1024 * 1024
         if shutil.disk_usage(self.path('/opt')).free < app_bytes:

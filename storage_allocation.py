@@ -7,9 +7,8 @@ from pathlib import Path
 import tempfile
 
 GIB = 1 << 30
-CACHE_GIB = 4
 FIELDS = ('archive_gib', 'drive_gib', 'free_min_gib', 'free_target_gib')
-# 0 = 不设上限: 归档/行车记录只受磁盘空闲保护线约束, 不再按总量清理
+# 0 = 不设上限: 归档/驾驶记录只受磁盘空闲保护线约束, 不再按总量清理
 UNLIMITED = ('archive_gib', 'drive_gib')
 
 
@@ -38,19 +37,20 @@ def validate_values(values, usb_gib):
     for name in FIELDS:
         low = 0 if name in UNLIMITED else 1
         if not low <= values[name] <= 4096:
-            raise ValueError('归档与行车记录可填 0 表示无限制；其他容量须为 1～4096 GiB')
+            raise ValueError('归档与驾驶记录可填 0 表示无限制；其他容量须为 1～4096 GiB')
     if usb_gib > 128:
         raise ValueError('U 盘容量须在 1～128 GiB 范围内')
     if values['archive_gib'] and values['drive_gib'] > values['archive_gib']:
-        raise ValueError('行车记录容量不能超过归档总容量')
+        raise ValueError('驾驶记录容量不能超过归档总容量')
     if values['free_min_gib'] > values['free_target_gib']:
         raise ValueError('最低空闲空间不能超过安全预留空间')
     return {name: int(values[name]) for name in FIELDS}
 
 
-def required_bytes(values, usb_gib, cache_gib=CACHE_GIB):
-    # 归档设成 0 表示不设上限, 空间由空闲保护线兜底, 不再计入预留预算
-    return (usb_gib + values['archive_gib'] + cache_gib + values['free_target_gib']) * GIB
+def required_bytes(values, usb_gib, cache_gib=0):
+    # 归档设成 0 表示不设上限, 空间由空闲保护线兜底, 不再计入预留预算。
+    # 缓存不再单独预留: 转码缓存按实际文件占用计入磁盘用量, 取消固定缓存预算。
+    return (usb_gib + values['archive_gib'] + values['free_target_gib']) * GIB
 
 
 def load(path=None):
@@ -162,37 +162,35 @@ def snapshot(image, archive, cache):
     return dict(total_bytes=filesystem.f_blocks * filesystem.f_frsize, free_bytes=free,
                 budget_bytes=free + image_allocated + archive_allocated + cache_allocated,
                 usb_bytes=info.st_size, archive_bytes=archive_used,
-                drive_bytes=tree_usage(archive / 'DriveClips')[0], cache_gib=CACHE_GIB if cache_on_card else 0)
+                drive_bytes=tree_usage(archive / 'DriveClips')[0])
 
 
 def check_budget(values, usb_gib, disk):
-    need = required_bytes(values, usb_gib, disk.get('cache_gib', CACHE_GIB))
+    need = required_bytes(values, usb_gib)
     if need > disk['budget_bytes']:
         raise ValueError(
-            '容量分配超过归档所在盘的可用容量 %.1f GiB：需要 %.1f（镜像 %d + 归档上限 %d + 缓存 %d + 安全预留 %d），'
-            '可用 %.1f。规则：归档区上限 + 镜像容量（连同缓存预算与安全预留）不得超过归档区所在盘；'
+            '容量分配超过归档所在盘的可用容量 %.1f GiB：需要 %.1f（镜像 %d + 归档上限 %d + 安全预留 %d），'
+            '可用 %.1f。规则：归档区上限 + 镜像容量（连同安全预留）不得超过归档区所在盘；'
             '可把归档总上限、镜像容量或安全预留调小，或将视频存储改到更大的盘。'
             % ((need - disk['budget_bytes']) / GIB, need / GIB, usb_gib,
-               values['archive_gib'], disk.get('cache_gib', CACHE_GIB),
-               values['free_target_gib'], disk['budget_bytes'] / GIB))
+               values['archive_gib'], values['free_target_gib'], disk['budget_bytes'] / GIB))
 
 
 def check_resize_budget(values, usb_gib, disk):
     """调整镜像容量时按「归档实际占用」评估，而不是归档上限。
 
     归档上限是长期清理策略，随时可以下调；把上限全额预留会让「调大 U 盘」
-    在还有很多未分配空间时也被误判为超出安全容量。缓存和安全预留仍然全额预留。
+    在还有很多未分配空间时也被误判为超出安全容量。安全预留仍然全额预留。
     """
-    cache = disk.get('cache_gib', CACHE_GIB)
     archive_actual = max(0, disk.get('archive_bytes', 0))
     if values['archive_gib']:
         archive_need = min(values['archive_gib'] * GIB, archive_actual)
     else:
         archive_need = archive_actual
-    need = usb_gib * GIB + archive_need + cache * GIB + values['free_target_gib'] * GIB
+    need = usb_gib * GIB + archive_need + values['free_target_gib'] * GIB
     if need > disk['budget_bytes']:
         raise ValueError(
-            '容量调整超出可用空间 %.1f GiB：需要 %.1f GiB（U 盘 %d + 归档实际 %.1f + 缓存 %d + 安全预留 %d），'
+            '容量调整超出可用空间 %.1f GiB：需要 %.1f GiB（U 盘 %d + 归档实际 %.1f + 安全预留 %d），'
             '可用 %.1f GiB。请减小 U 盘容量，或先清理归档/降低安全预留后重试。'
             % ((need - disk['budget_bytes']) / GIB, need / GIB, usb_gib, archive_need / GIB,
-               cache, values['free_target_gib'], disk['budget_bytes'] / GIB))
+               values['free_target_gib'], disk['budget_bytes'] / GIB))
