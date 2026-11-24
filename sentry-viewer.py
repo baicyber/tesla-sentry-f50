@@ -3053,7 +3053,7 @@ body.settings-open { overflow:hidden; }
     </section>
     <section class="storage-quota" id="storage-prewarm">
       <h3>预转码设置</h3>
-      <div class="hint">提前把哨兵录像、手动保存里的最新事件转成外网默认画质，点开即可播放，不用等转码。这里设置每个模块预转码缓存几个事件（每个事件 3 段）；填 0 关闭该模块预转码。设置同步写入 /etc/tesla-sentry.conf。</div>
+      <div class="hint">提前把哨兵录像、手动保存里的最新事件转成外网默认画质，点开即可播放，不用等转码。这里设置每个模块预转码缓存几个事件（每个事件预转全部摄像头：新款 6 路、老款 4 路，每路触发段及前后各一段）；填 0 关闭该模块预转码。设置同步写入 /etc/tesla-sentry.conf。</div>
       <div class="storage-row note"><label for="prewarm-sentry">哨兵录像预转码</label><input class="ninput" id="prewarm-sentry" type="number" min="0" max="50" step="1" inputmode="numeric"><span class="retention-unit">个事件</span></div>
       <div class="storage-row note"><label for="prewarm-saved">手动保存预转码</label><input class="ninput" id="prewarm-saved" type="number" min="0" max="50" step="1" inputmode="numeric"><span class="retention-unit">个事件</span></div>
       <div class="updbtns"><button class="mini primary" id="prewarm-save" onclick="storageSavePrewarm()" disabled>保存预转码设置</button></div>
@@ -12572,9 +12572,9 @@ def order_files(names):
 
 # ---------- 新事件 480p 预热: 点开秒开 ----------
 # 实测 (T760 / 8 核): 一段 60 秒的 1280x960 转 480p 要 17~18 秒 (360p 约 16 秒)。
-# 播放器默认单路 480p (与飞书推送/导出的默认档位一致), 所以只转那一路:
-#   * 触发段 + 前后各一段, 每事件 3 个文件 (~10MB), 不再是 12 个 (整组 4~6 路 x 3 段)
-#   * 单路串行, 且只借 Q_SEM 一个名额: 有人在看视频 / 有人在等转码就让位
+# 播放器默认单路 480p, 但用户常切后视/B柱/全览, 所以事件的每路摄像头都预热:
+#   * 每路 触发段 + 前后各一段: 新款 6 路最多 18 个文件, 老款 4 路最多 12 个
+#   * 串行转码, 且只借 Q_SEM 一个名额: 有人在看视频 / 有人在等转码就让位
 #   * 最近 2 分钟还在写的事件跳过, 免得转半截文件
 PREWARM = {"on": os.environ.get("TSF_PREWARM", "1") != "0", "done": 0, "last": "", "skip": {}}
 PREWARM_CATS = ("SentryClips", "SavedClips")
@@ -12593,9 +12593,9 @@ def _cam_of(f):
 
 
 def _prewarm_targets(cat, name):
-    """只预热「触发摄像头」那一路 (触发段 + 前后各一段)。
-    默认播放器就是单路, 其他方位等用户点按钮时再按需转 —— 以前每段转满 6 路、
-    三段共 12 个文件, 现在只要 3 个, 同一个事件省 3/4 的 CPU 和缓存。"""
+    """预热事件里全部摄像头 (新款 6 路 / 老款 4 路), 每路取触发段 + 前后各一段。
+    之前只转触发那一路 (3 个文件), 用户切后视 / B 柱 / 全览时仍要等转码;
+    现在每路都转, 代价是缓存和 CPU 约为原来的 4~6 倍。"""
     if cat == "RecentClips":
         # 驾驶记录 / 准实时预览: 没有 event.json, 每分钟一个新目录, 4 路同组。
         # 只转默认那一路 (front), 其余等用户点; 全览由前端 /api/kick 补。
@@ -12612,23 +12612,32 @@ def _prewarm_targets(cat, name):
     if not fp:
         return []
     d = os.path.dirname(fp)
-    cam = _cam_of(os.path.basename(fp))
     try:
-        names = [f for f in os.listdir(d)
-                 if f.lower().endswith(".mp4") and _cam_of(f) == cam]
+        names = [f for f in os.listdir(d) if f.lower().endswith(".mp4")]
     except OSError:
         return [fp]
-    by_group = {}
-    for f in names:
-        by_group[clip_key(f)] = f
-    k = clip_key(os.path.basename(fp))
-    if k not in by_group:
+    if not names:
         return [fp]
-    gkeys = sorted(by_group)
-    gi = gkeys.index(k)
-    # 顺序 = 观看概率: 触发段 → 下一段 (播放向前推进) → 上一段
-    order = [k] + gkeys[gi + 1:gi + 2] + (gkeys[gi - 1:gi] if gi > 0 else [])
-    return [os.path.join(d, by_group[g]) for g in order if g in by_group]
+    by_cam = {}
+    for f in names:
+        by_cam.setdefault(_cam_of(f), {})[clip_key(f)] = f
+    k = clip_key(os.path.basename(fp))
+    trigger_cam = _cam_of(os.path.basename(fp))
+    # 触发那一路优先, 其余按 6 路 / 4 路的统一顺序; 目录里没有的方位自动跳过
+    cams = []
+    for cam in [trigger_cam] + CAM_ORDER6:
+        if cam in by_cam and cam not in cams:
+            cams.append(cam)
+    targets = []
+    for cam in cams:
+        gmap = by_cam[cam]
+        base = k if k in gmap else max(gmap)     # 该路缺触发段时退回最新段
+        gkeys = sorted(gmap)
+        gi = gkeys.index(base)
+        # 顺序 = 观看概率: 触发段 → 下一段 (播放向前推进) → 上一段
+        order = [base] + gkeys[gi + 1:gi + 2] + (gkeys[gi - 1:gi] if gi > 0 else [])
+        targets += [os.path.join(d, gmap[g]) for g in order if g in gmap]
+    return targets or [fp]
 
 
 def _prewarm_limits():
