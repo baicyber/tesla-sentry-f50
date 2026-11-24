@@ -359,7 +359,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.51"
+APP_VERSION = "2.8.52"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -8968,6 +8968,16 @@ DRIVE_CAMERAS = ("front", "back", "left_repeater", "right_repeater")
 DRIVE_PARK_SECONDS = 300
 DRIVE_MAX_GAP = 10
 DRIVE_MAX_GB = int(os.environ.get("TSF_DRIVE_MAX_GB", "12"))
+# 「最近1小时记录」与哨兵事件的重复片段合并:
+# 车机在哨兵触发时会把最近几分钟的片段从 RecentClips 复制进 SentryClips,
+# 盒子里因此存了两份内容完全相同的 mp4。RecentClips 只留约 1 小时,
+# 这 1 小时内同一段占了双份; 这里把 SentryClips 那份替换成指向 RecentClips
+# 的硬链接 (同一 inode), 只保留一份数据块。之后 RecentClips 被滚动删除时,
+# SentryClips 的硬链接继续持有数据, 回放与保留期都不受影响。
+DEDUP_INTERVAL = max(0, int(os.environ.get("TSF_DEDUP_INTERVAL", "1800")))     # 秒; 0=关闭
+DEDUP_WINDOW_MIN = max(1, int(os.environ.get("TSF_DEDUP_WINDOW_MIN", "180")))  # 只查最近 N 分钟内有写入的事件目录
+DEDUP_MAX_MB = max(0, int(os.environ.get("TSF_DEDUP_MAX_MB", "4096")))         # 每轮最多校验的 MiB; 0=不限
+_DEDUP = {"t": 0.0}
 
 _storage_edit_lock = threading.RLock()
 _storage_job_lock = threading.Lock()
@@ -9869,6 +9879,141 @@ def health_logger():
         time.sleep(60)
 
 
+def _read_slice(path, offset, size):
+    try:
+        with open(path, "rb") as stream:
+            stream.seek(offset)
+            return stream.read(size)
+    except OSError:
+        return None
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.digest()
+
+
+def _dedupe_same_content(a, b, size):
+    """大小相同还不够: 先比首尾采样, 再全量 SHA-256, 确认是同一段数据。"""
+    sample = min(1 << 20, size)
+    for offset in (0, max(0, size - sample)):
+        head = _read_slice(a, offset, sample)
+        if head is None or head != _read_slice(b, offset, sample):
+            return False
+    first, second = _file_sha256(a), _file_sha256(b)
+    return first is not None and first == second
+
+
+def dedupe_recent_sentry(force=False):
+    """把 SentryClips 里与 RecentClips 同名的重复片段替换成硬链接。
+
+    同名意味着同一分钟、同一镜头 (车机按分钟时间戳命名), 再叠加首尾采样 +
+    全量 SHA-256 校验, 确认内容一致才合并, 不会误删不同内容。
+    返回 (合并数, 预计释放字节数)。
+    """
+    if DEDUP_INTERVAL <= 0 and not force:
+        return 0, 0
+    now = time.time()
+    if not force and now - _DEDUP["t"] < DEDUP_INTERVAL:
+        return 0, 0
+    _DEDUP["t"] = now
+    recent_root = os.path.join(ARCHIVE, "RecentClips")
+    sentry_root = os.path.join(ARCHIVE, "SentryClips")
+    if not os.path.isdir(recent_root) or not os.path.isdir(sentry_root):
+        return 0, 0
+    index = {}
+    try:
+        for minute in os.listdir(recent_root):
+            folder = os.path.join(recent_root, minute)
+            if not os.path.isdir(folder):
+                continue
+            for name in os.listdir(folder):
+                if not name.lower().endswith(".mp4"):
+                    continue
+                path = os.path.join(folder, name)
+                try:
+                    info = os.stat(path)
+                except OSError:
+                    continue
+                if stat.S_ISREG(info.st_mode) and info.st_size > 0:
+                    index[name] = (path, info)
+    except OSError:
+        return 0, 0
+    if not index:
+        return 0, 0
+    try:
+        events = os.listdir(sentry_root)
+    except OSError:
+        return 0, 0
+    budget = DEDUP_MAX_MB << 20 if DEDUP_MAX_MB else None
+    cutoff = now - DEDUP_WINDOW_MIN * 60
+    merged = freed = 0
+    for event in events:
+        folder = os.path.join(sentry_root, event)
+        if not os.path.isdir(folder) or os.path.islink(folder):
+            continue
+        try:
+            if os.path.getmtime(folder) < cutoff:     # 老事件早就过了 RecentClips 窗口
+                continue
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        for name in names:
+            if not name.lower().endswith(".mp4"):
+                continue
+            source = os.path.join(folder, name)
+            item = index.get(name)
+            if item is None or os.path.islink(source):
+                continue
+            recent_path, recent_info = item
+            try:
+                info = os.stat(source)
+            except OSError:
+                continue
+            if not stat.S_ISREG(info.st_mode) or info.st_size != recent_info.st_size:
+                continue
+            if (info.st_dev, info.st_ino) == (recent_info.st_dev, recent_info.st_ino):
+                continue                               # 已经是同一份数据
+            if budget is not None:
+                if budget <= 0:
+                    return merged, freed
+                budget -= info.st_size
+            if not _dedupe_same_content(source, recent_path, info.st_size):
+                continue
+            tmp = os.path.join(folder, ".dedup-%s" % name)
+            try:
+                os.link(recent_path, tmp)
+                if not os.path.samestat(os.stat(tmp), recent_info):
+                    raise OSError("链接校验失败")
+                os.replace(tmp, source)
+            except OSError:
+                if os.path.exists(tmp):
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                continue
+            merged += 1
+            if info.st_nlink == 1:                     # 旧副本没有别的链接, 合并后释放
+                freed += info.st_size
+            try:                                       # 目录落盘失败不影响本次合并
+                dir_fd = os.open(folder, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass
+            print("合并重复片段 %s/%s (%d KB)" % (event, name, info.st_size // 1024), flush=True)
+    return merged, freed
+
+
 def disk_guard_cycle(drive):
     with _storage_edit_lock:
         if storage_busy() or os.environ.get('TSF_ARCHIVE_MAINTENANCE') == '1':
@@ -9910,6 +10055,14 @@ def disk_guard():
     drive = DriveArchive()
     while True:
         disk_guard_cycle(drive)
+        # 重复片段合并在清理锁之外执行: 全量校验可能耗时, 不该卡住用户的删除/移动操作
+        try:
+            if not storage_busy() and os.environ.get('TSF_ARCHIVE_MAINTENANCE') != '1':
+                merged, freed = dedupe_recent_sentry()
+                if merged:
+                    print("重复片段合并完成: %d 个, 释放约 %.1f MiB" % (merged, freed / 1048576.0), flush=True)
+        except Exception as ex:
+            print("重复片段合并失败: %s" % ex, flush=True)
         time.sleep(DISK_GUARD_INTERVAL)
 
 
