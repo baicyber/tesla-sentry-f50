@@ -12,6 +12,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -307,8 +308,11 @@ class Installer:
         managers = []
         if shutil.which('apk'):
             managers.append((['apk', 'add', '--no-cache', 'ffmpeg'], None))
+            # 有的固件把 ffmpeg 拆成 cli + full 库, 精简版解不了 HEVC
+            managers.append((['apk', 'add', '--no-cache', 'libffmpeg-full'], None))
         if shutil.which('opkg'):
             managers.append((['opkg', 'install', 'ffmpeg'], ['opkg', 'update']))
+            managers.append((['opkg', 'install', 'libffmpeg-full'], None))
         if not managers:
             raise InstallError('缺少 ffmpeg/ffprobe，且系统没有 apk/opkg；'
                                '请先执行 `apk add ffmpeg`，'
@@ -331,9 +335,77 @@ class Installer:
         raise InstallError('自动安装 FFmpeg 失败：%s；请手动执行 `apk add ffmpeg`，'
                            '或用 --ffmpeg /usr/bin/ffmpeg 指定' % '；'.join(tried))
 
+    def ffmpeg_caps(self, binary):
+        """真实能力探测: 编码器列表很长, 必须整段搜索, 不能截断。"""
+        def dump(flag):
+            try:
+                p = subprocess.run([binary, '-hide_banner', flag], stdin=subprocess.DEVNULL,
+                                   capture_output=True, text=True, timeout=60, errors='replace')
+                return (p.stdout or '') + (p.stderr or '')
+            except Exception:
+                return ''
+        enc, dec = dump('-encoders'), dump('-decoders')
+        filters, muxers = dump('-filters'), dump('-muxers')
+        row = r'^\s*\S{6}\s+%s\s'
+        return {'x264': bool(re.search(row % 'libx264', enc, re.M)),
+                'v4l2': bool(re.search(row % 'h264_v4l2m2m', enc, re.M)),
+                'hevc': bool(re.search(row % 'hevc', dec, re.M)),
+                'scale': bool(re.search(r'^\s*\S+\s+scale\s', filters, re.M)),
+                'subtitles': bool(re.search(r'^\s*\S+\s+subtitles\s', filters, re.M)),
+                'mp4': bool(re.search(r'^\s*\S+\s+mp4\s', muxers, re.M))}
+
+    def ffmpeg_ok(self, binary):
+        """完整构建的标准: 能解 HEVC(Tesla 原片)、能编 H.264、有 scale 滤镜和 mp4 封装。"""
+        caps = self.ffmpeg_caps(binary)
+        return (caps['hevc'] and (caps['x264'] or caps['v4l2'])
+                and caps['scale'] and caps['mp4']), caps
+
+    def install_static_ffmpeg(self):
+        """固件的 ffmpeg 是精简构建时, 下载官方 arm64 静态包 (含 HEVC 解码 + libx264)。
+        只从固定的官方地址取, 解压时按文件名白名单提取 ffmpeg / ffprobe。"""
+        target = self.path('/opt/tsf-ffmpeg')
+        binary = target / 'ffmpeg'
+        probe = target / 'ffprobe'
+        if binary.is_file() and os.access(binary, os.X_OK):
+            ok, _caps = self.ffmpeg_ok(str(binary))
+            if ok:
+                return {'ffmpeg': str(binary), 'ffprobe': str(probe)}
+        url = 'https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz'
+        print('固件自带的 FFmpeg 不完整（缺 HEVC 解码或 H.264 编码），'
+              '正在下载官方静态构建：%s' % url, flush=True)
+        target.mkdir(parents=True, exist_ok=True)
+        archive = Path(tempfile.mkdtemp(prefix='tsf-ff-', dir='/tmp')) / 'ffmpeg.tar.xz'
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'tsf-install/1.0'})
+            with urllib.request.urlopen(req, timeout=300) as stream, open(archive, 'wb') as out:
+                shutil.copyfileobj(stream, out)
+            with tarfile.open(archive, 'r:xz') as tar:
+                for member in tar.getmembers():
+                    name = PurePosixPath(member.name).name
+                    if not member.isfile() or name not in ('ffmpeg', 'ffprobe'):
+                        continue
+                    source = tar.extractfile(member)
+                    if source is None:
+                        continue
+                    temporary = target / ('.' + name + '.part')
+                    with open(temporary, 'wb') as out:
+                        shutil.copyfileobj(source, out)
+                    os.chmod(temporary, 0o755)
+                    temporary.replace(target / name)
+        finally:
+            archive.unlink(missing_ok=True)
+            archive.parent.rmdir()
+        ok, caps = self.ffmpeg_ok(str(binary))
+        if not ok:
+            raise InstallError('静态 FFmpeg 校验失败（HEVC=%s libx264=%s scale=%s mp4=%s）；'
+                               '请手动放置 ffmpeg/ffprobe 后用 --ffmpeg /opt/tsf-ffmpeg/ffmpeg 指定'
+                               % (caps['hevc'], caps['x264'], caps['scale'], caps['mp4']))
+        return {'ffmpeg': str(binary), 'ffprobe': str(probe)}
+
     def provision_ffmpeg(self):
-        """--install-deps: 先补齐依赖, 再按 libx264/滤镜/实际编码一帧做完整校验。
-        校验比"文件存在"更重要 —— OpenWrt 自带的精简 ffmpeg 通常没有 libx264。"""
+        """--install-deps: 先补齐依赖, 再按 HEVC/libx264/滤镜/实际编码一帧做完整校验。
+        校验比"文件存在"更重要 —— OpenWrt 自带的精简 ffmpeg 通常没有 libx264 和 HEVC 解码,
+        表现就是网页里抽帧失败、转码报 Option not found。"""
         if not (self.resolve_binary('ffmpeg') and self.resolve_binary('ffprobe')):
             self.package_install()
         resolved = {}
@@ -344,13 +416,29 @@ class Installer:
                                    % (name, name, name))
             run([binary, '-version'], timeout=30)
             resolved[name] = binary
+        ok, caps = self.ffmpeg_ok(resolved['ffmpeg'])
+        if not ok and not self.args.ffmpeg:
+            # 包管理器只装到精简版: 再试一次 full 库, 最后退回官方静态构建
+            try:
+                self.package_install()
+            except InstallError as exc:
+                print('补充安装完整 FFmpeg 失败：%s' % exc, flush=True)
+            resolved['ffmpeg'] = self.resolve_binary('ffmpeg') or resolved['ffmpeg']
+            resolved['ffprobe'] = self.resolve_binary('ffprobe') or resolved['ffprobe']
+            ok, caps = self.ffmpeg_ok(resolved['ffmpeg'])
+        if not ok:
+            print('FFmpeg 能力不足（HEVC=%s libx264=%s scale=%s mp4=%s），改用静态构建'
+                  % (caps['hevc'], caps['x264'], caps['scale'], caps['mp4']), flush=True)
+            resolved = self.install_static_ffmpeg()
         filters = run([resolved['ffmpeg'], '-hide_banner', '-filters'], timeout=60)
         for required in ('scale', 'pad', 'fps', 'xstack', 'setsar', 'subtitles'):
             if not re.search(r'\s' + required + r'\s', filters):
                 raise InstallError('FFmpeg 缺少滤镜：%s。请用 `apk add ffmpeg` 安装完整构建，'
                                    '或用 --ffmpeg /usr/bin/ffmpeg 指定' % required)
+        enc = self.ffmpeg_caps(resolved['ffmpeg'])
+        encoder = 'libx264' if enc['x264'] else 'h264_v4l2m2m'
         run([resolved['ffmpeg'], '-v', 'error', '-f', 'lavfi', '-i',
-             'color=size=64x64:rate=1', '-frames:v', '1', '-c:v', 'libx264',
+             'color=size=64x64:rate=1', '-frames:v', '1', '-c:v', encoder,
              '-f', 'null', '-'], timeout=120)
         return resolved
 
@@ -487,7 +575,8 @@ class Installer:
             if not re.search(r'\s' + required + r'\s', filters):
                 raise InstallError('FFmpeg 缺少滤镜：' + required)
         run([self.device['ffmpeg'], '-v', 'error', '-f', 'lavfi', '-i',
-             'color=size=64x64:rate=1', '-frames:v', '1', '-c:v', 'libx264',
+             'color=size=64x64:rate=1', '-frames:v', '1', '-c:v',
+             'libx264' if self.ffmpeg_caps(self.device['ffmpeg'])['x264'] else 'h264_v4l2m2m',
              '-f', 'null', '-'])
         with socket.socket() as probe:
             try:

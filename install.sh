@@ -176,7 +176,15 @@ else
     FFMPEG="$(command -v ffmpeg 2>/dev/null || echo /usr/bin/ffmpeg)"
     FFPROBE="$(command -v ffprobe 2>/dev/null || echo /usr/bin/ffprobe)"
 fi
-if [ -x "$FFMPEG" ]; then say "ffmpeg: $FFMPEG"
+if [ -x "$FFMPEG" ]; then
+    say "ffmpeg: $FFMPEG"
+    # 精简构建 (OpenWrt mini) 缺 libx264 和 HEVC 解码: 网页里表现为抽帧失败、
+    # 转码报 Option not found。装完就提前提示, 不要等用户去"运行监测"里发现。
+    if ! "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -q libx264 \
+       || ! "$FFMPEG" -hide_banner -decoders 2>/dev/null | grep -q hevc; then
+        echo "  [警告] 当前 ffmpeg 是精简构建：缺少 libx264 或 HEVC 解码, 缩略图/转码会失败。"
+        echo "         修复: sh install.sh f50-apply --install-deps  (会自动补装完整版或官方静态构建)"
+    fi
 else echo "  [提示] 未找到 ffmpeg, 列表缩略图会缺失 (F50 执行 apk add ffmpeg 即可)"; fi
 
 # ---------------- 1. 目录与文件 ----------------
