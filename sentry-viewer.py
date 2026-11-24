@@ -6317,13 +6317,16 @@ function storageRenderUsage() {
   const G = 1073741824;
   const cardTotal = disk.total_bytes || 0, free = disk.free_bytes || 0;
   const usbImg = disk.usb_bytes || 0;
+  // 车机 U 盘镜像是预分配文件，宿主盘上占的是标称容量；卷内实际写入多少单独标注，
+  // 与「实际用量」里的车机 U 盘一致。
+  const usbUsed = disk.usb_used_bytes != null ? disk.usb_used_bytes : usbImg;
   const drive = disk.drive_bytes || 0, sentry = disk.sentry_bytes || 0;
   const saved = disk.saved_bytes || 0, recent = disk.recent_bytes || 0;
   const cache = disk.cache_bytes || 0;
   const other = Math.max(0, cardTotal - usbImg - drive - sentry - saved - recent - free);
   const cap = (bytes) => (bytes / G).toFixed(2) + ' GiB';
   const segs = [
-    ['车机 U 盘镜像', usbImg, '#4c8dff'],
+    ['车机 U 盘镜像（已用 ' + cap(usbUsed) + '）', usbImg, '#4c8dff'],
     ['驾驶记录', drive, '#35c288'],
     ['哨兵', sentry, '#e8443f'],
     ['手动保存', saved, '#b06cf0'],

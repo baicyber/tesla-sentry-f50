@@ -138,7 +138,7 @@ OTA、飞书推送、认证的参数**不写入这个 conf**，走环境变量�
 - **播放黑屏**：视频是 H.265 / HEVC，Windows 用 Edge / Chrome（需 HEVC 解码器）、iPhone Safari 原生支持，部分安卓浏览器不支持。
 - **网页没有事件**：看 `/opt/tesla-sentry/` 下的 `tesla-live.log`、`tesla-sync.log`；先确认顶部同步状态胶囊在线，再核对归档目录与镜像路径。
 - **缩略图一直不出现 / 点开视频缓冲很久**：先看页面顶部有没有「FFmpeg 未配置」红条，或执行 `grep TSF_FFMPEG /etc/tesla-sentry.conf` 后用该路径跑一次 `-version`。缺少 `ffmpeg`/`ffprobe` 时缩略图会全部 404、清晰度转码会退化成原画（公网链路上就表现为一直缓冲）。修复：F50 上先 `apk add ffmpeg`，再执行 `sh install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg`（已安装的设备也会走这条修复路径：补齐依赖 → 写回配置 → 重启服务）。配置里的 `TSF_FFMPEG`/`TSF_FFPROBE` 应指向 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`，不要再用来源不明的 aarch64 静态包。
-- **存储分配填 0**：「盒子归档总上限」填 0 = 不设上限（不再按总量清理，只有磁盘空闲低于保护线时才从最旧清起）；驾驶记录上限仍须 ≥1，且不能超过归档上限。
+- **存储分配填 0**：「记录分类归档总上限」填 0 = 不设上限（不再按总量清理，只有磁盘空闲低于保护线时才从最旧清起）；驾驶记录上限仍须 ≥1，且不能超过归档上限。
 - **手动只覆盖主程序**：`sentry-viewer.py` 在顶层使用同目录的 `storage_allocation.py` 与 `storage_resize.py`。2.8.43 起主程序内嵌了两份 gzip 副本，同目录找不到文件时会自动顶上，所以只替换主程序也能正常启动（`--ota-check` 会显示 `modules=embedded`）。网页 OTA 会自动把主程序、本地模块和 `tesla-live-sync.py` 一起下载、一起自检、一起安装，缺文件或模块损坏时**拒绝升级、保留旧版**；手动升级仍建议把相关 `.py` 一起复制，或直接重跑 `install.sh`（方便单独热修模块）。
 
 ### 检查更新失败（连不上 GitHub）
