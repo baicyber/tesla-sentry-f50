@@ -359,7 +359,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.49"
+APP_VERSION = "2.8.50"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -11122,9 +11122,9 @@ def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead
     seconds = PREVIEW_PART_SECONDS
     end = max(1, math.ceil((duration - .08) / seconds))
     fast_hd = quality == '720p'
-    # The HTTP response is released when the batch finishes. A short first batch
-    # supplies the seek target and runway without delaying other visible cameras.
-    batch_size = 3 if startup_boost else (6 if fast_hd else 4)
+    # HTTP 响应要等这一批编完才发。用户正等首帧 (prime) 时只编 1 片, 立刻出画;
+    # 预读才批量摊销 ffmpeg 启动 + 定位解码的开销 (以前 480p 首帧也要等 4 片编码).
+    batch_size = 1 if startup_boost else (8 if fast_hd else 6)
     count = min(batch_size if ahead and not warm else 1, end - index)
     for step in range(1, count):
         if os.path.isfile("%s%d.%s" % (prefix, index + step, transport)):
@@ -11142,7 +11142,7 @@ def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead
            "-frames:v", str(max(1, math.ceil(length * 24 - .0001))), "-map", "0:v:0", "-an", "-filter_threads", "1",
            "-vf", "setpts=PTS-STARTPTS,fps=24:start_time=0," + scale + ",tpad=stop_mode=clone:stop_duration=0.1",
            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-           "-profile:v", "baseline", "-level", level, "-threads:v", str(TR_THREADS), "-preset", "ultrafast" if fast_hd else "superfast",
+           "-profile:v", "baseline", "-level", level, "-threads:v", str(TR_THREADS), "-preset", "ultrafast",
            "-b:v", "%dk" % bitrate, "-maxrate", "%dk" % (bitrate * 3 // 2), "-bufsize", "%dk" % (bitrate * 3),
            "-g", str(24 * seconds), "-sc_threshold", "0", "-force_key_frames", "expr:gte(t,n_forced*%d)" % seconds,
            "-f", "segment", "-segment_time_delta", "0.020833", "-segment_start_number", str(index)]
