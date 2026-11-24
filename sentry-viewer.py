@@ -198,6 +198,8 @@ def _load_conf(path="/etc/tesla-sentry.conf"):
 # /etc/tesla-sentry.conf 每个参数的用途说明; 升级时自动补到对应行上方。
 CONF_DOCS = {
     "TSF_DIR": "程序安装目录 (服务与脚本从这里启动)",
+    "TSF_CARD_UUID": "F50 数据卡 UUID",
+    "TSF_CARD_MNT": "F50 数据卡挂载点",
     "TSF_VIDEO_ROOT": "视频存储根目录: img/ 放车机镜像, archive/ 放归档",
     "TSF_IMG": "车机 U 盘镜像路径 (exFAT 稀疏文件)",
     "TSF_ARCHIVE": "归档区目录 (RecentClips / SentryClips / SavedClips / DriveClips)",
@@ -217,15 +219,15 @@ CONF_DOCS = {
     "TSF_USB_LOCK": "U 盘导出/文件管理互斥锁文件",
     "TSF_RECENT_ROLL_MIN": "实时滚动记录 (RecentClips) 保留分钟, 0=不滚动",
     "TSF_RECENT_KEEP_MIN": "空间兜底清理时最近必留分钟",
-    "TSF_RECENT_MAX_GB": "实时滚动记录体积上限 GiB, 0=不限",
+    "TSF_RECENT_MAX_GB": "实时滚动记录体积上限 G, 0=不限",
     "TSF_BOX_KEEP_DAYS": "盒子侧哨兵/手动保存按天保留, 0=不限",
     "TSF_FREE_MIN_MB": "存储卡空闲低于此值暂停同步 (MiB)",
     "TSF_FREE_TARGET_MB": "空间不足时清理到的目标空闲 (MiB)",
     "TSF_LIVE_INTERVAL": "在线只读同步轮询秒数",
     "TSF_PREWARM_SENTRY": "哨兵录像预转码缓存事件数, 0=关闭",
     "TSF_PREWARM_SAVED": "手动保存预转码缓存事件数, 0=关闭",
-    "TSF_ARCHIVE_TOTAL_GB": "归档区总容量上限 GiB, 0=不限",
-    "TSF_DRIVE_MAX_GB": "驾驶记录容量上限 GiB, 0=不限",
+    "TSF_ARCHIVE_TOTAL_GB": "归档区总容量上限 G, 0=不限",
+    "TSF_DRIVE_MAX_GB": "驾驶记录容量上限 G, 0=不限",
     "TSF_STORAGE_SETTINGS": "网页存储分配的 settings.json 路径 (留空=程序目录)",
 }
 # 已废弃参数: 升级时直接从 conf 移除
@@ -1387,6 +1389,7 @@ def ota_rollback():
 # 设置存在 settings.json (与 auth.conf 同目录), 默认开启: 每 5 分钟看一次有没有新版本,
 # 有就等"没人在看视频/没有导出任务"的窗口自动升级 (升级只重启本服务, 约 5 秒)
 SETTINGS_FILE = os.environ.get("TSF_SETTINGS", "/opt/tesla-sentry/settings.json")
+GEOCODE_CACHE_FILE = os.environ.get("TSF_GEOCODE_CACHE", os.path.join(os.path.dirname(SETTINGS_FILE) or ".", "geocode-cache.json"))
 AUTO_UPD = {"last_check": 0, "last_result": "", "last_apply": 0, "next_try": 0}
 
 # ---- 标题栏标识 (logo + 名称): 默认内置这张图, 设置里可换成自己的 ----
@@ -1485,7 +1488,7 @@ PLAYBACK_QUALITIES = ("orig", "720p", "480p", "360p")
 RETENTION_FIELDS = {
     "recent_roll_min": (0, 1440),   # 「实时滚动记录」滚动窗口(分钟), 0=不按时间滚动
     "recent_keep_min": (0, 1440),   # 空间兜底清理时最近必留(分钟)
-    "recent_max_gb": (0, 4096),     # 「实时滚动记录」体积上限(GiB), 0=不限; 归档不限量时仍独立生效
+    "recent_max_gb": (0, 4096),     # 「实时滚动记录」体积上限(G), 0=不限; 归档不限量时仍独立生效
     "box_keep_days": (0, 3650),     # 哨兵/手动保存按天数保留, 0=不按天数清理
 }
 # 预转码缓存: 每个模块只预转码最新的 N 个事件, 0=关闭该模块预转码
@@ -1504,7 +1507,7 @@ def _retention_default(name, default):
 
 def load_settings():
     d = {"auto_update": True, "ui_style": "default", "brand_name": "", "brand_logo": "",
-         "remote_quality": "480p",
+         "remote_quality": "480p", "amap_key": "",
          "recent_roll_min": _retention_default("TSF_RECENT_ROLL_MIN", 60),
          "recent_keep_min": _retention_default("TSF_RECENT_KEEP_MIN", 60),
          "recent_max_gb": _retention_default("TSF_RECENT_MAX_GB", 12),
@@ -1533,6 +1536,9 @@ def load_settings():
             wq = str(j.get("remote_quality") or "")
             if wq in PLAYBACK_QUALITIES:
                 d["remote_quality"] = wq
+            key = str(j.get("amap_key") or "").strip()
+            if re.fullmatch(r"[A-Za-z0-9]{16,64}", key):
+                d["amap_key"] = key
             # 保留时间/容量策略: 只接受范围内的整数, 非法值忽略并用默认
             for name, (low, high) in list(RETENTION_FIELDS.items()) + list(PREWARM_FIELDS.items()):
                 if name not in j or isinstance(j[name], bool):
@@ -1889,44 +1895,53 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
   color:var(--text); font-variant-numeric:tabular-nums; }
 .netspeed[hidden] { display:none; }
 .netspeed .netk { color:var(--muted); font-weight:600; margin-right:4px; }
-/* 视频上方的动画遥测 HUD: 方向盘 / 转向灯 / 加减速 / 车速 (居中一条, 手机端同样单行) */
-.telhud { display:none; align-items:center; justify-content:center; gap:14px; flex-wrap:nowrap;
-  width:max-content; max-width:100%; margin:8px auto 2px; padding:7px 14px 6px;
-  border-radius:12px; background:var(--panel2); border:1px solid var(--line);
-  color:var(--text); overflow:hidden; font-variant-numeric:tabular-nums; }
-.telhud.show { display:flex; animation:thIn .28s ease-out; }
-@keyframes thIn { from { opacity:0; transform:translateY(-6px) scale(.96) } to { opacity:1; transform:none } }
-.th-top { display:flex; align-items:center; justify-content:center; gap:8px; }
+/* 视频右上方遥测：与摄像头/全览按钮同一行，顺序固定，便于各播放页统一识别。 */
+.video-toolbar { order:-1; display:flex; align-items:center; gap:10px; width:100%; max-width:1200px; margin:0 auto; overflow-x:auto; }
+.player .video-toolbar .cambar { order:0; flex:0 0 auto; width:auto; max-width:none; margin:0; }
+.telhud { display:none; align-items:center; justify-content:flex-end; gap:10px; flex:0 0 auto;
+  width:max-content; max-width:100%; margin:0 0 0 auto; padding:5px 9px;
+  border-radius:6px; background:var(--panel); border:1px solid var(--line);
+  color:var(--text); font-variant-numeric:tabular-nums; }
+.telhud.show { display:flex; animation:thIn .2s ease-out; }
+@keyframes thIn { from { opacity:0; transform:translateY(-4px) } to { opacity:1; transform:none } }
 .th-sig { display:inline-flex; opacity:.26; color:var(--muted); }
-.th-sig svg { width:21px; height:21px; display:block; }
+.th-sig svg { width:20px; height:20px; display:block; }
 .th-sig.on { opacity:1; color:#ffb340; animation:tpBlink 1.05s steps(1,end) infinite; }
 .th-gear { min-width:22px; height:22px; padding:0 4px; border-radius:11px; background:#34c759; color:#fff;
   font-size:12px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
-.th-mid { display:flex; align-items:center; gap:8px; }
-.th-wheel { width:42px; height:42px; flex:none; color:var(--text); transition:transform .1s linear; }
+.th-wheel { width:32px; height:32px; flex:none; color:var(--text); transition:transform .1s linear; }
 .th-wheel.ap { color:#5aa2ff; filter:drop-shadow(0 0 6px rgba(90,162,255,.55)); }
-.th-spdbox { display:flex; align-items:baseline; gap:2px; }
-.th-spdbox b { font-size:25px; line-height:1; font-weight:800; letter-spacing:-.5px; }
-.th-spdbox i { font-size:10.5px; font-style:normal; color:var(--muted); }
-.th-acc { display:flex; align-items:center; gap:5px; height:16px; min-width:96px; }
+.th-spdbox { display:flex; align-items:baseline; gap:2px; white-space:nowrap; }
+.th-spdbox b { font-size:22px; line-height:1; font-weight:800; letter-spacing:-.5px; }
+.th-spdbox i { font-size:10px; font-style:normal; color:var(--muted); }
+.th-pedal { display:inline-flex; align-items:center; gap:3px; color:var(--muted); white-space:nowrap; font-size:11px; }
+.th-pedal svg { width:18px; height:18px; }
+.th-pedal b { font-weight:600; }
+.th-brk.on { color:#ff453a; }
+.th-thr { color:var(--blue); }
+.th-acc { display:flex; align-items:center; gap:5px; height:16px; min-width:82px; }
 .th-bar { position:relative; flex:1; height:5px; border-radius:3px; background:var(--line2); overflow:hidden; }
 .th-bar i { position:absolute; left:50%; top:0; bottom:0; width:0; border-radius:3px; background:#8e99a5;
   transition:left .12s linear, width .12s linear, background .18s; }
 .th-acc.acc .th-bar i { background:#34c759; }
 .th-acc.dec .th-bar i { background:#ff453a; }
-.th-acct { font-size:10.5px; color:var(--muted); min-width:30px; text-align:right; }
+.th-acct { font-size:10px; color:var(--muted); min-width:24px; text-align:right; }
 .th-acct.acc { color:#34c759; }
 .th-acct.dec { color:#ff6b60; }
+.th-place { display:inline-flex; align-items:center; gap:3px; min-width:0; max-width:140px; color:var(--muted); font-size:11px; }
+.th-place svg { width:18px; height:18px; flex:none; }
+#th-loc { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 @media (max-width:640px) {
-  .telhud { gap:8px; padding:5px 9px; border-radius:10px; margin:6px auto 2px; }
-  .telhud .th-top { gap:6px; }
+  .video-toolbar { gap:6px; }
+  .telhud { gap:6px; padding:4px 7px; }
   .telhud .th-sig svg { width:17px; height:17px; }
   .telhud .th-gear { min-width:19px; height:19px; font-size:11px; border-radius:9px; }
-  .telhud .th-wheel { width:30px; height:30px; }
-  .telhud .th-spdbox b { font-size:19px; }
+  .telhud .th-wheel { width:26px; height:26px; }
+  .telhud .th-spdbox b { font-size:18px; }
   .telhud .th-spdbox i { font-size:9px; }
-  .telhud .th-acc { min-width:56px; height:14px; }
-  .telhud .th-acct { font-size:9.5px; min-width:22px; }
+  .telhud .th-acc { min-width:52px; height:14px; }
+  .telhud .th-acct { font-size:9px; min-width:20px; }
+  .th-place { max-width:90px; }
   .system-status .netspeed { font-size:10.5px; padding:1px 6px; }
 }
 @media (prefers-reduced-motion: reduce) { .telhud.show { animation:none } .th-sig.on { animation:none } }
@@ -2160,9 +2175,9 @@ select.ninput { cursor:pointer; }
 .updbtns .mini:disabled { opacity:.45; cursor:default; }
 #gear { position:relative; }
 #gear.hasupd::after { content:''; position:absolute; top:4px; right:4px; width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px var(--headbg); }
-.upbtn { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:36px; padding:8px 16px; border:1px solid var(--accent); border-radius:8px; background:var(--accent); color:#fff; font-size:13px; font-weight:600; letter-spacing:.2px; text-align:center; cursor:pointer; margin:0 0 10px; user-select:none; box-shadow:0 1px 3px rgba(232,68,63,.28); transition:filter .15s, box-shadow .15s; }
+.upbtn { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:36px; padding:8px 16px; border:1px solid var(--line2); border-radius:8px; background:var(--panel2); color:var(--text); font-size:13px; font-weight:600; letter-spacing:.2px; text-align:center; cursor:pointer; margin:0 0 10px; user-select:none; transition:background .15s, border-color .15s; }
 .upbtn .ic { width:14px; height:14px; }
-.upbtn:hover { filter:brightness(1.08); box-shadow:0 3px 12px rgba(232,68,63,.38); border-color:var(--accent); color:#fff; }
+.upbtn:hover { background:var(--panel); border-color:var(--muted); color:var(--text); }
 .upbtn:active { transform:translateY(1px); }
 .item { display:flex; align-items:center; gap:10px; background:var(--panel2); border-radius:10px; padding:9px 12px; margin-bottom:8px; font-size:13px; }
 .item .n { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -2466,11 +2481,13 @@ body.watching { overflow:hidden; }
 .player .cambar button { white-space:nowrap; border-radius:6px; padding:7px 13px; min-height:38px; }
 .player .cambar button.on { background:var(--text); color:var(--bg); border-color:var(--text); }
 .transport { order:2; width:100%; max-width:980px; margin:0 auto; padding:8px 0 12px; border-bottom:1px solid var(--line); }
-.clockline,.playtools,.watch-live { display:flex; align-items:center; gap:10px; }
-.clockline { font-variant-numeric:tabular-nums; }
-.clockline output { font:600 20px/1.2 ui-monospace,Consolas,monospace; }
-#track-end { margin-left:auto; color:var(--muted); font-size:12px; }
-#trigger-marker { background:transparent; color:var(--text); border:0; font-size:12px; min-height:32px; cursor:pointer; }
+.playtools,.watch-live { display:flex; align-items:center; gap:10px; }
+.clockline { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:10px; font-variant-numeric:tabular-nums; }
+.clockline output { font:600 20px/1.2 ui-monospace,Consolas,monospace; text-align:center; }
+.clockline > span { color:var(--muted); font-size:12px; white-space:nowrap; }
+#track-start { text-align:left; }
+#track-end { text-align:right; }
+#trigger-marker { display:block; margin:0 auto; background:transparent; color:var(--text); border:0; font-size:12px; min-height:32px; cursor:pointer; }
 #trigger-marker::first-letter { color:#e65050; }
 .timeline { position:relative; height:36px; display:flex; align-items:center; }
 #track-bands { position:absolute; left:8px; right:8px; height:6px; border-radius:3px; background:linear-gradient(to right,var(--play-accent) var(--played,0%),var(--muted2) var(--played,0%)); pointer-events:none; }
@@ -2482,12 +2499,16 @@ body.watching { overflow:hidden; }
 #seek::-moz-range-track { background:transparent; height:6px; }
 #seek::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:var(--text); border:2px solid var(--bg); margin-top:-5px; }
 #seek::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:var(--text); border:2px solid var(--bg); }
+#seek-hover { position:absolute; bottom:30px; z-index:3; transform:translateX(-50%); pointer-events:none;
+  padding:4px 7px; border:1px solid var(--line); border-radius:4px; background:var(--panel); color:var(--text);
+  font:12px/1.2 ui-monospace,Consolas,monospace; white-space:nowrap; box-shadow:0 2px 8px #0004; }
 .playtools { display:grid; grid-template-columns:1fr auto 1fr; }
 .playtools button,.watch-live button,.watch-live select { cursor:pointer; font:inherit; font-size:13px; border:0; background:var(--panel2); color:var(--text); border-radius:6px; min-height:40px; padding:0 10px; }
 .playtools .qsel { justify-self:start; }
 .playtools .qmenu { left:0; right:auto; }
 .playtools .qmenu button { min-height:32px; }
 .shuttle,.viewtools { display:flex; align-items:center; gap:4px; }
+.shuttle { justify-self:center; }
 .viewtools { justify-self:end; }
 .viewtools svg { width:17px; height:17px; }
 .shuttle #ppbtn { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; padding:0; border-radius:50%; width:44px; height:44px; background:var(--text); color:var(--bg); }
@@ -2521,8 +2542,8 @@ body.watching { overflow:hidden; }
 @media (orientation:landscape) and (max-height:550px) {
   .player .pscroll { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(260px,1fr); gap:6px 12px; padding:4px 10px; align-content:start; }
   .player .vwrap { grid-column:1; grid-row:1 / span 4; align-self:start; }
-  .player .cambar,.player .transport,.player .tpanel,.player .infocard { grid-column:2; margin:0; }
-  .player .cambar { flex-wrap:wrap; }
+  .player .video-toolbar,.player .transport,.player .tpanel,.player .infocard { grid-column:2; margin:0; }
+  .player .video-toolbar .cambar { flex-wrap:wrap; }
   .player .ptop { min-height:32px; } .player .cambar button { min-height:30px; padding:4px 9px; }
   .transport { padding:0; } .clockline output { font-size:15px; }
 }
@@ -2591,7 +2612,8 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 #grid .cnum { display:none; }
 #grid .meta { min-width:0; padding:0; display:flex; flex-direction:column; gap:8px; }
 .record-time { font-size:19px; font-variant-numeric:tabular-nums; line-height:1.3; }
-.record-reason,.record-location { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.record-reason { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.record-location { overflow-wrap:anywhere; line-height:1.4; }
 .record-reason,.record-size,.record-location { color:var(--muted); }
 .record-play { color:var(--accent); fill:none; stroke:currentColor; width:22px; }
 .player { top:var(--app-header); height:calc(100% - var(--app-header)); --play-accent:var(--accent); background:var(--bg); }
@@ -2608,9 +2630,9 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .player .cambar button.on { color:var(--accent); background:var(--selected); border-color:var(--accent); z-index:1; }
 .player .transport { padding:0 0 12px; }
 .clockline output { font-size:17px; font-weight:500; font-style:normal; }
-.playtools { grid-template-columns:1fr auto auto; gap:12px; }
-.playtools .shuttle { grid-column:1; grid-row:1; gap:8px; }
-.playtools .qsel { grid-column:2; grid-row:1; }
+.playtools { grid-template-columns:1fr auto 1fr; gap:12px; }
+.playtools .qsel { grid-column:1; grid-row:1; }
+.playtools .shuttle { grid-column:2; grid-row:1; gap:6px; }
 .playtools .viewtools { grid-column:3; grid-row:1; }
 .playtools button { background:var(--panel); border:1px solid var(--line); min-height:36px; }
 .shuttle #ppbtn { border-radius:6px; background:var(--accent); color:white; border:0; width:40px; height:36px; }
@@ -2713,7 +2735,7 @@ body.settings-open { overflow:hidden; }
 .retention-unit { color:var(--muted); font-size:12.5px; flex:0 0 auto; }
 /* 备注列常被挤成 28px：保留时间/存储路径改成按内容自适应宽度 */
 #tab-storage .storage-row.note { grid-template-columns:minmax(0,1fr) minmax(68px,96px) minmax(0,auto); max-width:none; }
-/* 容量输入框后紧跟 GiB 单位: 标签 | 数字 | 单位 | 说明按钮 */
+/* 容量输入框后紧跟 G 单位: 标签 | 数字 | 单位 | 说明按钮 */
 #tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) minmax(68px,98px) minmax(0,auto) 28px; max-width:none; }
 @media (pointer:coarse) { #tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) 76px minmax(0,auto) 44px; gap:4px; } }
 #tab-storage .storage-row.path { grid-template-columns:minmax(0,1fr) minmax(0,2.4fr) auto; max-width:none; }
@@ -2749,7 +2771,9 @@ body.settings-open { overflow:hidden; }
   .library-filters { flex:1 0 100%; margin:4px 0 0; }
   #grid .card { grid-template-columns:132px minmax(0,1fr) 80px 22px; gap:16px; }
   #grid .thumb { width:132px; height:76px; }
-  .record-location,.record-cameras { display:none; }
+  .record-cameras { display:none; }
+  .record-location { grid-column:2 / 4; grid-row:2; font-size:12px; }
+  .record-play { grid-column:4; grid-row:1 / 3; justify-self:end; }
   .player .watch-list { display:none; }
   .player.library-open .watch-list { display:flex; position:absolute; inset:0 auto 0 0; z-index:6; width:min(300px,80vw); background:var(--panel); border-right:1px solid var(--line); flex-direction:column; }
   .player.library-open .library-shade { display:block; position:absolute; inset:0; z-index:5; background:#0006; border:0; width:100%; }
@@ -2783,7 +2807,8 @@ body.settings-open { overflow:hidden; }
   .record-time { font-size:16px; }
   .record-reason { font-size:12px; }
   .record-size { display:none; }
-  .record-play { width:18px; }
+  .record-location { grid-column:2; }
+  .record-play { width:18px; grid-column:3; }
   .player .ptop { padding:4px 10px; min-height:48px; gap:8px; }
   .player .ptitle { font-size:12px; }
   .player .pback { font-size:12px; }
@@ -2827,7 +2852,7 @@ body.settings-open { overflow:hidden; }
   .app-header #theme,.app-header #gear { order:2; height:48px; }
   .app-header #gear span { display:none; }
   .player .pscroll { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(260px,1fr); padding:6px 10px; gap:6px 12px; }
-  .player .cambar { grid-row:1; }
+  .player .video-toolbar { grid-row:1; }
   .player .transport { grid-row:2; }
   .player .cambar button { padding:3px 8px; min-height:36px; }
   .player .ptop { min-height:36px; }
@@ -2940,7 +2965,7 @@ body.settings-open { overflow:hidden; }
 <symbol id="i-brand" viewBox="0 0 24 24"><path d="M12 3.6l2.35 4.05 4.55.7-3.3 3.2.8 4.55L12 13.95 7.6 16.1l.8-4.55-3.3-3.2 4.55-.7z"/></symbol>
 </defs></svg>
 <header class="app-header"><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">哨兵一剪梅</span></h1><span class="sub" id="stat"></span>
-<div class="system-status" aria-label="系统状态"><span class="netspeed" id="netspeed" hidden></span><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
+<div class="system-status" aria-label="系统状态"><span class="netspeed" id="netspeed"></span><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
 <nav class="tabs" id="tabs" aria-label="录像分类"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button><button id="gear" title="设置" aria-expanded="false" aria-controls="panel"><svg class="ic"><use href="#i-gear"/></svg><span>设置</span></button></header>
 <main class="library-page">
 <div class="ffwarn" id="ffwarn" role="status" hidden><div class="ffwarn-head"><b id="ffwarn-title">FFmpeg 未配置</b><button class="ffwarn-fix" id="ffwarn-fix" type="button" onclick="ffmpegFix()">一键修复</button></div><span class="ffwarn-text" id="ffwarn-text">列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。点「一键修复」自动安装完整版；也可在设备上执行 <code>apk add ffmpeg</code> 后运行 <code>install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。</span></div>
@@ -3005,32 +3030,34 @@ body.settings-open { overflow:hidden; }
             <span class="tp-c st" id="tp-st" title="方向盘角度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/><path d="M3.2 10.5h6M14.8 10.5h6M12 14.6V21"/></svg></span>
           </span>
         </div>
-        <div class="telhud" id="telhud" aria-hidden="true">
-          <div class="th-top">
-            <span class="th-sig" id="th-bl" title="左转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M17 12H8.2M12.2 7.3 7.5 12l4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-            <span class="th-gear" id="th-gear">D</span>
-            <span class="th-sig" id="th-br" title="右转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M7 12h8.8M11.8 7.3 16.5 12l-4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          </div>
-          <div class="th-mid">
-            <svg class="th-wheel" id="th-wheel" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" aria-hidden="true"><circle cx="32" cy="32" r="21"/><circle cx="32" cy="32" r="5" fill="currentColor" stroke="none"/><path d="M11 32h13M40 32h13M32 38v13"/></svg>
-            <div class="th-spdbox"><b id="th-spd">0</b><i>km/h</i></div>
-          </div>
-          <div class="th-acc" id="th-acc"><span class="th-bar"><i id="th-bar"></i></span><span class="th-acct" id="th-acct">定速</span></div>
-        </div>
         <button class="tp-fold" id="tp-fold" onclick="toggleTelRows()">收起详细数据 ⌃</button>
         <div class="tp-rows" id="tp-rows"></div>
+    </div>
+    <div class="video-toolbar">
+      <div class="cambar" id="cambar" aria-label="摄像头"></div>
+      <div class="telhud" id="telhud" aria-label="行车遥测">
+        <span class="th-sig" id="th-bl" title="左转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M17 12H8.2M12.2 7.3 7.5 12l4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <svg class="th-wheel" id="th-wheel" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" aria-label="方向盘"><circle cx="32" cy="32" r="21"/><circle cx="32" cy="32" r="5" fill="currentColor" stroke="none"/><path d="M11 32h13M40 32h13M32 38v13"/></svg>
+        <span class="th-sig" id="th-br" title="右转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M7 12h8.8M11.8 7.3 16.5 12l-4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="th-gear" id="th-gear" title="挡位">D</span>
+        <div class="th-spdbox" title="时速"><b id="th-spd">0</b><i>km/h</i></div>
+        <span class="th-pedal th-brk" id="th-brk" title="刹车"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="7.6"/><circle cx="12" cy="12" r="2.5"/><path d="M17.4 6.6l2.7-2.7"/></svg><b>刹车</b></span>
+        <span class="th-pedal th-thr" id="th-thr" title="油门"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M9.4 3.6h5.2a1.7 1.7 0 0 1 1.68 1.93l-1.35 12.3a1.8 1.8 0 0 1-1.79 1.6h-2.28a1.8 1.8 0 0 1-1.79-1.6L7.72 5.53A1.7 1.7 0 0 1 9.4 3.6z"/><path d="M8.6 15.1h6.8"/></svg><b id="th-thr-n">0%</b></span>
+        <div class="th-acc" id="th-acc" title="加减速"><span class="th-bar"><i id="th-bar"></i></span><span class="th-acct" id="th-acct">定速</span></div>
+        <span class="th-place" title="定位"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0z"/><circle cx="12" cy="10" r="2.5"/></svg><span id="th-loc">—</span></span>
+      </div>
     </div>
     <div class="vwrap">
       <button type="button" class="startmask" id="startmask">▶ 轻触开始同步播放</button>
       <div class="vgrid" id="vgrid"></div>
     </div>
-    <div class="cambar" id="cambar" aria-label="摄像头"></div>
     <section class="transport" aria-label="回放控制">
-      <div class="clockline"><output id="ptime">--:--:--</output><button id="trigger-marker" hidden>触发时刻</button><span id="track-end"></span></div>
-      <div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"></div>
+      <div class="clockline"><span id="track-start"></span><output id="ptime">--:--:--</output><span id="track-end"></span></div>
+      <button id="trigger-marker" hidden>触发时刻</button>
+      <div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"><output id="seek-hover" hidden></output></div>
       <div class="playtools">
         <div class="qsel" id="qsel"></div>
-        <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
+        <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="skip-back-one" aria-label="回退一秒">−1s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next-one" aria-label="前进一秒">+1s</button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
         <div class="viewtools"><button id="spdbtn" onclick="cycleSpeed()">1×</button><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
       </div>
       <div id="livep" class="watch-live" hidden>
@@ -3089,6 +3116,7 @@ body.settings-open { overflow:hidden; }
     <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车语音</button>
     <button class="stab" id="st-wraps" onclick="stab('wraps')"><svg class="ic"><use href="#i-brush"/></svg>涂装</button>
     <h3>系统与偏好</h3>
+    <button class="stab" id="st-geocode" onclick="stab('geocode')"><svg class="ic"><use href="#i-location"/></svg>地址设置</button>
     <button class="stab" id="st-notify" onclick="stab('notify')"><svg class="ic"><use href="#i-bell"/></svg>推送</button>
     <button class="stab" id="st-auth" onclick="stab('auth')"><svg class="ic"><use href="#i-key"/></svg>账号</button>
     <button class="stab" id="st-lang" onclick="stab('lang')"><svg class="ic"><use href="#i-globe"/></svg>语言</button>
@@ -3101,11 +3129,11 @@ body.settings-open { overflow:hidden; }
     <div class="usage-chart-box" id="usage-chart-box">
       <div class="usage-chart-row"><span class="usage-chart-label">整卡</span><div class="usage-chart" id="usage-chart" role="img" aria-label="存储卡容量与占用"></div></div>
       <div class="usage-legend" id="usage-legend"></div>
-      <div class="hint" style="margin-top:7px">每段的浅色是该项总上限，深色是实际占用，两者画在同一段里；上限随下方容量设置实时变化。归档区内部各分类的用量见右侧「实际用量」。</div>
+      <div class="hint" style="margin-top:7px">车机 U 盘只显示设定容量；归档区的浅色是总上限、深色是实际占用。上限随下方容量设置实时变化，各分类用量见右侧「实际用量」。</div>
     </div>
     <div id="storage-plan" hidden>
-      <div class="storage-total-row"><span>存储卡实际容量</span><output id="storage-total">—</output><span>GiB</span><button class="storage-help" type="button" aria-label="存储卡实际容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="total">?</button></div>
-      <div class="storage-summary"><span>分配预览</span><span>可分配 <output id="storage-available">—</output> GiB</span></div>
+      <div class="storage-total-row"><span>存储卡实际容量</span><output id="storage-total">—</output><span>G</span><button class="storage-help" type="button" aria-label="存储卡实际容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="total">?</button></div>
+      <div class="storage-summary"><span>分配预览</span><span>可分配 <output id="storage-available">—</output> G</span></div>
       <div class="storage-bar" id="storage-bar" role="img" aria-label="容量分配">
         <span class="storage-usb-color" data-storage-segment="usb"></span><span class="storage-archive-color" data-storage-segment="archive"></span><span class="storage-reserve-color" data-storage-segment="reserve"></span><span class="storage-free-color" data-storage-segment="free"></span>
       </div>
@@ -3118,11 +3146,11 @@ body.settings-open { overflow:hidden; }
     </div>
     <div class="hint" id="storage-budget" role="status"></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
-    <div class="storage-row cap"><label for="storage-archive">归档区总上限</label><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">GiB</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
-    <div class="storage-nested"><div class="storage-row cap"><label for="storage-drive">其中：驾驶记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">GiB</span><button class="storage-help" type="button" aria-label="驾驶记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row cap"><label for="retention-recentmax">其中：实时滚动记录上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">GiB</span><button class="storage-help" type="button" aria-label="实时滚动记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div></div>
-    <div class="storage-row cap"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">GiB</span><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
+    <div class="storage-row cap"><label for="storage-archive">归档区总上限</label><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
+    <div class="storage-nested"><div class="storage-row cap"><label for="storage-drive">其中：驾驶记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="驾驶记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row cap"><label for="retention-recentmax">其中：实时滚动记录上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="实时滚动记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div></div>
+    <div class="storage-row cap"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
     <details class="storage-advanced"><summary>高级保护</summary>
-      <div class="storage-row cap"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">GiB</span><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
+      <div class="storage-row cap"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
     </details>
     <div class="updbtns"><button class="mini primary" id="storage-save" onclick="storageSave()" disabled>保存归档设置</button><button class="mini" onclick="storageLoad()">重新加载</button></div>
     <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
@@ -3164,7 +3192,7 @@ body.settings-open { overflow:hidden; }
       <div class="updbtns"><button class="mini primary" id="paths-save" onclick="storageSavePaths()" disabled>保存路径设置</button></div>
       <div class="hint" id="paths-msg" role="status" aria-live="polite"></div>
     </details>
-    <section class="storage-danger"><h3>调整车机 U 盘容量</h3><div class="storage-row"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
+    <section class="storage-danger"><h3>调整车机 U 盘容量</h3><div class="storage-row cap"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
     <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。调整会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div><button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button><div id="storage-resize-status"></div></section>
     <section class="storage-danger"><h3>重启服务</h3>
     <div class="hint">修改存储路径、容量分配后，点此重启服务让设置生效。重启期间网页会短暂断开（约 5 秒），刷新后自动恢复。</div>
@@ -3286,6 +3314,15 @@ body.settings-open { overflow:hidden; }
       <button class="mini" id="storage-diag-copy" onclick="storageDiagCopy()">复制</button>
     </div>
     <pre id="storage-diag-out" style="display:none;white-space:pre-wrap;word-break:break-all;font-size:11.5px;line-height:1.45;margin:10px 0 0;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);max-height:340px;overflow:auto"></pre></section>
+  </div>
+  <div id="tab-geocode" style="display:none">
+    <section class="storage-quota">
+      <h3>高德详细地址</h3>
+      <div class="hint">不配置 Key 时，所有录像沿用原来的「城市 · 街道」或经纬度显示。配置后，高德 Web 服务会把录像坐标解析为详细地址，驾驶记录显示「起点 → 终点」。经纬度会发送给高德；Key 仅保存在本机服务端，不会随接口返回。服务未提供门牌号时显示其返回的最精确真实地址。</div>
+      <input class="ninput" id="amap-key" type="password" placeholder="高德 Web 服务 API Key（已保存则留空表示不修改）" autocomplete="off" autocapitalize="none" spellcheck="false">
+      <div class="updbtns"><button class="mini primary" id="geocode-save" onclick="geocodeSave()">保存地址设置</button></div>
+      <div class="hint" id="geocode-msg" role="status" aria-live="polite"></div>
+    </section>
   </div>
   <div id="tab-notify" style="display:none">
     <div class="hint">哨兵触发时把时间/位置/触发原因和触发画面推送给你。先选择推送方式：飞书提醒支持封面卡片与视频；微信提醒支持爱语飞飞、Server酱等接口，只发文字提醒。</div>
@@ -3736,6 +3773,7 @@ async function load() {
       b.classList.add('active');
       currentCat = c; reasonFilter = 'all'; dateFilter = 'all';
       render(c);
+      if (c === 'RecentClips') openLive();
     };
     tabs.appendChild(b);
   }
@@ -3782,7 +3820,8 @@ function openDeepLink() {
 }
 
 function sigOf(d) {
-  return Object.keys(d).map(c => c + ':' + d[c].map(e => e.name + '/' + e.videos.length + '/' + !!e.locked + '/' + !!e.lock_unknown).join(',')).join('|');
+  return Object.keys(d).map(c => c + ':' + d[c].map(e => e.name + '/' + e.videos.length + '/' + !!e.locked + '/' + !!e.lock_unknown + '/' +
+    [e.meta, e.start_meta, e.end_meta].map(m => (m && m.full_address) || '').join(',')).join(',')).join('|');
 }
 
 /* 容量条配色: <30% 绿 / 30%~85% 蓝 / >85% 红 (三行同规则) */
@@ -3893,7 +3932,14 @@ async function refreshLive() {
       if (!document.getElementById('player').classList.contains('open')) render(currentCat);
       if (playerRecording) {
         const item = (d[playerRecording.cat] || []).find(e => e.name === playerRecording.name);
-        if (item) { playerRecording.locked = !!item.locked; playerRecording.lock_unknown = !!item.lock_unknown; }
+        if (item) {
+          playerRecording.locked = !!item.locked; playerRecording.lock_unknown = !!item.lock_unknown;
+          if (cur) {
+            if (cur.meta && item.meta) cur.meta.full_address = item.meta.full_address;
+            cur.start_meta = item.start_meta; cur.end_meta = item.end_meta;
+            renderInfo();
+          }
+        }
         updateRecordingActions();
       }
     }
@@ -4088,6 +4134,27 @@ function dheadLabel(d) {
   try { return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(LANG, { month: 'short', day: 'numeric' }); }
   catch (e) { return d.slice(5); }
 }
+function metaCoordKey(md) {
+  md = md || {};
+  if (md.est_lat == null || md.est_lon == null || md.est_lat === '' || md.est_lon === '') return '';
+  const lat = Number(md.est_lat), lon = Number(md.est_lon);
+  return Number.isFinite(lat) && Number.isFinite(lon) ? lat.toFixed(5) + ',' + lon.toFixed(5) : '';
+}
+function singlePlace(md) {
+  md = md || {};
+  return String(md.full_address || '').trim() || [md.city, md.street].filter(Boolean).join(' · ') || metaCoordKey(md);
+}
+function recordPlace(ev, cat) {
+  const sm = ev.start_meta || {}, em = ev.end_meta || {};
+  // 未配置高德时不会下发 full_address，此时完全沿用原来的单地址展示。
+  if (cat === 'DriveClips' && (sm.full_address || em.full_address)) {
+    const sk = metaCoordKey(sm), ek = metaCoordKey(em);
+    const start = singlePlace(sm), end = singlePlace(em);
+    if ((sk && sk === ek) || (!sk && !ek && start && start === end)) return start;
+    return (sk ? start : t('起点未知')) + ' → ' + (ek ? end : t('终点未知'));
+  }
+  return singlePlace(ev.meta);
+}
 function render(cat) {
   const g = document.getElementById('grid'), e = document.getElementById('empty');
   g.innerHTML = '';
@@ -4140,10 +4207,7 @@ function render(cat) {
     /* 列表时间优先用 event.json 的触发时刻, 与点进去后播放器标题一致
        (目录名是录制收尾时间, 常比触发晚几十秒) */
     const tmTxt = evTime(ev).replace(/^\d{4}\/\d{2}\/\d{2} /, '');
-    let locationText = [mm.city, mm.street].filter(Boolean).join(' · ');
-    if (!locationText && mm.est_lat != null && mm.est_lon != null) {
-      locationText = Number(mm.est_lat).toFixed(5) + ', ' + Number(mm.est_lon).toFixed(5);
-    }
+    const locationText = recordPlace(ev, cat);
     card.innerHTML = th + '<div class="meta"><strong class="record-time">' + esc(tmTxt) +
       '</strong><span class="record-reason">' + esc(title) + '</span></div><span class="record-size">' +
       esc(fmtSize(ev.size || 0)) + '</span><span class="record-cameras">' + vids.length + ' ' + t('路') +
@@ -4313,7 +4377,7 @@ function showLibrary(ev) {
   box.replaceChildren();
   const source = data[libraryCat] || [];
   const items = source.filter(e => liveMode || (matchReason(libraryCat, e) && dateMatch(dateOf(e))));
-  byId('watch-list-title').textContent = t(CATS_NAME[libraryCat] || libraryCat);
+  byId('watch-list-title').textContent = liveMode ? '每分钟视频' : t(CATS_NAME[libraryCat] || libraryCat);
   for (const item of items) {
     const button = document.createElement('button');
     button.classList.toggle('selected', !!ev && item.name === (ev.trip || ev.name));
@@ -4321,7 +4385,9 @@ function showLibrary(ev) {
     button.dataset.event = item.name;
     const dateTime = evTime(item);
     label.textContent = dateTime.replace(/^\d{4}\/\d{2}\/\d{2} /, '');
-    time.textContent = dateTime.slice(0, 10) + ' · ' + (reasonLabel((item.meta || {}).reason) || t(CATS_NAME[libraryCat]));
+    time.textContent = liveMode
+      ? dateTime.slice(0, 10) + ' · 1 分钟 · ' + (item.videos || []).length + ' 路'
+      : dateTime.slice(0, 10) + ' · ' + (reasonLabel((item.meta || {}).reason) || t(CATS_NAME[libraryCat]));
     button.append(label, time);
     button.onclick = () => {
       if (matchMedia('(max-width:999px)').matches) toggleLibrary(false);
@@ -4504,8 +4570,8 @@ function setCam(cam) {
 }
 
 const hlsPreview = document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
-const PREVIEW_START_SECONDS = 1.5;
-const PREVIEW_HD_START_SECONDS = 2;
+const PREVIEW_START_SECONDS = .75;
+const PREVIEW_HD_START_SECONDS = .75;
 const PREVIEW_HD_RECOVERY_SECONDS = 4;
 const PREVIEW_HD_READ_AHEAD_SECONDS = 12;
 function previewMime(quality) {
@@ -4572,7 +4638,7 @@ function previewStream(video, file, seconds, quality, signal, failed) {
   video.dataset.mse = '1';
   video.dataset.startBuffer = '1';
   video.dataset.previewLead = String(quality === '720p' ? PREVIEW_HD_START_SECONDS : PREVIEW_START_SECONDS);
-  const readAhead = quality === '720p' ? PREVIEW_HD_READ_AHEAD_SECONDS : 5;
+  const readAhead = quality === '720p' ? PREVIEW_HD_READ_AHEAD_SECONDS : 8;
   const source = new MediaSource(), url = URL.createObjectURL(source);
   let buffer, timer, fetching = null, stopped = false;
   let fetchingIndex = -1, fetchingPriority = 2, fetchingSeekRevision = 0;
@@ -5071,8 +5137,7 @@ function renderInfo() {
   const md = cur.meta || {};
   byId('ptitle').textContent = liveMode ? t('实时滚动记录') : (reasonLabel(md.reason) || t(CATS_NAME[libraryCat])) + ' · ' + evTime(cur);
   byId('ic-rows').replaceChildren();
-  const placeText = [md.city, md.street].filter(Boolean).join(' · ') ||
-    (md.est_lat != null && md.est_lon != null ? Number(md.est_lat).toFixed(5) + ', ' + Number(md.est_lon).toFixed(5) : '');
+  const placeText = recordPlace(cur, libraryCat);
   const fields = [['录像时间', evTime(cur)], ['分类', t(CATS_NAME[libraryCat])], ['大小', fmtSize(cur.size || 0)],
     ['本段时长', fmtSec(currentClip().length)], ['画面', curVids().length + ' 路'], ['触发原因', reasonLabel(md.reason)], ['位置', placeText],
     ['坐标', md.est_lat != null && md.est_lon != null ? md.est_lat + ', ' + md.est_lon : ''],
@@ -5151,6 +5216,7 @@ function drawTimeline() {
   const start = curClips[0].start, last = curClips[curClips.length - 1];
   const span = last.start + last.length - start;
   const range = byId('seek'); range.disabled = false; range.max = span; range.removeAttribute('title');
+  byId('track-start').textContent = wallLabel(curClips[0].sourceStart);
   const bands = byId('track-bands'); bands.replaceChildren();
   const mark = (left, width, cls, label = '') => {
     const band = document.createElement('i'); band.className = cls;
@@ -5194,8 +5260,11 @@ function loadTelemetry(url, meta) {
   if (card) card.classList.remove('plain');
   p.classList.add('folded');   // 详细数据默认折叠
   document.getElementById('tp-fold').textContent = '展开详细数据 ⌄';
-  document.getElementById('tp-loc').textContent =
-    [TEL_META.city, TEL_META.street].filter(Boolean).join(' · ');
+  const locationText = [TEL_META.city, TEL_META.street].filter(Boolean).join(' · ') ||
+    (TEL_META.est_lat != null && TEL_META.est_lon != null ? TEL_META.est_lat + ', ' + TEL_META.est_lon : '—');
+  document.getElementById('tp-loc').textContent = locationText === '—' ? '' : locationText;
+  document.getElementById('th-loc').textContent = locationText;
+  document.getElementById('th-loc').title = locationText;
   // 触发画面摄像头: 只有哨兵事件显示 (手动保存等也会带无意义的 camera:"0")
   const camTag = document.getElementById('tp-tag');
   if (TEL_META.camera && isSentryEv(TEL_META)) {
@@ -5274,6 +5343,8 @@ function renderHud(f) {
   if (th('th-gear')) {
     th('th-gear').textContent = f[1];
     th('th-spd').textContent = Math.max(0, Math.round(f[2]));
+    th('th-brk').classList.toggle('on', !!f[5]);
+    th('th-thr-n').textContent = f[3] + '%';
     th('th-bl').classList.toggle('on', f[6] === 1);
     th('th-br').classList.toggle('on', f[6] === 2);
     const wheel = th('th-wheel');
@@ -6059,17 +6130,21 @@ function tick() {
 
 /* ---------- 实时传输速度 ---------- */
 const NET = {bps: 0, at: 0, timer: 0, buffered: new Map()};
+function fmtBytes(bytes) {
+  const value = Math.max(0, Number(bytes) || 0);
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let index = 0, scaled = value;
+  while (scaled >= 1024 && index < units.length - 1) { scaled /= 1024; ++index; }
+  const digits = scaled >= 100 || index === 0 ? 0 : scaled >= 10 ? 1 : 2;
+  return scaled.toFixed(digits).replace(/\.0+$|(\.\d*?)0+$/, '$1') + ' ' + units[index];
+}
 function fmtBitrate(bps) {
   if (!(bps > 0)) return '';
   if (bps >= 1024 * 1024) return (bps / 1048576).toFixed(bps >= 10 * 1048576 ? 0 : 1) + ' MB/s';
   return Math.max(1, Math.round(bps / 1024)) + ' KB/s';
 }
 function netZoneLabel() {
-  const h = String(location.hostname || '').toLowerCase();
-  if (h === 'localhost' || h === '[::1]' || h === '::1' || /^127\./.test(h) ||
-      /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
-      /^169\.254\./.test(h) || /\.local$/.test(h)) return '内网';
-  return '外网';
+  return localAddress ? '内网' : '外网';
 }
 function showNetSpeed(bps) {
   const el = document.getElementById('netspeed');
@@ -6078,15 +6153,18 @@ function showNetSpeed(bps) {
   if (!text) return;
   el.innerHTML = '<span class="netk">' + netZoneLabel() + '</span>↓ ' + esc(text);
   el.hidden = false;
-  clearTimeout(NET.timer);
-  NET.timer = setTimeout(hideNetSpeed, 2600);
+  clearTimeout(NET.timer); NET.timer = 0;
 }
 function hideNetSpeed() {
   const el = document.getElementById('netspeed');
-  if (el) el.hidden = true;
+  if (el) {
+    el.innerHTML = '<span class="netk">' + netZoneLabel() + '</span>↓ 0 KB/s';
+    el.hidden = false;
+  }
   clearTimeout(NET.timer); NET.timer = 0;
   NET.bps = 0; NET.buffered.clear();
 }
+hideNetSpeed();
 function noteTransfer(bytes, ms) {
   if (!(bytes > 0) || !(ms > 0)) return;
   const bps = bytes * 1000 / ms;
@@ -6172,7 +6250,8 @@ function closePlayback() {
   byId('cambar').replaceChildren(); byId('track-bands').replaceChildren();
   byId('ic-rows').replaceChildren(); byId('ic-rows').classList.remove('open');
   byId('tpanel').classList.remove('show'); byId('clipbar').replaceChildren();
-  byId('ptime').textContent = '--:--:--'; byId('track-end').textContent = '';
+  byId('ptime').textContent = '--:--:--'; byId('track-start').textContent = ''; byId('track-end').textContent = '';
+  byId('seek-hover').hidden = true;
   byId('ic-fold').textContent = '片段详情';
   byId('startmask').classList.remove('show');
   byId('ppbtn').disabled = true;
@@ -6195,13 +6274,23 @@ function closePlayer() {
 byId('ppbtn').onclick = () => wantedPlay && !atEnd ? pauseAll() : playAll();
 byId('startmask').onclick = playAll;
 byId('skip-back').onclick = () => { if (cur) seekWall(currentClip().start + playbackOffset() - 10, -1); };
+byId('skip-back-one').onclick = () => { if (cur) seekWall(currentClip().start + playbackOffset() - 1, -1); };
+byId('skip-next-one').onclick = () => { if (cur) seekWall(currentClip().start + playbackOffset() + 1); };
 byId('skip-next').onclick = () => { if (cur) seekWall(currentClip().start + playbackOffset() + 10); };
 byId('trigger-marker').onclick = () => { if (triggerTime !== null) seekWall(triggerTime); };
 byId('seek').onpointerdown = event => { seekPointerStart = event.clientX; editingSeek = true; dropPrefetch(); };
 byId('seek').onpointermove = function(event) {
-  this.title = timelineGapAt(event.clientX)?.title || '';
+  const gap = timelineGapAt(event.clientX);
+  this.title = gap?.title || '';
+  if (!curClips.length) return;
+  const rect = this.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left - 8) / Math.max(1, rect.width - 16)));
+  const hover = byId('seek-hover');
+  hover.textContent = wallLabel(recordingTime(curClips[0].start + ratio * Number(this.max)));
+  hover.style.left = (8 + ratio * Math.max(0, rect.width - 16)) + 'px';
+  hover.hidden = false;
 };
-byId('seek').onpointerleave = function() { this.removeAttribute('title'); };
+byId('seek').onpointerleave = function() { this.removeAttribute('title'); byId('seek-hover').hidden = true; };
 byId('seek').onpointerup = event => {
   if (seekPointerStart !== null && Math.abs(event.clientX - seekPointerStart) < 4) {
     const gap = timelineGapAt(event.clientX);
@@ -6293,7 +6382,7 @@ async function copyLogs() {
 function stab(which) {
   storageHelpClose();
   document.getElementById('panel').classList.add('settings-detail');
-  ['files', 'storage', 'audio', 'wraps', 'play', 'notify', 'auth', 'lang', 'skin', 'update', 'about'].forEach(k => {
+  ['files', 'storage', 'audio', 'wraps', 'play', 'geocode', 'notify', 'auth', 'lang', 'skin', 'update', 'about'].forEach(k => {
     const b = document.getElementById('st-' + k), t = document.getElementById('tab-' + k);
     if (b) b.classList.toggle('active', k === which);
     if (t) t.style.display = k === which ? '' : 'none';
@@ -6304,6 +6393,7 @@ function stab(which) {
   if (which === 'update') { otaCheck(false); autoLoad(); }
   if (which === 'notify') ntLoad();
   if (which === 'play') playLoad();
+  if (which === 'geocode') geocodeLoad();
   if (which === 'auth') pwLoad();
   if (which === 'wraps') refreshWraps();
   if (which === 'skin') { applyStyle(localStorage.getItem(STYLE_KEY) || 'default'); refreshSkins(); refreshBrand(); }
@@ -6326,10 +6416,11 @@ function playSpaceHint() {
   const perEvent4 = Math.round(perCam * 4), perEvent6 = Math.round(perCam * 6);
   const num = (id) => { const e = document.getElementById(id); const v = e ? Number(e.value) : 0; return Number.isFinite(v) && v > 0 ? v : 0; };
   const events = num('prewarm-sentry') + num('prewarm-saved');
-  const total = perEvent6 * events / 1024;
+  const total4 = fmtBytes(perEvent4 * events * 1048576);
+  const total6 = fmtBytes(perEvent6 * events * 1048576);
   el.textContent = '空间占用提醒：' + quality + ' 下每个事件约 ' + perEvent4 + '～' + perEvent6 +
-    ' MB（4～6 路，事件前后各 1 分钟）；两个模块合计 ' + events + ' 个事件，6 路车型约需 ' + total.toFixed(1) +
-    ' GB。存储紧张时请调小事件数或填 0 关闭。';
+    ' MB（4～6 路，事件前后各 1 分钟）；两个模块合计 ' + events + ' 个事件，4 路车型约需 ' + total4 +
+    '，6 路车型约需 ' + total6 + '。存储紧张时请调小事件数或填 0 关闭。';
 }
 function playLoad() {
   const sel = document.getElementById('play-quality');
@@ -6346,6 +6437,32 @@ function playLoad() {
     playSpaceHint();
   }).catch(() => {});
   playSpaceHint();
+}
+function geocodeLoad() {
+  const input = byId('amap-key'), msg = byId('geocode-msg');
+  fetch('/api/settings', {cache:'no-store'}).then(r => r.json()).then(j => {
+    input.dataset.has = j.has_amap_key ? '1' : '0';
+    if (!input.value) msg.textContent = j.has_amap_key
+      ? '已配置高德 Key；录像地址在后台解析并缓存，刷新列表后会自动补全。'
+      : '尚未配置高德 Key，当前沿用原来的城市、街道或经纬度显示。';
+  }).catch(e => { msg.textContent = '设置读取失败：' + e.message; });
+}
+function geocodeSave() {
+  const input = byId('amap-key'), msg = byId('geocode-msg'), button = byId('geocode-save');
+  const key = input.value.trim();
+  if (!key) {
+    msg.textContent = input.dataset.has === '1' ? '已保留原高德 Key。' : '请先填写高德 Web 服务 API Key。';
+    return;
+  }
+  button.disabled = true; msg.textContent = '保存中…';
+  fetch('/api/settings/geocode', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key})})
+    .then(r => r.json()).then(j => {
+      if (!j.ok) throw Error(j.msg || '保存失败');
+      input.value = ''; input.dataset.has = '1';
+      msg.textContent = '已保存。后台将开始解析录像地址，约 10 秒后自动刷新。';
+      refreshLive();
+    }).catch(e => { msg.textContent = '保存失败：' + e.message; })
+    .finally(() => { button.disabled = false; });
 }
 function playSave() {
   const sel = document.getElementById('play-quality');
@@ -6365,10 +6482,10 @@ function playSave() {
 }
 
 const STORAGE_HELP = {
-  total: '设备识别到的文件系统容量。可分配空间已扣除其他文件和文件系统保留量。1 GiB = 1024³ 字节，通常小于存储卡包装上的 GB 数值。哨兵、手动保存、驾驶记录中与实时滚动记录重复的片段会自动改为硬链接，同一段视频只占一份数据块。',
+  total: '设备识别到的文件系统容量。可分配空间已扣除其他文件和文件系统保留量。1 G = 1024³ 字节，通常小于存储卡包装上的 GB 数值。哨兵、手动保存、驾驶记录中与实时滚动记录重复的片段会自动改为硬链接，同一段视频只占一份数据块。',
   usb: '车机可用的录像 U 盘容量，最大为存储卡实际容量的一半。归档区要与车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件，所以镜像不能超过整卡容量的一半。调整会清空车机 U 盘中的全部内容，归档区保留；期间车机暂停录像。',
   archive: '哨兵、手动保存、实时滚动记录和驾驶记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。填 0 表示不设上限：不再按总量清理，只保留磁盘空闲保护线兜底。四个分类中内容完全相同的片段会自动替换为硬链接，只计一份占用。',
-  recentmax: '实时滚动记录单独的容量上限，已包含在归档总容量内。6 路 1 小时约 12 GiB；填 0 表示不限制，只按保留分钟数滚动清理。',
+  recentmax: '实时滚动记录单独的容量上限，已包含在归档总容量内。6 路 1 小时约 12 G；填 0 表示不限制，只按保留分钟数滚动清理。',
   drive: '驾驶记录的容量上限，已包含在归档总容量内。超限时从最旧行程开始清理，保留最新片段。',
   reserve: '空间不足时，希望清理后恢复的空闲容量，不创建独立分区。增大此值可能使旧归档更早被清理。',
   minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间。这条保护线不另占容量，不能高于安全预留空间。'
@@ -6412,6 +6529,17 @@ async function storageFetch(path, body) {
   if (!result.ok && !result.confirm) throw new Error(result.msg || '操作失败');
   return result;
 }
+function storageSyncArchiveLimit() {
+  const archive = document.getElementById('storage-archive');
+  if (!archive || archive.value === '' || !(Number(archive.value) > 0)) return; // 0 = 不限量
+  let categoryTotal = 0;
+  for (const id of ['storage-drive', 'retention-recentmax']) {
+    const input = document.getElementById(id);
+    const value = input && input.value !== '' ? Number(input.value) : 0;
+    if (Number.isFinite(value) && value > 0) categoryTotal += value;
+  }
+  if (categoryTotal > Number(archive.value)) archive.value = String(Math.ceil(categoryTotal));
+}
 function storageRenderAllocation() {
   const plan = document.getElementById('storage-plan');
   const budgetText = document.getElementById('storage-budget');
@@ -6440,9 +6568,9 @@ function storageRenderAllocation() {
   for (const name of ['usb', 'archive', 'reserve', 'free']) {
     document.querySelector('[data-storage-segment="' + name + '"]').style.width = values[name] / scale * 100 + '%';
     document.querySelector('[data-storage-value="' + name + '"]').textContent =
-      (name === 'archive' && unlimited) ? t('无限制') : values[name].toFixed(1) + ' GiB';
+      (name === 'archive' && unlimited) ? t('无限制') : values[name].toFixed(1) + ' G';
   }
-  document.getElementById('storage-bar').setAttribute('aria-label', '容量分配：车机 U 盘 ' + values.usb + '，归档区 ' + (unlimited ? '无限制' : values.archive) + '，安全预留 ' + values.reserve + '，未分配 ' + values.free.toFixed(1) + ' GiB');
+  document.getElementById('storage-bar').setAttribute('aria-label', '容量分配：车机 U 盘 ' + values.usb + '，归档区 ' + (unlimited ? '无限制' : values.archive) + '，安全预留 ' + values.reserve + '，未分配 ' + values.free.toFixed(1) + ' G');
   let message = '', blocking = false;
   const actualArchive = Math.max(0, Number(storageData.disk.archive_bytes) || 0) / 1073741824;
   // 调整 U 盘容量只需要为归档的「实际占用」留空间，归档上限只是长期清理策略。
@@ -6451,12 +6579,12 @@ function storageRenderAllocation() {
   if (!unlimited && values.drive > values.archive) { message = '驾驶记录上限不能超过归档总上限'; blocking = true; }
   else if (values.minimum > values.reserve) { message = '暂停同步保护线不能高于安全预留'; blocking = true; }
   else if (!unlimited && allocated > budget && resizeAllocated <= budget)
-    message = '归档上限预留超出 ' + (allocated - budget).toFixed(1) + ' GiB，但按归档实际占用仍可调整 U 盘容量';
-  else if (!unlimited && allocated > budget) { message = '超过可分配容量 ' + (allocated - budget).toFixed(1) + ' GiB'; blocking = true; }
+    message = '归档上限预留超出 ' + (allocated - budget).toFixed(1) + ' G，但按归档实际占用仍可调整 U 盘容量';
+  else if (!unlimited && allocated > budget) { message = '超过可分配容量 ' + (allocated - budget).toFixed(1) + ' G'; blocking = true; }
   budgetText.dataset.error = String(blocking);
   budgetText.textContent = message || (unlimited
-    ? t('归档不设上限') + '，' + t('仅受磁盘空闲保护') + '（' + values.free.toFixed(1) + ' GiB ' + t('未分配') + '）'
-    : '还可分配 ' + values.free.toFixed(1) + ' GiB');
+    ? t('归档不设上限') + '，' + t('仅受磁盘空闲保护') + '（' + values.free.toFixed(1) + ' G ' + t('未分配') + '）'
+    : '还可分配 ' + values.free.toFixed(1) + ' G');
 }
 function storageRenderUsage() {
   const {disk, values, usb_gib} = storageData;
@@ -6475,21 +6603,19 @@ function storageRenderUsage() {
   // 实际用量的限额文字与容量条都读容量设置输入框, 改上限时同步变化
   for (const [name, used, limit] of [['usb', disk.usb_used_bytes, usbLimit], ['archive', disk.archive_bytes, archiveLimit], ['drive', disk.drive_bytes, driveLimit], ['recent', disk.recent_bytes, recentLimit]]) {
     const amount = used == null ? '—' : (used / G).toFixed(1);
-    document.getElementById('storage-used-' + name).textContent = amount + ' / ' + (limit > 0 ? limit + ' GiB' : t('无限制'));
+    document.getElementById('storage-used-' + name).textContent = amount + ' / ' + (limit > 0 ? limit + ' G' : t('无限制'));
     const meter = document.getElementById('storage-meter-' + name);
     if (!meter) continue;
     meter.hidden = used == null || !(limit > 0);
     meter.value = limit > 0 ? Math.min(100, used / G / limit * 100) : 0;
   }
-  document.getElementById('storage-used-free').textContent = (disk.free_bytes / G).toFixed(1) + ' GiB';
+  document.getElementById('storage-used-free').textContent = (disk.free_bytes / G).toFixed(1) + ' G';
   for (const [name, bytes] of [['sentry', disk.sentry_bytes], ['saved', disk.saved_bytes], ['cache', disk.cache_bytes], ['other', disk.other_bytes]]) {
     const output = document.getElementById('storage-used-' + name);
-    if (output) output.textContent = bytes == null ? '—' : (bytes / G).toFixed(2) + ' GiB';
+    if (output) output.textContent = bytes == null ? '—' : (bytes / G).toFixed(2) + ' G';
   }
-  // 容量分布图(单行整卡): 车机 U 盘镜像 / 归档区总上限 / 空闲。
-  // 浅色=总上限, 深色=实际占用; 上限直接读容量设置输入框, 改动时实时重绘。
+  // 单行整卡: U 盘只显示设定容量；归档区用深色叠加实际占用。
   const cardGb = gb(disk.total_bytes);
-  const usbUsed = disk.usb_used_bytes != null ? disk.usb_used_bytes : (disk.usb_bytes || 0);
   const archiveUsed = disk.archive_bytes || 0;
   const unlimited = archiveLimit <= 0;
   const archCap = unlimited ? gb(archiveUsed) : archiveLimit;
@@ -6511,19 +6637,20 @@ function storageRenderUsage() {
   const mark = (color, dual) => '<i style="background:' + (dual
     ? 'linear-gradient(90deg,' + color + ' 0 52%,' + fade(color, .32) + ' 52% 100%)' : color) + '"></i>';
   const row1 = [
-    [colors.usb, usbLimit, gb(usbUsed), '车机 U 盘镜像 已用 ' + num(gb(usbUsed)) + ' / ' + num(usbLimit) + ' GiB'],
-    [colors.archive, archCap, gb(archiveUsed), '归档区 已用 ' + num(gb(archiveUsed)) + ' / ' + (unlimited ? '无限制' : num(archCap) + ' GiB')],
-    [colors.free, freeGb, freeGb, '空闲 ' + num(freeGb) + ' GiB']
+    [colors.usb, usbLimit, usbLimit, '车机 U 盘容量 ' + num(usbLimit) + ' G'],
+    [colors.archive, archCap, gb(archiveUsed), '归档区 已用 ' + num(gb(archiveUsed)) + ' / ' + (unlimited ? '无限制' : num(archCap) + ' G')],
+    [colors.free, freeGb, freeGb, '空闲 ' + num(freeGb) + ' G']
   ];
   const total1 = Math.max(cardGb, row1.reduce((s, p) => s + Math.max(p[1], p[2]), 0), 1);
   bar.innerHTML = row1.map(p => seg(total1, p[0], p[1], p[2], p[3])).join('');
   legend.innerHTML =
-    '<span>' + mark(colors.usb, true) + '车机 U 盘镜像 <b>' + num(gb(usbUsed)) + ' GiB</b> / ' + num(usbLimit) + ' GiB</span>' +
-    '<span>' + mark(colors.archive, true) + '归档区 <b>' + num(gb(archiveUsed)) + ' GiB</b> / ' + (unlimited ? '无限制' : num(archCap) + ' GiB') + '</span>' +
-    '<span>' + mark(colors.free, false) + '空闲 <b>' + num(freeGb) + ' GiB</b></span>';
+    '<span>' + mark(colors.usb, false) + '车机 U 盘 <b>' + num(usbLimit) + ' G</b></span>' +
+    '<span>' + mark(colors.archive, true) + '归档区 <b>' + num(gb(archiveUsed)) + ' G</b> / ' + (unlimited ? '无限制' : num(archCap) + ' G') + '</span>' +
+    '<span>' + mark(colors.free, false) + '空闲 <b>' + num(freeGb) + ' G</b></span>';
 }
 // 容量设置变化时同步刷新分配条与图表里的上限标注, 保证与设置联动
 document.querySelectorAll('#tab-storage input').forEach(input => input.addEventListener('input', () => {
+  storageSyncArchiveLimit();
   storageRenderAllocation();
   if (storageData) storageRenderUsage();
 }));
@@ -6550,6 +6677,7 @@ async function storageLoad() {
       document.getElementById('storage-path-transcode').value = data.paths.transcode;
       document.getElementById('storage-path-cache').value = data.paths.cache;
     }
+    storageSyncArchiveLimit();
     storageRenderAllocation();
     storageRenderUsage();
     storageShowJob(data.job);
@@ -6584,7 +6712,7 @@ async function storageSave() {
     let result = await storageFetch('/api/storage', body);
     if (result.confirm) {
       let message = result.msg;
-      if (result.archive_over_gib || result.drive_over_gib) message += '\n当前总归档超出 ' + result.archive_over_gib + ' GiB，驾驶记录超出 ' + result.drive_over_gib + ' GiB（包含在总量内）。';
+      if (result.archive_over_gib || result.drive_over_gib) message += '\n当前总归档超出 ' + result.archive_over_gib + ' G，驾驶记录超出 ' + result.drive_over_gib + ' G（包含在总量内）。';
       if (!confirm(message)) { storageMessage('已取消'); return; }
       result = await storageFetch('/api/storage', {...body, confirmed:true});
     }
@@ -6678,7 +6806,7 @@ async function storageClearUsage(target) {
     const response = await fetch('/api/admin/cleanup-' + target, {method:'POST'});
     const result = await response.json();
     if (!result.ok) throw Error(result.msg || '清理失败');
-    if (status) status.textContent = '已清空 ' + (result.removed_files || 0) + ' 个文件（释放 ' + (result.freed_bytes || 0) + ' 字节）';
+    if (status) status.textContent = '已清空 ' + (result.removed_files || 0) + ' 个文件（释放 ' + fmtBytes(result.freed_bytes) + '）';
     // 清理后刷新一次存储状态
     if (storageData) storageLoad();
   } catch (error) {
@@ -7928,19 +8056,184 @@ def drive_groups(events):
     return list(reversed(groups))
 
 
-def normalize_event_meta(meta):
-    """兼容车机 event.json 的两种字段写法, 并把坐标留给前端做地点兜底展示。"""
+_GEO_CACHE = None
+_GEO_QUEUE = []
+_GEO_QUEUED = set()
+_GEO_WORKER = None
+_GEO_RETRY_AFTER = 0.0
+_GEO_LOCK = threading.Lock()
+
+
+def _event_coords(meta):
+    try:
+        lat, lon = float(meta.get("est_lat")), float(meta.get("est_lon"))
+    except (TypeError, ValueError):
+        return None
+    return (lat, lon) if -90 <= lat <= 90 and -180 <= lon <= 180 else None
+
+
+def _geo_load_locked():
+    global _GEO_CACHE
+    if _GEO_CACHE is not None:
+        return
+    try:
+        with open(GEOCODE_CACHE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        _GEO_CACHE = data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        _GEO_CACHE = {}
+
+
+def _geo_save_locked():
+    try:
+        os.makedirs(os.path.dirname(GEOCODE_CACHE_FILE) or ".", exist_ok=True)
+        tmp = GEOCODE_CACHE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_GEO_CACHE, f, ensure_ascii=False)
+        os.replace(tmp, GEOCODE_CACHE_FILE)
+    except OSError:
+        pass
+
+
+def _gcj_lat(x, y):
+    ret = -100 + 2 * x + 3 * y + .2 * y * y + .1 * x * y + .2 * math.sqrt(abs(x))
+    ret += (20 * math.sin(6 * x * math.pi) + 20 * math.sin(2 * x * math.pi)) * 2 / 3
+    ret += (20 * math.sin(y * math.pi) + 40 * math.sin(y / 3 * math.pi)) * 2 / 3
+    ret += (160 * math.sin(y / 12 * math.pi) + 320 * math.sin(y * math.pi / 30)) * 2 / 3
+    return ret
+
+
+def _gcj_lon(x, y):
+    ret = 300 + x + 2 * y + .1 * x * x + .1 * x * y + .1 * math.sqrt(abs(x))
+    ret += (20 * math.sin(6 * x * math.pi) + 20 * math.sin(2 * x * math.pi)) * 2 / 3
+    ret += (20 * math.sin(x * math.pi) + 40 * math.sin(x / 3 * math.pi)) * 2 / 3
+    ret += (150 * math.sin(x / 12 * math.pi) + 300 * math.sin(x / 30 * math.pi)) * 2 / 3
+    return ret
+
+
+def _wgs_to_gcj(lat, lon):
+    # 中国境外不做火星坐标偏移；境内按高德要求的 GCJ-02 转换。
+    if not (72.004 <= lon <= 137.8347 and .8293 <= lat <= 55.8271):
+        return lat, lon
+    a, ee = 6378245.0, .00669342162296594323
+    dlat, dlon = _gcj_lat(lon - 105, lat - 35), _gcj_lon(lon - 105, lat - 35)
+    radlat = lat / 180 * math.pi
+    magic = 1 - ee * math.sin(radlat) ** 2
+    dlat = dlat * 180 / ((a * (1 - ee)) / (magic * math.sqrt(magic)) * math.pi)
+    dlon = dlon * 180 / (a / math.sqrt(magic) * math.cos(radlat) * math.pi)
+    return lat + dlat, lon + dlon
+
+
+def _amap_reverse(lat, lon, key):
+    glat, glon = _wgs_to_gcj(lat, lon)
+    query = urllib.parse.urlencode({"key": key, "location": "%.6f,%.6f" % (glon, glat),
+                                    "extensions": "base", "output": "json"})
+    raw = _http_get("https://restapi.amap.com/v3/geocode/regeo?" + query, timeout=4, limit=262144)
+    data = json.loads(raw.decode("utf-8"))
+    if str(data.get("status")) != "1":
+        raise RuntimeError(str(data.get("info") or "高德地址解析失败"))
+    geo = data.get("regeocode") or {}
+    address = str(geo.get("formatted_address") or "").strip()
+    comp = geo.get("addressComponent") or {}
+    number = (comp.get("streetNumber") or {}) if isinstance(comp, dict) else {}
+    if isinstance(number, dict):
+        street = str(number.get("street") or "").strip()
+        house = str(number.get("number") or "").strip()
+        if house and house not in address:
+            address += ("" if street and street in address else street) + house
+    if not address:
+        raise RuntimeError("高德未返回地址")
+    return address[:240]
+
+
+def _geocode_worker():
+    global _GEO_WORKER, _GEO_RETRY_AFTER
+    while True:
+        with _GEO_LOCK:
+            _geo_load_locked()
+            if not _GEO_QUEUE:
+                _GEO_WORKER = None
+                return
+            wait = _GEO_RETRY_AFTER - time.time()
+            item = None if wait > 0 else _GEO_QUEUE.pop(0)
+        if item is None:
+            time.sleep(min(2, max(.1, wait)))
+            continue
+        cache_key, lat, lon = item
+        now = int(time.time())
+        try:
+            key = str(load_settings().get("amap_key") or "")
+            if not key:
+                raise RuntimeError("未配置高德 Key")
+            address = _amap_reverse(lat, lon, key)
+            error = ""
+        except Exception as ex:
+            address, error = "", str(ex)[:160]
+        with _GEO_LOCK:
+            _GEO_RETRY_AFTER = 0.0 if address else time.time() + 120
+            _GEO_CACHE[cache_key] = {"address": address, "at": now, "error": error}
+            _GEO_QUEUED.discard(cache_key)
+            _geo_save_locked()
+
+
+def _geocode_attach(meta, amap_key=""):
+    global _GEO_WORKER
+    if not amap_key:
+        meta.pop("full_address", None)
+        return
+    coords = _event_coords(meta)
+    if not coords:
+        return
+    lat, lon = coords
+    cache_key = "%.5f,%.5f" % (lat, lon)
+    with _GEO_LOCK:
+        _geo_load_locked()
+        item = _GEO_CACHE.get(cache_key) or {}
+        address = str(item.get("address") or "").strip()
+        if address:
+            meta["full_address"] = address
+            return
+        if not amap_key or time.time() < _GEO_RETRY_AFTER:
+            return
+        try:
+            failed_at = float(item.get("at") or 0)
+        except (TypeError, ValueError):
+            failed_at = 0
+        if time.time() - failed_at < 120:
+            return
+        if cache_key not in _GEO_QUEUED:
+            _GEO_QUEUED.add(cache_key)
+            _GEO_QUEUE.append((cache_key, lat, lon))
+        if _GEO_WORKER is None or not _GEO_WORKER.is_alive():
+            _GEO_WORKER = threading.Thread(target=_geocode_worker, name="geocode", daemon=True)
+            _GEO_WORKER.start()
+
+
+def _geocode_key_updated():
+    global _GEO_RETRY_AFTER
+    with _GEO_LOCK:
+        _GEO_RETRY_AFTER = 0.0
+        if _GEO_CACHE is not None:
+            for key in list(_GEO_CACHE):
+                if not (_GEO_CACHE[key].get("address") if isinstance(_GEO_CACHE[key], dict) else ""):
+                    _GEO_CACHE.pop(key, None)
+
+
+def normalize_event_meta(meta, amap_key=""):
+    """统一车机坐标字段, 并从后台逆地理缓存补充详细地址。"""
     if not isinstance(meta, dict):
         return {}
     for src, dst in (("estLat", "est_lat"), ("estLon", "est_lon"),
                      ("latitude", "est_lat"), ("longitude", "est_lon")):
         if meta.get(dst) in (None, "") and meta.get(src) not in (None, ""):
             meta[dst] = meta[src]
+    _geocode_attach(meta, amap_key)
     return meta
 
 
 def list_events(category=None, event=None, durations=False, trips=False):
     out = {}
+    amap_key = str(load_settings().get("amap_key") or "")
     try:
         locks = recording_locks()
         lock_unknown = False
@@ -7983,13 +8276,14 @@ def list_events(category=None, event=None, durations=False, trips=False):
                     except Exception:
                         meta = {}
                 events.append({"name": name, "videos": vids, "size": total,
-                               "meta": normalize_event_meta(meta),
+                               "meta": normalize_event_meta(meta, amap_key),
                                "locked": cat + "/" + name in locks, "lock_unknown": lock_unknown})
         if cat == "DriveClips" and trips:
             summaries = []
             for group in drive_groups(events):
                 members = group["events"]
                 summaries.append({"name": members[0]["name"], "meta": members[0]["meta"],
+                                  "start_meta": members[0]["meta"], "end_meta": members[-1]["meta"],
                                   "videos": [video for member in members for video in member["videos"]],
                                   "size": sum(member["size"] for member in members),
                                   "clips": [member["name"] for member in members],
@@ -9717,9 +10011,9 @@ def thumb_file(fp, ss_t=1.0):
 # 源 1280x960 (4:3); 用固定目标码率: 公网 5G 上行只有 ~120KB/s, CRF 模式码率不可控会传不完
 # 8 核 T760 实测: -threads 8 + superfast 比 2 线程快一倍 (20s->10s/分钟片段), 内存峰值充足 (720p 后仍余 ~980MB)
 RES_SCALE = {"360p": (480, 360, 320), "480p": (640, 480, 500), "720p": (960, 720, 900)}  # 宽,高,kbps
-# 转码线程: Q_SEM=1 只有一个任务在跑, 4 线程能把这一个任务压满, 首帧等待比 2 线程短近一半。
-# 早先改成 2 线程是为了给「多任务并发」留核, 现在串行了就该把核用回来。内存紧可调 TSF_TR_THREADS。
-TR_THREADS = max(1, min(8, int(os.environ.get("TSF_TR_THREADS", "4"))))
+# F50 转码保持单任务、默认 3 线程，与正常温控档的 3 核一致，避免六路起播时瞬时压满更多核心。
+# 内存或散热紧张时可通过 TSF_TR_THREADS 进一步降低。
+TR_THREADS = max(1, min(8, int(os.environ.get("TSF_TR_THREADS", "3"))))
 # 编码参数版本号: 参与缓存 key。改码率/帧率等参数时 +1, 旧缓存自动失效重新生成。
 RES_ENC_VER = "2"   # v2: 统一 24fps, 码率 500->320/800->500/1500->900 (4G+frp 链路 4 路同播实测扛不住旧码率)
 RES_DIR = TRANSCODE_DIR  # 转码缓存放在归档区内(数据卡), 删归档视频时对应缓存会自动清理
@@ -9887,7 +10181,7 @@ RECENT_ROLL_MIN = int(os.environ.get("TSF_RECENT_ROLL_MIN", "60"))    # 归档�
 FREE_MIN_MB = int(os.environ.get("TSF_FREE_MIN_MB", "4096"))          # 剩余低于此值开始兜底清理
 FREE_TARGET_MB = int(os.environ.get("TSF_FREE_TARGET_MB", "10240"))   # 兜底清理到恢复到该值为止
 RECENT_KEEP_MIN = int(os.environ.get("TSF_RECENT_KEEP_MIN", "60"))    # 兜底清理时最近 N 分钟必留
-RECENT_MAX_GB = int(os.environ.get("TSF_RECENT_MAX_GB", "12"))        # 「实时滚动记录」体积上限(GiB), 0=不限; 6 路 1 小时约 12GiB
+RECENT_MAX_GB = int(os.environ.get("TSF_RECENT_MAX_GB", "12"))        # 「实时滚动记录」体积上限(G), 0=不限; 6 路 1 小时约 12G
 # 盒子侧 SentryClips / SavedClips 定期清理 (方案B):
 # 哨兵开着时 4 路约 8.4GB/小时, 哨兵事件 + 手动保存的录像只增不删, 盘迟早被吃满。
 # 车机 U 盘那份永远不碰, 这里只清归档区副本。两个维度独立生效:
@@ -10366,7 +10660,7 @@ def storage_start_resize(body):
         half_gib = current['disk']['total_bytes'] / storage_allocation.GIB / 2
         if int(size) > half_gib:
             raise ValueError(
-                '车机 U 盘镜像最大为存储卡实际容量的一半（%.1f GiB）。'
+                '车机 U 盘镜像最大为存储卡实际容量的一半（%.1f G）。'
                 '归档区要和车机内容保持一致，车机录像会复制到归档区，且归档区还要存放转码缓存、'
                 '铃声、涂装等文件，请调小 U 盘容量或换更大的存储卡。' % half_gib)
         storage_allocation.check_resize_budget(current['values'], size, current['disk'])
@@ -10669,7 +10963,7 @@ def roll_recent_size():
     """「实时滚动记录」体积上限 (RECENT_MAX_GB): 归档区设为 0(不限量) 时也独立生效。
 
     超过上限时从最旧事件开始删, 但保留最近 RECENT_KEEP_MIN 分钟内、正在写入和受
-    保护的片段。0 = 不按体积限制。6 路 1 小时约 12GiB, 默认 12。
+    保护的片段。0 = 不按体积限制。6 路 1 小时约 12G, 默认 12。
     """
     if RECENT_MAX_GB <= 0:
         return 0
@@ -11073,7 +11367,7 @@ def disk_guard_cycle(drive):
             roll_recent()
         except Exception as ex:
             print("实时滚动记录滚动清理失败: %s" % ex, flush=True)
-        try:   # 「实时滚动记录」体积上限: 归档不限量时也独立生效 (6 路 1 小时约 12GiB)
+        try:   # 「实时滚动记录」体积上限: 归档不限量时也独立生效 (6 路 1 小时约 12G)
             roll_recent_size()
         except Exception as ex:
             print("实时滚动记录体积清理失败: %s" % ex, flush=True)
@@ -12538,8 +12832,6 @@ def run_variant(cmd, wanted, jobs=None, key=None, preferred=None, hd_preview=Fal
     target = [n for n in (preferred or (4, 5, 6)) if n in available] or available
     def cpu_mask(core_count):
         if hd_preview and len(target) == 4 and _thermal_value is not None:
-            if startup_boost and core_count == 3 and _thermal_value < 65:
-                return target[:4]
             if core_count in (2, 3) and _thermal_value < 70:
                 # Prefer the other middle core within the ordinary thermal budget.
                 return [target[0], target[3], *target[1:core_count - 1]]
@@ -12861,13 +13153,14 @@ PART_PROGRESS = {}
 PART_PROGRESS_LOCK = threading.Lock()
 
 
-def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead, connected, warm=False, startup_boost=False):
+def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead, connected, warm=False,
+                          startup_boost=False, bulk=False):
     seconds = PREVIEW_PART_SECONDS
     end = max(1, math.ceil((duration - .08) / seconds))
     fast_hd = quality == '720p'
-    # HTTP 响应要等这一批编完才发。用户正等首帧 (prime) 时只编 1 片, 立刻出画;
-    # 预读才批量摊销 ffmpeg 启动 + 定位解码的开销 (以前 480p 首帧也要等 4 片编码).
-    batch_size = 1 if startup_boost else (8 if fast_hd else 6)
+    # 首帧只编 1 片；六路交互预读每次 2 片轮转，避免单路长时间占住转码槽。
+    # 后台缓存才用大批量摊销 ffmpeg 启动开销。
+    batch_size = 1 if startup_boost else ((8 if fast_hd else 6) if bulk else 2)
     count = min(batch_size if ahead and not warm else 1, end - index)
     for step in range(1, count):
         if os.path.isfile("%s%d.%s" % (prefix, index + step, transport)):
@@ -13034,7 +13327,7 @@ def preview_part(fp, quality, index, duration, transport, ahead, connected, warm
                         cancelled = True
                     return not cancelled
                 _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead or prime or cache_only,
-                                      encoding_needed, warm, startup_boost=prime)
+                                      encoding_needed, warm, startup_boost=prime, bulk=cache_only)
                 data = cached()
                 if data:
                     if time.monotonic() >= _part_cleanup_at:
@@ -14913,7 +15206,9 @@ class Handler(BaseHTTPRequestHandler):
             if cat == "DriveClips":
                 selected = next((group for group in drive_groups(events)
                                  if any(member["name"] == event for member in group["events"])), None)
-                events = ([dict(member, trip=selected["events"][0]["name"]) for member in selected["events"]]
+                events = ([dict(member, trip=selected["events"][0]["name"],
+                                start_meta=selected["events"][0]["meta"],
+                                end_meta=selected["events"][-1]["meta"]) for member in selected["events"]]
                           if selected else [])
             if query.get("gaps", ["1"])[0] != "0":
                 if not TIMELINE_GAP_LOCK.acquire(blocking=False):
@@ -15023,6 +15318,7 @@ class Handler(BaseHTTPRequestHandler):
                         "brand_logo": saved.get("brand_logo", ""),
                         "brand_logo_v": brand_logo_ver(),
                         "remote_quality": saved.get("remote_quality", "480p"),
+                        "has_amap_key": bool(saved.get("amap_key")),
                         "retention": retention_values(),
                         "auto_checked": AUTO_UPD["last_check"], "auto_msg": AUTO_UPD["last_result"]})
         elif path == "/api/font":
@@ -15621,6 +15917,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             save_settings({"ui_style": st})
             self._json({"ok": True, "style": st})
+            return
+        if path == "/api/settings/geocode":
+            body = self._read_json()
+            if body == "TOOBIG" or not isinstance(body, dict):
+                self._json({"ok": False, "msg": "参数错误"}, 400)
+                return
+            key = str(body.get("key") or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9]{16,64}", key):
+                self._json({"ok": False, "msg": "请输入有效的高德 Web 服务 API Key"}, 400)
+                return
+            save_settings({"amap_key": key})
+            _geocode_key_updated()
+            self._json({"ok": True, "has_amap_key": True})
             return
         if path == "/api/settings/retention":
             body = self._read_json()
