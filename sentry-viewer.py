@@ -476,7 +476,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.55"
+APP_VERSION = "2.8.56"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1447,8 +1447,8 @@ def load_settings():
          "recent_keep_min": _retention_default("TSF_RECENT_KEEP_MIN", 60),
          "recent_max_gb": _retention_default("TSF_RECENT_MAX_GB", 12),
          "box_keep_days": _retention_default("TSF_BOX_KEEP_DAYS", 14),
-         "prewarm_sentry": _retention_default("TSF_PREWARM_SENTRY", 5),
-         "prewarm_saved": _retention_default("TSF_PREWARM_SAVED", 5)}
+         "prewarm_sentry": _retention_default("TSF_PREWARM_SENTRY", 3),
+         "prewarm_saved": _retention_default("TSF_PREWARM_SAVED", 3)}
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
             j = json.load(f)
