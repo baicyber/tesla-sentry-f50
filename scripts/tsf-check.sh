@@ -124,18 +124,12 @@ else
 fi
 
 if [ -f /etc/rc.common ] && [ -x /sbin/procd ]; then
-    ok "init 系统" "OpenWrt procd (install.sh 直接支持)"
-elif [ -d /etc/systemd/system ]; then
-    ok "init 系统" "systemd (install.sh 直接支持)"
-elif [ -x /sbin/openrc ] || command -v rc-service >/dev/null 2>&1; then
-    warn "init 系统" "OpenRC — install.sh 走通用 rc.local 分支"
-elif [ -x /sbin/init ] && ls -l /sbin/init 2>/dev/null | grep -q busybox; then
-    warn "init 系统" "BusyBox init — 走通用 rc.local 分支"
+    ok "init 系统" "OpenWrt procd (F50 专用安装器直接支持)"
 else
-    warn "init 系统" "未识别 — 走通用 rc.local 分支, 可手动调 tsf-start.sh"
+    bad "init 系统" "仅支持中兴 F50 的 OpenWrt procd"
 fi
 
-if [ -d /etc/crontabs ] || [ -f /etc/crontab ] || command -v systemctl >/dev/null 2>&1; then
+if [ -d /etc/crontabs ] || [ -f /etc/crontab ]; then
     ok "定时任务" "可用 (归档/U盘自愈依赖)"
 else
     warn "定时任务" "无 cron — 归档需手动跑 tesla-sync.sh"
@@ -146,8 +140,7 @@ if [ "$JSON" != "1" ]; then
     echo
     if [ "$FAIL" -gt 0 ]; then
         printf '\033[31m结论: 不满足完整部署条件 (%d 项硬门槛未过)\033[0m\n' "$FAIL"
-        echo "  → 缺 UDC 时仍可「只跑网页查看器」: 把归档目录放到本机, 用 TSF_ARCHIVE 指向它,"
-        echo "    再用别的设备(或有 gadget 能力的小盒子)负责虚拟U盘与归档。"
+        echo "  → 请修复 F50 的 USB Gadget / 存储 / 运行时依赖后再安装。"
     elif [ "$WARN" -gt 0 ]; then
         printf '\033[33m结论: 可部署, 但有 %d 项降级/需注意\033[0m\n' "$WARN"
     else

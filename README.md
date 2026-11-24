@@ -2,17 +2,15 @@
 
 **中文** | [English](README.en.md)
 
-**虚拟哨兵 U 盘 · 多路同步回放 · SEI 行车遥测 · 水印导出 —— 跑在任意 USB Gadget 设备上。**
+**虚拟哨兵 U 盘 · 多路同步回放 · SEI 行车遥测 · 水印导出 —— 专为中兴 F50 优化。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.7+](https://img.shields.io/badge/python-3.7%2B-3776AB.svg)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://www.python.org/)
 [![零第三方依赖](https://img.shields.io/badge/deps-%E9%9B%B6%E7%AC%AC%E4%B8%89%E6%96%B9%E5%BA%93-brightgreen.svg)](#功能)
 
-拿一台小 Linux 设备（随身 WiFi / 开发板 / OpenWrt 路由器）顶替原车 U 盘插进手套箱：车机照常录制，手机连盒子 WiFi 打开网页就能回看 4 / 6 路同步画面、逐帧读视频码流里的 SEI 遥测（挡位 / 车速 / 油门 / 刹车 / 方向盘 / 转向灯 / AP / 坐标），并导出带行车信息水印的视频。
+把**中兴 F50 存储版**顶替原车 U 盘插进手套箱：车机照常录制，手机连 F50 WiFi 打开网页就能回看 4 / 6 路同步画面、逐帧读视频码流里的 SEI 遥测（挡位 / 车速 / 油门 / 刹车 / 方向盘 / 转向灯 / AP / 坐标），并导出带行车信息水印的视频。
 
-没有 USB Device 模式的机器（多数 x86 / NAS / 软路由）也能用：把 `TeslaCam/` 拷进本机，跑 `TSF_ARCHIVE=/path python3 sentry-viewer.py` 就是纯网页查看器。按设备能力分 **A 完整部署 / B 半自动归档 / C 仅网页** 三档，见[支持设备](#支持设备)。
-
-仓库名来自参考机型**中兴 F50 存储版**（全功能实测），项目本身不绑机型 · [部署速览图](docs/overview.png)
+本项目仅支持中兴 F50，不再提供其他随身 WiFi、开发板、NAS、x86 或通用 Linux 部署模式 · [部署速览图](docs/overview.png)
 
 ---
 
@@ -25,7 +23,7 @@
 | 📦 归档与滚动窗口 | 视频落到独立 ext4 归档区，不与车机同时读写镜像；`RecentClips` 跟随车机滚动缓冲只留最近 60 分钟，`SentryClips` / `SavedClips` 的**盒子副本**默认按 14 天 / 12GB 清理（车机 U 盘那份只读不动），`.pruned` 墓碑避免「删除→重抄」死循环 |
 | 🎬 播放 | **默认单路**: 点开事件直接播触发摄像头那一路 (画面下方切换条可选 前视/后视/左B柱/右B柱/全览, 点哪个才加载哪个, 切换保留播放进度)；全览 4 路 2×2 / 6 路 3×2 自适应，250ms 同步校正、统一进度条、0.5–4x；**自动落在触发时刻所在的那一分钟、从触发前 5 秒起播**（片段栏红点标记） |
 | 📊 遥测与元数据 | 直读码流内嵌 SEI protobuf：挡位 / 车速 / 油门 / 刹车 / 方向盘角度 / 转向灯 / AP 状态 / 坐标 / 三轴加速度，随进度逐帧跳动；`event.json` 提供时间 / 城市 / 街道 / 触发原因 / 触发画面 |
-| 🔍 筛选与预览 | 触发原因 + 日期（单日或时间段）叠加筛选；`?ev=` `?date=` `?cat=` `?cam=` `?exp=1` 深链；📡「实时滚动记录」页签内同时提供最近 1 小时录像列表和实时预览入口（二者已合并为一个功能），带 原画 / 720p / 480p / 360p 画质选择；存储条（虚拟U盘按卷内实际写入量计，不是镜像预分配占用；进度条按占用比例配色：<30% 绿 / 30–85% 蓝 / >85% 红）与在线同步状态 |
+| 🔍 筛选与预览 | 触发原因 + 日期（单日或时间段）叠加筛选；`?ev=` `?date=` `?cat=` `?cam=` `?exp=1` 深链；📡「实时滚动记录」页签打开即进入连续播放器，进度条覆盖整个滚动时长，侧栏按分钟列出视频并可点击定位，带 原画 / 720p / 480p / 360p 画质选择；存储条（虚拟U盘按卷内实际写入量计，不是镜像预分配占用；进度条按占用比例配色：<30% 绿 / 30–85% 蓝 / >85% 红）与在线同步状态 |
 | 📶 清晰度 | 播放可选 原画 / 720p / 480p / 360p（服务端转码缓存，按实际占用计入磁盘，不再设固定缓存预算）。**默认 480p**：与飞书推送 / 导出的默认档位同一分辨率，单路 480p 公网起播实测 0.08s；手动改过就记住你的选择，下次优先用记忆值。哨兵 / 手动保存的新事件落盘后，后台会按「预转码设置」里配置的数量（默认各 3 个最新事件）把全部摄像头（新款 6 路 / 老款 4 路）的触发段±相邻段预转成 480p（点开即播；每事件最多 18 个文件），只在没人看视频时跑。**实时滚动记录 / 准实时预览不预转**：这类片段每分钟新增、很快滚动淘汰，预转的缓存立刻作废，还会让无风扇设备持续满载转码、核心温度长期偏高；真点开时由服务端按需后台转码。**缓存没赶上的文件不会让人干等**：播放器先用已有的压缩档（都没有才用原画）开播，不必等转码；转码放后台，切段或下次打开自动用上目标档位；等待首帧时界面会显示实时转码百分比 |
 | 🎞 导出 | 单路下载、zip 打包、多路合成（2×2 / 3 路时第三路铺满下排）；清晰度 原画 / 720p / 480p / 360p，**多画面按原片 4:3 取格子，不留黑边**（原画单路直接出 1280×960 + 源帧率）；带水印时一律由设备端 ffmpeg 直出 H.264 mp4（+faststart，微信 / 相册可直接发）；水印与网页播放器同款（左侧时间 / 地点，右侧车速 / 转向灯 / 挡位 / 刹车 / 油门，外加 **AP 方向盘图标**：辅助驾驶启动时蓝色、未启动时灰色）；片段没有行车遥测（停车哨兵录制）时水印退化成只显示时间 + 地点，不会悄悄不出水印 |
 | 📂 文件管理 | 车机 U 盘与归档区合并为一个页面：浏览、上传、下载；操作栏顺序为上传 / 移动 / 复制 / 重命名 / 删除（realpath 防逃逸），支持多选批量操作；一键清空 `TeslaCam/` 全部录像（保留目录结构、不动 Boombox / Wraps）；U 盘管理模式 5 分钟无操作自动恢复导出 |
@@ -43,24 +41,18 @@
 
 ## 支持设备
 
-| 档位 | 需要什么 | 能做什么 | 典型设备 |
-|---|---|---|---|
-| **A 完整部署** | USB Device(Gadget) + 内核 exFAT + root | 虚拟 U 盘 + 车机无感实时同步 + 全部网页功能 | 中兴 F50、随身 WiFi、开发板 |
-| **B 半自动** | 任意 Linux + 存储 | 手动把 `TeslaCam/` 拷进归档区，网页功能照常 | NAS、软路由、旧笔记本 |
-| **C 仅网页** | Python 3.7+ | 归档目录已存在（NFS / SMB 也行），只当浏览前端 | 任何机器，含 x86 |
+**仅支持中兴 F50 存储版**。已实测配置：紫光展锐 T760 / aarch64 / 1.4G RAM / eMMC 256G，OpenWrt 25.12.5、内核 7.2.9、`25100000.dwc3`；车机为 2022 Model Y（4 路摄像头），同时支持新款 6 路录像。
 
-**已实测**：中兴 F50 存储版（紫光展锐 T760 / aarch64 / 1.4G RAM / eMMC 256G，OpenWrt 25.12.5、内核 7.2.9、`25100000.dwc3`）完整跑通，车机为 2022 Model Y（4 路摄像头）。树莓派 Zero 2 W 等 OTG 开发板推断可行但需自检；x86 / NAS 只能跑 B / C 档。
-
-**档位 A 硬门槛**：`/sys/class/udc/` 非空、configfs + `USB_F_MASS_STORAGE`、内核 exFAT、loop / losetup、root，且车机 USB 口能供电。建议 ≥32G 存储（镜像 + 归档各占一部分）、Python 3.7+（查看器零第三方依赖）；ffmpeg 只影响缩略图与转码，缺失不阻塞安装。
+运行要求：F50 OpenWrt + procd、USB Gadget / configfs、内核 exFAT、loop / losetup、root、Python 3.11+，建议把镜像和归档放在 TF 卡。ffmpeg / ffprobe 用于缩略图、转码和水印导出。
 
 装之前先自检（只读、不改系统）：
 
 ```sh
-sh scripts/tsf-check.sh          # 逐项检查 UDC / configfs / exFAT / Python / init，三色结论
-sh scripts/tsf-check.sh --json   # 供脚本判定
+sh scripts/tsf-check.sh
+sh scripts/tsf-check.sh --json
 ```
 
-完整设备清单、各系统适配度与功能降级矩阵见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
+详细要求见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
 
 ---
 
@@ -71,13 +63,13 @@ sh scripts/tsf-check.sh --json   # 供脚本判定
 ```sh
 git clone https://github.com/baicyber/tesla-sentry-f50.git
 cd tesla-sentry-f50
-sudo ./install.sh                                             # 默认 64G 镜像 + /archive + 端口 8080
-sudo ./install.sh --size 120 --port 8080 --archive /archive    # 自定义参数 (镜像不超过存储卡一半且 ≤128G)
+sudo ./install.sh                                                       # 64G 镜像 + F50 TF 卡存储 + 端口 8080
+sudo ./install.sh f50-install --size-gb 120 --port 8080 --data-mount /mnt/sdcard
 ```
 
-安装会：检查内核 gadget / exFAT / Python → 建稀疏镜像并**预置 exFAT + `TeslaCam` 目录** → 装到 `/opt/tesla-sentry/`、写 `/etc/tesla-sentry.conf` → 注册 `tesla-gadget` / `tesla-viewer` / `tesla-live` 三个服务（OpenWrt procd、systemd 或 rc.local）与两条 cron → 生成随机登录密码 → 启动并打印状态。ffmpeg、字体、部分内核项缺失只警告不中止。
+安装会：检查 F50 内核 gadget / exFAT / Python → 建稀疏镜像并**预置 exFAT + `TeslaCam` 目录** → 装到 `/opt/tesla-sentry/`、写 `/etc/tesla-sentry.conf` → 注册 OpenWrt procd 服务与定时任务 → 生成随机登录密码 → 启动并打印状态。镜像不超过存储卡实际容量的一半且不超过 128G。
 
-> aarch64 OpenWrt 全新设备另有专用入口 `./install.sh f50`（默认只做环境检查，加 `--apply` 才真正写入，要求 Python 3.11+），与通用一键安装二选一。
+也可用 `./install.sh f50-check` 仅预检、`./install.sh f50-apply` 只安装不启动，或 `./install.sh f50 --help` 查看全部参数。
 
 **2. 插到车上**：插进手套箱 USB 口 → 车机直接识别、显示容量并开始录制。镜像里已预建 `TeslaCam/{RecentClips,SavedClips,SentryClips,EncryptedClips}`，**不再需要点「格式化 USB 设备」**；若车机仍弹出该提示，点确认也无害，只是把同样的结构重建一遍。
 
@@ -98,7 +90,7 @@ sudo ./uninstall.sh --purge      # 连镜像和归档一起删（不可恢复）
 
 | 变量 | 默认 | 作用 |
 |---|---|---|
-| `TSF_IMG` / `TSF_ARCHIVE` | `/opt/tesla-sentry/teslacam.img` / `/archive` | 虚拟 U 盘镜像 / 归档区 |
+| `TSF_IMG` / `TSF_ARCHIVE` | `/mnt/sdcard/tesla-sentry/img/teslacam.img` / `/mnt/sdcard/tesla-sentry/archive` | 虚拟 U 盘镜像 / 归档区 |
 | `TSF_PORT` | `8080` | 网页端口 |
 | `TSF_LIVE_INTERVAL` | `15` | 在线只读同步轮询秒数 |
 | `TSF_IDLE` | `600` | 镜像空闲秒数，仅用于 cron 挂载写 Boombox 音频 |

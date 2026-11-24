@@ -2,17 +2,15 @@
 
 [中文](README.md) | **English**
 
-**A virtual Sentry USB drive · multi-camera synchronized playback · SEI driving telemetry · watermarked export — running on any USB Gadget device.**
+**A virtual Sentry USB drive · multi-camera synchronized playback · SEI driving telemetry · watermarked export — optimized exclusively for the ZTE F50.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.7+](https://img.shields.io/badge/python-3.7%2B-3776AB.svg)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://www.python.org/)
 [![Zero third-party deps](https://img.shields.io/badge/deps-zero-brightgreen.svg)](#features)
 
-Plug a small Linux box (travel router / dev board / OpenWrt router) into the glovebox USB port instead of the factory USB drive: the car keeps recording as usual, and you open a web page over the box's Wi-Fi to review 4 / 6 synchronized camera angles, read the SEI telemetry embedded in the video bitstream frame by frame (gear / speed / accelerator / brake / steering angle / turn signals / Autopilot / GPS), and export clips with a driving-info watermark burned in.
+Plug a **ZTE F50 storage edition** into the glovebox USB port instead of the factory USB drive: the car keeps recording as usual, and you open a web page over the F50 Wi-Fi to review 4 / 6 synchronized camera angles, read SEI telemetry frame by frame, and export clips with a driving-info watermark.
 
-No USB Device mode? That works too — most x86 boxes, NAS and software routers can run it: copy `TeslaCam/` onto the machine and start `TSF_ARCHIVE=/path python3 sentry-viewer.py` for a pure web viewer. Capabilities fall into three tiers — **A full deployment / B semi-automatic archiving / C viewer only** — see [Supported devices](#supported-devices).
-
-The repository name comes from the reference device, the **ZTE F50 storage edition** (fully tested end to end). The project itself is not tied to that model · [deployment overview](docs/overview.png)
+This project supports only the ZTE F50. Other travel routers, development boards, NAS devices, x86 machines and generic Linux deployment modes are no longer supported · [deployment overview](docs/overview.png)
 
 ---
 
@@ -25,7 +23,7 @@ The repository name comes from the reference device, the **ZTE F50 storage editi
 | 📦 Archive & rolling window | Video lands in a separate ext4 archive, never fighting the car for the image. `RecentClips` follows the car's rolling buffer and keeps only the last 60 minutes; the box-side copies of `SentryClips` / `SavedClips` are pruned by age/size (default 14 days / 12GB) while the drive-side originals stay untouched. `.pruned` tombstones prevent the "delete → re-copy" loop. |
 | 🎬 Playback | **Single camera by default**: opening an event plays the camera that triggered it (a switcher bar below the player offers front / rear / left B-pillar / right B-pillar / grid — only the selected angle loads, and switching keeps your position). Grid view auto-fits 4 angles as 2×2 and 6 as 3×2, with 250ms sync correction, one shared progress bar and 0.5–4x speed. **Playback lands on the minute containing the trigger and starts 5 seconds before it** (marked with a red dot in the clip list). |
 | 📊 Telemetry & metadata | Reads the SEI protobuf embedded in the bitstream: gear / speed / accelerator / brake / steering angle / turn signals / Autopilot state / GPS / 3-axis acceleration, updating frame by frame with playback. `event.json` supplies time / city / street / trigger reason / trigger frame. |
-| 🔍 Filtering & preview | Trigger-reason and date filters combine; dates support a single day or a custom range. Deep links via `?ev=` `?date=` `?cat=` `?cam=` `?exp=1`. 📡 The "Live rolling clips" tab now combines the recent-clip list and the near-live preview entry in one page, with Original / 720p / 480p / 360p quality choice. Storage bars (the virtual drive counts actual written bytes inside the volume, not the sparse image's apparent size; the bar is colour-coded by usage: <30% green / 30–85% blue / >85% red) plus a live sync status. |
+| 🔍 Filtering & preview | Trigger-reason and date filters combine; dates support a single day or a custom range. Deep links via `?ev=` `?date=` `?cat=` `?cam=` `?exp=1`. 📡 The "Live rolling clips" tab now opens a continuous player immediately, with a progress bar spanning the full rolling window and a minute-by-minute list for direct seeking, plus Original / 720p / 480p / 360p quality choice. Storage bars (the virtual drive counts actual written bytes inside the volume, not the sparse image's apparent size; the bar is colour-coded by usage: <30% green / 30–85% blue / >85% red) plus a live sync status. |
 | 📶 Quality | Playback offers original / 720p / 480p / 360p (server-side transcode cache, counted at actual usage — no fixed cache budget). **480p is the default** — the same resolution used as the default for Feishu push and export; a single 480p stream starts in 0.08s over the public internet in testing. Manual choices are remembered and preferred next time. When a new Sentry / manually saved event lands, the background transcodes every camera's (6 on newer cars, 4 on older ones) trigger segment ± adjacent segments to 480p (up to 18 files per event) according to the "Pre-transcode" setting (default: latest 3 events per module) so it plays instantly — only when nobody is watching. **Live rolling clips and near-live preview are never pre-transcoded**: those clips are added every minute and scroll away quickly, so the cache would be wasted, and constant transcoding would keep a fanless box pegged and hot. They are transcoded on demand when you actually open them. **A missing cache never makes you wait**: the player starts with any existing lower-quality variant (falling back to the original only if none exists) and switches to the target quality on the next segment or next open, while the transcode runs in the background; a live transcode percentage is shown while waiting for the first frame. |
 | 🎞 Export | Single-clip download, zip bundle, or multi-camera composite (2×2, or the third angle filling the bottom row when there are 3). Quality: original / 720p / 480p / 360p. **Composites take 4:3 cells from the source with no letterboxing** (single-clip original exports at 1280×960 with the source frame rate). Watermarked exports are always rendered on-device by ffmpeg to H.264 mp4 (+faststart, so WeChat and the photo library accept them directly). The overlay matches the web player (time / location on the left; speed / turn signal / gear / brake / accelerator on the right, plus an **Autopilot steering-wheel icon** that is blue when engaged and grey when not). Clips without driving telemetry (parked Sentry recordings) degrade to time + location only rather than silently dropping the watermark. |
 | 📂 File management | One page for both the car USB drive and the archive: browse, upload, download; the action bar is ordered upload / move / copy / rename / delete, with multi-select batch operations (realpath-guarded). One click clears every recording under `TeslaCam/` while keeping the directory structure and leaving Boombox / Wraps alone. Drive management mode reverts to export automatically after 5 minutes idle. |
@@ -43,24 +41,18 @@ The repository name comes from the reference device, the **ZTE F50 storage editi
 
 ## Supported devices
 
-| Tier | Requirements | What you get | Typical hardware |
-|---|---|---|---|
-| **A · Full** | USB Device (Gadget) + kernel exFAT + root | Virtual USB drive + transparent live sync + every web feature | ZTE F50, travel routers, dev boards |
-| **B · Semi-automatic** | Any Linux + storage | Copy `TeslaCam/` into the archive yourself; web features work as usual | NAS, software routers, old laptops |
-| **C · Viewer only** | Python 3.7+ | Point it at an existing archive (NFS / SMB is fine) and use it as a front end | Any machine, x86 included |
+**Only the ZTE F50 storage edition is supported.** Verified configuration: Unisoc T760 / aarch64 / 1.4G RAM / 256G eMMC, OpenWrt 25.12.5, kernel 7.2.9 and `25100000.dwc3`, with a 2022 Model Y (4 cameras); newer 6-camera recordings are supported too.
 
-**Verified**: ZTE F50 storage edition (Unisoc T760 / aarch64 / 1.4G RAM / 256G eMMC, OpenWrt 25.12.5, kernel 7.2.9, `25100000.dwc3`) runs the full stack, with a 2022 Model Y (4 cameras) as the head unit. OTG boards such as the Raspberry Pi Zero 2 W are expected to work but need a self-check; x86 / NAS can only run tiers B and C.
-
-**Tier A hard requirements**: `/sys/class/udc/` non-empty, configfs + `USB_F_MASS_STORAGE`, kernel exFAT, loop / losetup, root, and a car USB port that can supply power. Recommend ≥32G storage (image plus archive), Python 3.7+ (the viewer has zero third-party dependencies). ffmpeg only affects thumbnails and transcoding — missing it does not block installation.
+Requirements: F50 OpenWrt with procd, USB Gadget / configfs, kernel exFAT, loop / losetup, root and Python 3.11+. A TF card is recommended for the image and archive. ffmpeg / ffprobe provide thumbnails, transcoding and watermarked exports.
 
 Check before installing (read-only, changes nothing):
 
 ```sh
-sh scripts/tsf-check.sh          # item-by-item UDC / configfs / exFAT / Python / init check, colour-coded verdict
-sh scripts/tsf-check.sh --json   # machine-readable, for scripts
+sh scripts/tsf-check.sh
+sh scripts/tsf-check.sh --json
 ```
 
-Full device list, per-OS compatibility and the feature-degradation matrix are in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for details.
 
 ---
 
@@ -71,13 +63,13 @@ Full device list, per-OS compatibility and the feature-degradation matrix are in
 ```sh
 git clone https://github.com/baicyber/tesla-sentry-f50.git
 cd tesla-sentry-f50
-sudo ./install.sh                                             # 64G image + /archive + port 8080
-sudo ./install.sh --size 120 --port 8080 --archive /archive    # custom options (image ≤128G)
+sudo ./install.sh                                                       # 64G image + F50 TF-card storage + port 8080
+sudo ./install.sh f50-install --size-gb 120 --port 8080 --data-mount /mnt/sdcard
 ```
 
-The installer will: check kernel gadget / exFAT / Python → create the sparse image and **pre-populate exFAT + the `TeslaCam` directory** → install into `/opt/tesla-sentry/` and write `/etc/tesla-sentry.conf` → register the `tesla-gadget` / `tesla-viewer` / `tesla-live` services (OpenWrt procd, systemd or rc.local) plus two cron jobs → generate a random login password → start everything and print status. Missing ffmpeg, fonts or optional kernel features produce warnings, not aborts.
+The installer checks the F50 kernel / gadget / exFAT / Python, creates the sparse image with exFAT and `TeslaCam`, installs into `/opt/tesla-sentry/`, writes `/etc/tesla-sentry.conf`, registers OpenWrt procd services and cron jobs, generates a random password and starts the services. The image may use at most half the card and at most 128G.
 
-> A fresh aarch64 OpenWrt device can use the dedicated `./install.sh f50` entry point instead (it only checks prerequisites by default; add `--apply` to actually install, Python 3.11+ required). Use either it or the generic install, not both.
+Use `./install.sh f50-check` for a check only, `./install.sh f50-apply` to install without starting, or `./install.sh f50 --help` for all options.
 
 **2. Plug it into the car**: insert into the glovebox USB port — the head unit recognizes it, shows the capacity and starts recording. The image already contains `TeslaCam/{RecentClips,SavedClips,SentryClips,EncryptedClips}`, so **there is no "Format USB device" step**. If the car still asks, confirming is harmless — it just rebuilds the same structure.
 
@@ -98,7 +90,7 @@ Main config: `/etc/tesla-sentry.conf` (restart services after editing):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TSF_IMG` / `TSF_ARCHIVE` | `/opt/tesla-sentry/teslacam.img` / `/archive` | Virtual drive image / archive root |
+| `TSF_IMG` / `TSF_ARCHIVE` | `/mnt/sdcard/tesla-sentry/img/teslacam.img` / `/mnt/sdcard/tesla-sentry/archive` | Virtual drive image / archive root |
 | `TSF_PORT` | `8080` | Web port |
 | `TSF_LIVE_INTERVAL` | `15` | Live read-only sync poll interval, seconds |
 | `TSF_IDLE` | `600` | Image idle seconds; only used by the cron job that mounts to write Boombox audio |

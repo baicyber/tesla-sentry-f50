@@ -125,7 +125,7 @@ class Installer:
                 mount in ('/', '/etc', '/opt', '/tmp', '/var', '/usr', '/root')):
             raise InstallError('数据盘路径必须是独立挂载点，且不含空格或 shell 字符')
         if not 1 <= self.args.size_gb <= 128:
-            raise InstallError('镜像容量须在 1～128 GiB 范围内')
+            raise InstallError('镜像容量须在 1～128 G 范围内')
         if not 1 <= self.args.drive_gb <= self.args.archive_gb:
             raise InstallError('驾驶记录配额须大于 0 且不超过总归档配额')
         storage_allocation.validate_values(dict(archive_gib=self.args.archive_gb, drive_gib=self.args.drive_gb,
@@ -287,7 +287,42 @@ class Installer:
                 if str(settings[key]) == str(self.runtime / 'bin' / name):
                     settings[key] = runtime + '/bin/' + name
             settings['PATH'] = runtime + '/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-        return ''.join('%s=%s\n' % item for item in settings.items())
+        comments = {
+            'TSF_DIR': '程序安装目录', 'TSF_CARD_UUID': 'F50 数据卡 UUID',
+            'TSF_CARD_MNT': 'F50 数据卡挂载点',
+            'TSF_VIDEO_ROOT': '视频存储根目录: img/ 放车机镜像, archive/ 放归档',
+            'TSF_IMG': '车机 U 盘镜像路径 (exFAT 稀疏文件)', 'TSF_ARCHIVE': '归档区目录',
+            'TSF_CACHE': '程序缓存目录 (缩略图/遥测/合成临时)',
+            'TSF_TRANSCODE_DIR': '转码缓存目录', 'TSF_LOG_DIR': '运行日志目录',
+            'TSF_LIVE_LOG': '实时同步日志路径', 'TSF_LIVE_STATE': '实时同步状态文件路径',
+            'TSF_MNT': '挂载镜像写 Boombox/铃声时使用的临时挂载点',
+            'TSF_LOOP': '挂载镜像时使用的 loop 设备', 'TSF_PORT': '网页端口',
+            'TSF_IDLE': '镜像空闲多少秒后允许挂载写 Boombox 音频',
+            'TSF_USB_TIMEOUT': 'U 盘文件管理模式无操作自动恢复导出的秒数',
+            'TSF_LOSETUP': 'losetup 可执行文件路径', 'TSF_GADGET': 'USB Gadget configfs 目录',
+            'TSF_GADGET_CONFIG': 'USB Gadget 配置名', 'TSF_UDC': 'USB 控制器名称 (UDC)',
+            'TSF_FFMPEG': 'ffmpeg 路径', 'TSF_FFPROBE': 'ffprobe 路径',
+            'TSF_USB_LOCK': 'U 盘导出/文件管理互斥锁文件',
+            'TSF_RECENT_ROLL_MIN': '实时滚动记录保留分钟, 0=不滚动',
+            'TSF_RECENT_KEEP_MIN': '空间兜底清理时最近必留分钟',
+            'TSF_RECENT_MAX_GB': '实时滚动记录体积上限 G, 0=不限',
+            'TSF_BOX_KEEP_DAYS': '哨兵/手动保存按天保留, 0=不限',
+            'TSF_DRIVE_MAX_GB': '驾驶记录容量上限 G, 0=不限',
+            'TSF_ARCHIVE_TOTAL_GB': '归档区总容量上限 G, 0=不限',
+            'TSF_DISK_GUARD_INTERVAL': '磁盘空间检查间隔秒数',
+            'TSF_FREE_MIN_MB': '存储卡空闲低于此值暂停同步 (MiB)',
+            'TSF_FREE_TARGET_MB': '空间不足时清理到的目标空闲 (MiB)',
+            'TSF_LIVE_INTERVAL': '在线只读同步轮询秒数',
+            'TSF_SYNC_FAIL_RETRY_SEC': '同步失败后的初始重试秒数',
+            'TSF_SYNC_FAIL_RETRY_MAX_SEC': '同步失败后的最长重试秒数',
+            'TSF_PYTHON': 'F50 离线 Python 解释器路径', 'TSF_FONTS': '水印与导出字体目录',
+            'PATH': '服务进程的命令搜索路径',
+        }
+        groups = []
+        for key, value in settings.items():
+            comment = comments.get(key)
+            groups.append(('# ' + comment + '\n' if comment else '') + '%s=%s\n' % (key, value))
+        return '\n'.join(groups)
 
     def cron_text(self, original):
         start, end = '# BEGIN F50 DEVICE SOURCE', '# END F50 DEVICE SOURCE'
@@ -543,10 +578,10 @@ class Installer:
         usage = shutil.disk_usage(self.path(self.args.data_mount))
         # 升级不新建镜像, 也不重新分配空间, 只做只读校验
         if not self.upgrade and self.args.size_gb > usage.total / GIB / 2:
-            raise InstallError('镜像容量不能超过数据盘实际容量的一半（%.1f GiB）：归档区要与车机内容一致，'
+            raise InstallError('镜像容量不能超过数据盘实际容量的一半（%.1f G）：归档区要与车机内容一致，'
                                '还要存放转码缓存、铃声、涂装等文件' % (usage.total / GIB / 2))
         if not self.upgrade and usage.free < self.required_bytes():
-            raise InstallError('数据盘至少需要 %d GiB 空闲空间（镜像、归档、安全预留）' %
+            raise InstallError('数据盘至少需要 %d G 空闲空间（镜像、归档、安全预留）' %
                                (self.required_bytes() // GIB))
         app_bytes = sum(info['size'] for info in runtime_files.values()) + 128 * 1024 * 1024
         if shutil.disk_usage(self.path('/opt')).free < app_bytes:
@@ -906,7 +941,7 @@ def main(argv=None):
             if installed and installer.args.start and not installer.upgrade:
                 installer.start()
         elif installer.preflight():
-            print('检查通过。需要 %d GiB 数据盘空闲空间；尚未写入文件或启动服务。' %
+            print('检查通过。需要 %d G 数据盘空闲空间；尚未写入文件或启动服务。' %
                   (installer.required_bytes() // GIB))
         else:
             print('相同版本已安装，未改动设备。')

@@ -155,13 +155,8 @@ losetup 失败 / 挂载失败
 ## 服务起不来
 
 ```sh
-# OpenWrt
 /etc/init.d/tesla-viewer restart
 logread | grep sentry
-
-# systemd
-systemctl status sentry-viewer
-journalctl -u sentry-viewer -n 50
 ```
 
 常见原因：`python3` 路径不对（改 `/etc/init.d/tesla-viewer` 里的 command）、端口被占（`netstat -ltn | grep 8080`）。

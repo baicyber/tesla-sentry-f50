@@ -31,7 +31,7 @@
 
 **关键设计**：镜像（exFAT）与归档区（ext4）是两块**物理隔离**的存储。车机永远只碰镜像，网页永远只碰归档区，两者不会同时读写同一个 exFAT 文件系统。
 
-2.8.48 起，两者统一由 `TSF_VIDEO_ROOT` 派生：`<根>/img/teslacam.img`、`<根>/archive/`，转码缓存为 `<根>/archive/transcode_cache/`。F50 检测到 TF 卡（`/dev/mmcblk1p1`）时根目录默认是 `/mnt/sdcard/tesla-sentry`，未检测到时回退 `/archive`。
+两者统一由 `TSF_VIDEO_ROOT` 派生：`<根>/img/teslacam.img`、`<根>/archive/`，转码缓存为 `<根>/archive/transcode_cache/`。项目仅支持中兴 F50，TF 卡（`/dev/mmcblk1p1`）默认挂载到 `/mnt/sdcard`，根目录为 `/mnt/sdcard/tesla-sentry`。
 
 ## 2. 为什么能"伪装 U 盘"
 

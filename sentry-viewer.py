@@ -177,7 +177,7 @@ for _mod_name in ("storage_allocation", "storage_resize"):
 
 # ---- 配置加载兜底 ----
 # OpenWrt procd 不会把 init.d 脚本里 export 的变量传给服务进程 (实测 /proc/PID/environ 为空),
-# 而 systemd 的 EnvironmentFile 会全量注入 —— 两边行为不一致会让"照 README 改 conf 不生效"。
+# 其他服务管理器可能全量注入 EnvironmentFile —— 行为不一致会让"照 README 改 conf 不生效"。
 # 在读取任何 TSF_* 之前, 把 conf 里尚未出现在环境变量中的项补进 os.environ。
 # 优先级: 显式环境变量 > /etc/tesla-sentry.conf > 代码默认值; 空值按"用默认"处理。
 def _load_conf(path="/etc/tesla-sentry.conf"):
@@ -214,6 +214,9 @@ CONF_DOCS = {
     "TSF_UDC": "USB 控制器名称 (UDC)",
     "TSF_CACHE": "程序缓存目录 (缩略图/遥测/合成临时); 旧值 /opt/mu300 已废弃会自动移除",
     "TSF_TRANSCODE_DIR": "转码缓存目录 (在归档区内, 与视频一一对应)",
+    "TSF_LOG_DIR": "运行日志目录",
+    "TSF_LIVE_LOG": "实时同步日志路径",
+    "TSF_LIVE_STATE": "实时同步状态文件路径",
     "TSF_FFMPEG": "ffmpeg 路径; 留空=自动查找",
     "TSF_FFPROBE": "ffprobe 路径; 留空=自动查找",
     "TSF_USB_LOCK": "U 盘导出/文件管理互斥锁文件",
@@ -221,14 +224,20 @@ CONF_DOCS = {
     "TSF_RECENT_KEEP_MIN": "空间兜底清理时最近必留分钟",
     "TSF_RECENT_MAX_GB": "实时滚动记录体积上限 G, 0=不限",
     "TSF_BOX_KEEP_DAYS": "盒子侧哨兵/手动保存按天保留, 0=不限",
+    "TSF_DISK_GUARD_INTERVAL": "磁盘空间检查间隔秒数",
     "TSF_FREE_MIN_MB": "存储卡空闲低于此值暂停同步 (MiB)",
     "TSF_FREE_TARGET_MB": "空间不足时清理到的目标空闲 (MiB)",
     "TSF_LIVE_INTERVAL": "在线只读同步轮询秒数",
+    "TSF_SYNC_FAIL_RETRY_SEC": "同步失败后的初始重试秒数",
+    "TSF_SYNC_FAIL_RETRY_MAX_SEC": "同步失败后的最长重试秒数",
     "TSF_PREWARM_SENTRY": "哨兵录像预转码缓存事件数, 0=关闭",
     "TSF_PREWARM_SAVED": "手动保存预转码缓存事件数, 0=关闭",
     "TSF_ARCHIVE_TOTAL_GB": "归档区总容量上限 G, 0=不限",
     "TSF_DRIVE_MAX_GB": "驾驶记录容量上限 G, 0=不限",
     "TSF_STORAGE_SETTINGS": "网页存储分配的 settings.json 路径 (留空=程序目录)",
+    "TSF_PYTHON": "F50 离线 Python 解释器路径",
+    "TSF_FONTS": "水印与导出字体目录",
+    "PATH": "服务进程的命令搜索路径",
 }
 # 已废弃参数: 升级时直接从 conf 移除
 LEGACY_CONF_KEYS = {"TSF_BOX_MAX_GB"}
@@ -269,11 +278,12 @@ def _sanitize_conf(path=None):
     if not final and not lines:
         return False
 
-    output, emitted = [], set()
+    output, emitted, pending_comments = [], set(), []
     for line in lines:
         item = parse(line)
         if not item:
-            output.append(line)
+            if line.strip().startswith("#"):
+                pending_comments.append(line.strip())
             continue
         key, value = item
         if key in LEGACY_CONF_KEYS or (key, value) in LEGACY_CONF_VALUES:
@@ -281,12 +291,19 @@ def _sanitize_conf(path=None):
         if key in emitted:
             continue                # 重复参数只保留一行
         emitted.add(key)
+        if output:
+            output.append("")       # 不同选项之间保留一个空行
         doc = CONF_DOCS.get(key)
         if doc:
-            comment = "# " + doc
-            if not output or output[-1].strip() != comment:
-                output.append(comment)
+            output.append("# " + doc)
+        else:
+            output.extend(pending_comments)
         output.append("%s=%s" % (key, final.get(key, value)))
+        pending_comments = []
+    if pending_comments:
+        if output:
+            output.append("")
+        output.extend(pending_comments)
     if output == lines:
         return False
     temporary = None
@@ -325,7 +342,7 @@ CONF_FILE = os.environ.get("TSF_CONF", "/etc/tesla-sentry.conf")
 # 启动时根据 env 自动派生:
 #   - 优先用 TSF_VIDEO_ROOT (新单键);
 #   - 否则从旧键 TSF_IMG / TSF_ARCHIVE 反推;
-#   - 没有任何配置时回退 /mnt/sdcard (F50 TF 卡) 或 /archive (通用).
+#   - 没有任何配置时回退 F50 TF 卡挂载点 /mnt/sdcard。
 VIDEO_ROOT = os.environ.get("TSF_VIDEO_ROOT", "").strip()
 if not VIDEO_ROOT:
     _img_env = os.environ.get("TSF_IMG", "").strip()
@@ -337,9 +354,9 @@ if not VIDEO_ROOT:
         VIDEO_ROOT = os.path.normpath(os.path.join(os.path.dirname(_img_env), os.pardir))
     elif _arch_env:
         VIDEO_ROOT = os.path.normpath(os.path.join(_arch_env, os.pardir))
-# F50 默认 TF 卡挂载点, 其次通用 /archive
+# F50 专用：未配置时固定使用 TF 卡挂载点。
 if not VIDEO_ROOT:
-    VIDEO_ROOT = "/mnt/sdcard" if os.path.isdir("/mnt/sdcard") else "/archive"
+    VIDEO_ROOT = "/mnt/sdcard/tesla-sentry"
 os.environ.setdefault("TSF_VIDEO_ROOT", VIDEO_ROOT)
 os.environ.setdefault("TSF_IMG", os.path.join(VIDEO_ROOT, "img", "teslacam.img"))
 os.environ.setdefault("TSF_ARCHIVE", os.path.join(VIDEO_ROOT, "archive"))
@@ -375,6 +392,8 @@ def sync_conf(mapping):
         output.append(line)
     for key, value in values.items():
         if key not in seen:
+            if output and output[-1].strip():
+                output.append("")
             doc = CONF_DOCS.get(key)
             if doc:
                 output.append("# " + doc)
@@ -399,7 +418,7 @@ def sync_conf(mapping):
                 pass
         return False
 
-# 路径/端口优先取环境变量 (缺失时已由 _load_conf 从 conf 补齐), 便于装到非 F50 设备上时改归档区、端口等
+# 路径/端口优先取环境变量 (缺失时已由 _load_conf 从 conf 补齐)。
 ARCHIVE = os.environ.get("TSF_ARCHIVE", "/archive")
 SKIN_DIR = os.path.join(ARCHIVE, ".skins")
 AUDIO_Q = os.path.join(ARCHIVE, "boombox-queue")
@@ -478,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.004"
+APP_VERSION = "2026.11.25.005"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1129,9 +1148,7 @@ def _ota_sidecars(base):
             if os.path.isfile("/etc/init.d/tesla-live"):
                 subprocess.Popen(["/etc/init.d/tesla-live", "restart"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            elif shutil.which("systemctl"):
-                subprocess.Popen(["systemctl", "restart", "tesla-live.service"],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         except OSError:
             pass
     return updated, failed
@@ -2197,8 +2214,8 @@ select.ninput { cursor:pointer; }
 .fm-tool { display:inline-flex; align-items:center; gap:4px; background:var(--panel2); border:1px solid var(--line2); color:var(--text); border-radius:8px; padding:7px 10px; font-size:12px; line-height:1.2; cursor:pointer; margin:0 0 10px; user-select:none; }
 .fm-tool:hover { border-color:var(--accent); color:var(--accent); }
 .fm-tool .ic { width:13px; height:13px; }
-.fm-tool.upbtn { background:var(--accent); border:1px solid var(--accent); color:#fff; font-weight:600; }
-.fm-tool.upbtn:hover { background:var(--accent); border-color:var(--accent); color:#fff; filter:brightness(1.08); }
+.fm-tool.upbtn { background:var(--panel2); border:1px solid var(--line2); color:var(--text); font-weight:600; }
+.fm-tool.upbtn:hover { background:var(--panel); border-color:var(--muted); color:var(--text); }
 /* 移动/复制目标目录树 */
 .fm-picker { position:fixed; inset:0; z-index:420; background:rgba(4,8,12,.62); display:flex; align-items:center; justify-content:center; padding:18px; }
 .fm-picker[hidden] { display:none; }
@@ -4345,7 +4362,7 @@ function layoutPlayer() {
   const landscapePhone = matchMedia('(orientation:landscape) and (max-height:550px)').matches;
   const immersive = !!document.fullscreenElement || byId('player').classList.contains('expanded');
   const top = document.querySelector('.player .ptop').getBoundingClientRect().bottom;
-  const controls = document.querySelector('.transport').offsetHeight + byId('cambar').offsetHeight;
+  const controls = document.querySelector('.transport').offsetHeight + document.querySelector('.video-toolbar').offsetHeight;
   const available = innerHeight - top - controls - 55;
   const limit = landscapePhone ? Math.max(100, innerHeight - top - 16) :
     immersive ? Math.max(160, available) : Math.max(160, Math.min(innerHeight * .58, available));
@@ -6416,8 +6433,9 @@ function playSpaceHint() {
   const perEvent4 = Math.round(perCam * 4), perEvent6 = Math.round(perCam * 6);
   const num = (id) => { const e = document.getElementById(id); const v = e ? Number(e.value) : 0; return Number.isFinite(v) && v > 0 ? v : 0; };
   const events = num('prewarm-sentry') + num('prewarm-saved');
-  const total4 = fmtBytes(perEvent4 * events * 1048576);
-  const total6 = fmtBytes(perEvent6 * events * 1048576);
+  const compact = bytes => fmtBytes(bytes).replace(' KB', 'K').replace(' MB', 'M').replace(' GB', 'G').replace(' TB', 'T');
+  const total4 = compact(perEvent4 * events * 1048576);
+  const total6 = compact(perEvent6 * events * 1048576);
   el.textContent = '空间占用提醒：' + quality + ' 下每个事件约 ' + perEvent4 + '～' + perEvent6 +
     ' MB（4～6 路，事件前后各 1 分钟）；两个模块合计 ' + events + ' 个事件，4 路车型约需 ' + total4 +
     '，6 路车型约需 ' + total6 + '。存储紧张时请调小事件数或填 0 关闭。';
@@ -8383,7 +8401,7 @@ LOOPDEV = os.environ.get("TSF_LOOP", "/dev/loop3")
 LOSETUP = os.environ.get("TSF_LOSETUP") or (
     "/opt/mu300/busybox-bin/losetup"
     if os.path.exists("/opt/mu300/busybox-bin/losetup")
-    else "losetup"  # 通用发行版走 PATH (util-linux)
+    else "losetup"  # F50 未提供专用 busybox 时走 PATH
 )
 GADGET_DIR = os.environ.get("TSF_GADGET", "/sys/kernel/config/usb_gadget/linux")
 USB_AUTO_DETACH = 300  # 秒, 无操作自动恢复导出
@@ -10465,7 +10483,7 @@ def cleanup_archive():
 def restart_service():
     """重启本服务进程, 让存储路径/容量分配等启动期设置生效。
 
-    优先用 OpenWrt procd 的 init 脚本; 没有 init 脚本时退回 systemd。
+    使用 F50 OpenWrt procd 的 init 脚本。
     调用方先返回 HTTP 响应, 再延迟执行, 避免网页在重启时拿不到结果。
     """
     commands = []
@@ -10473,9 +10491,6 @@ def restart_service():
         path = '/etc/init.d/' + name
         if os.path.isfile(path):
             commands.append('%s restart' % path)
-    if shutil.which('systemctl'):
-        for unit in ('tesla-viewer', 'tesla-sentry', 'sentry-viewer'):
-            commands.append('systemctl restart ' + unit)
     if not commands:
         return False
     try:

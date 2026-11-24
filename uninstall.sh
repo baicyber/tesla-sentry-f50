@@ -19,29 +19,19 @@ if [ -z "$TSF_VIDEO_ROOT" ]; then
         TSF_VIDEO_ROOT=$(dirname "$(dirname "$TSF_IMG")")
     fi
 fi
-: "${TSF_VIDEO_ROOT:=/archive}"
+: "${TSF_VIDEO_ROOT:=/mnt/sdcard/tesla-sentry}"
 : "${TSF_IMG:=$TSF_VIDEO_ROOT/img/teslacam.img}"
 : "${TSF_ARCHIVE:=$TSF_VIDEO_ROOT/archive}"
 : "${TSF_MNT:=/tmp/teslamnt}"
 : "${TSF_CACHE:=$TSF_DIR/cache}"
 
-echo "==> 停止服务 (兼容 procd / systemd / rc.local 三种安装方式)"
-# 1) OpenWrt procd 启动脚本 (含旧版 sentry-viewer 兼容名)
+echo "==> 停止 F50 OpenWrt procd 服务"
+# 含旧版 sentry-viewer 兼容名
 for svc in tesla-gadget tesla-viewer tesla-live sentry-viewer; do
     if [ -x "/etc/init.d/$svc" ]; then
         "/etc/init.d/$svc" stop 2>/dev/null || true
         "/etc/init.d/$svc" disable 2>/dev/null || true
     fi
-done
-# 2) systemd 单元 (tesla-live 以前漏停/漏删, 会残留后台同步进程)
-if command -v systemctl >/dev/null 2>&1; then
-    for svc in tesla-gadget sentry-viewer tesla-live; do
-        systemctl disable --now "$svc.service" 2>/dev/null || true
-    done
-fi
-# 3) 通用分支是 rc.local + setsid 直接拉起, 只能按进程名收掉
-for pat in sentry-viewer.py tesla-live-sync.py tesla-sync.sh usb-selfheal.sh; do
-    pkill -f "$pat" 2>/dev/null || true
 done
 
 echo "==> 恢复 USB 导出 (移除 mass_storage)"
@@ -53,18 +43,9 @@ fi
 
 echo "==> 清理开机自启与定时任务"
 rm -f /etc/init.d/tesla-gadget /etc/init.d/tesla-viewer /etc/init.d/tesla-live /etc/init.d/sentry-viewer
-rm -f /etc/systemd/system/tesla-gadget.service /etc/systemd/system/sentry-viewer.service \
-      /etc/systemd/system/tesla-live.service
-rm -f /etc/cron.d/tesla-sentry
-# procd 用 /etc/crontabs/root, 通用分支可能用 /etc/crontab
 for f in /etc/crontabs/root /etc/crontab; do
-    [ -f "$f" ] && sed -i '/tesla-sync.sh/d;/usb-selfheal.sh/d;/tsf-start.sh/d' "$f" 2>/dev/null || true
+    [ -f "$f" ] && sed -i '/tesla-sync.sh/d;/usb-selfheal.sh/d' "$f" 2>/dev/null || true
 done
-[ -f /etc/rc.local ] && sed -i '/tsf-start.sh/d' /etc/rc.local 2>/dev/null || true
-if command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl restart cron 2>/dev/null || true
-fi
 [ -x /etc/init.d/cron ] && /etc/init.d/cron restart >/dev/null 2>&1 || true
 
 echo "==> 删除程序文件与缓存"

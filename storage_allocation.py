@@ -1,4 +1,4 @@
-"""Shared storage budgets and durable settings; sizes are integer GiB."""
+"""Shared storage budgets and durable settings; sizes are integer G."""
 import hashlib
 import json
 import math
@@ -29,17 +29,17 @@ def validate_values(values, usb_gib):
         raise ValueError('存储参数不完整')
     for value in (*values.values(), usb_gib):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError('容量须为整数 GiB')
+            raise ValueError('容量须为整数 G')
         if isinstance(value, float) and not math.isfinite(value):
-            raise ValueError('容量须为整数 GiB')
+            raise ValueError('容量须为整数 G')
         if int(value) != value:
-            raise ValueError('容量须为整数 GiB')
+            raise ValueError('容量须为整数 G')
     for name in FIELDS:
         low = 0 if name in UNLIMITED else 1
         if not low <= values[name] <= 4096:
-            raise ValueError('归档与驾驶记录可填 0 表示无限制；其他容量须为 1～4096 GiB')
+            raise ValueError('归档与驾驶记录可填 0 表示无限制；其他容量须为 1～4096 G')
     if usb_gib > 128:
-        raise ValueError('U 盘容量须在 1～128 GiB 范围内')
+        raise ValueError('U 盘容量须在 1～128 G 范围内')
     if values['archive_gib'] and values['drive_gib'] > values['archive_gib']:
         raise ValueError('驾驶记录容量不能超过归档总容量')
     if values['free_min_gib'] > values['free_target_gib']:
@@ -169,7 +169,7 @@ def check_budget(values, usb_gib, disk):
     need = required_bytes(values, usb_gib)
     if need > disk['budget_bytes']:
         raise ValueError(
-            '容量分配超过归档所在盘的可用容量 %.1f GiB：需要 %.1f（镜像 %d + 归档上限 %d + 安全预留 %d），'
+            '容量分配超过归档所在盘的可用容量 %.1f G：需要 %.1f（镜像 %d + 归档上限 %d + 安全预留 %d），'
             '可用 %.1f。规则：归档区上限 + 镜像容量（连同安全预留）不得超过归档区所在盘；'
             '可把归档总上限、镜像容量或安全预留调小，或将视频存储改到更大的盘。'
             % ((need - disk['budget_bytes']) / GIB, need / GIB, usb_gib,
@@ -190,7 +190,7 @@ def check_resize_budget(values, usb_gib, disk):
     need = usb_gib * GIB + archive_need + values['free_target_gib'] * GIB
     if need > disk['budget_bytes']:
         raise ValueError(
-            '容量调整超出可用空间 %.1f GiB：需要 %.1f GiB（U 盘 %d + 归档实际 %.1f + 安全预留 %d），'
-            '可用 %.1f GiB。请减小 U 盘容量，或先清理归档/降低安全预留后重试。'
+            '容量调整超出可用空间 %.1f G：需要 %.1f G（U 盘 %d + 归档实际 %.1f + 安全预留 %d），'
+            '可用 %.1f G。请减小 U 盘容量，或先清理归档/降低安全预留后重试。'
             % ((need - disk['budget_bytes']) / GIB, need / GIB, usb_gib, archive_need / GIB,
                values['free_target_gib'], disk['budget_bytes'] / GIB))

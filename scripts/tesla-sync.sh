@@ -19,8 +19,9 @@
 [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf
 
 : "${TSF_DIR:=/opt/tesla-sentry}"
-: "${TSF_IMG:=$TSF_DIR/teslacam.img}"
-: "${TSF_ARCHIVE:=/archive}"
+: "${TSF_VIDEO_ROOT:=/mnt/sdcard/tesla-sentry}"
+: "${TSF_IMG:=$TSF_VIDEO_ROOT/img/teslacam.img}"
+: "${TSF_ARCHIVE:=$TSF_VIDEO_ROOT/archive}"
 : "${TSF_MNT:=/tmp/teslamnt}"
 : "${TSF_IDLE:=600}"
 : "${TSF_LOG_DIR:=$TSF_DIR}"

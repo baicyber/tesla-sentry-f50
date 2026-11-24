@@ -54,11 +54,12 @@ def _load_conf(path="/etc/tesla-sentry.conf"):
 
 _load_conf()
 
-IMG = os.environ.get("TSF_IMG", "/root/teslacam.img")
-ARCHIVE = os.environ.get("TSF_ARCHIVE", "/archive")
+VIDEO_ROOT = os.environ.get("TSF_VIDEO_ROOT", "/mnt/sdcard/tesla-sentry")
+IMG = os.environ.get("TSF_IMG", VIDEO_ROOT + "/img/teslacam.img")
+ARCHIVE = os.environ.get("TSF_ARCHIVE", VIDEO_ROOT + "/archive")
 MNT = os.environ.get("TSF_MNT", "/tmp/teslamnt")
-LOG = os.environ.get("TSF_LIVE_LOG", "/root/tesla-live.log")
-STATE = os.environ.get("TSF_LIVE_STATE", "/root/.tesla-live-state.json")
+LOG = os.environ.get("TSF_LIVE_LOG", VIDEO_ROOT + "/logs/tesla-live.log")
+STATE = os.environ.get("TSF_LIVE_STATE", VIDEO_ROOT + "/live-state.json")
 INTERVAL = int(os.environ.get("TSF_LIVE_INTERVAL", "15"))
 RECENT_INTERVAL = 5
 RECENT_SEGMENT_SECONDS = 60
