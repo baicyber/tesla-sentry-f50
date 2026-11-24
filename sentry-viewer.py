@@ -476,7 +476,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.54"
+APP_VERSION = "2.8.55"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -774,6 +774,7 @@ def ota_check(force=False):
     out = {"ok": True, "current": cur, "latest": "", "date": "", "notes": [],
            "has_update": False, "source": "", "error": "",
            "rollback_ready": os.path.isfile(OTA_BACKUP),
+           "repo": ota_target().get("repo", ""), "branch": ota_target().get("branch", ""),
            "auto": load_settings().get("auto_update", True),
            "auto_checked": AUTO_UPD["last_check"], "auto_msg": AUTO_UPD["last_result"]}
     try:
@@ -2068,6 +2069,22 @@ select.ninput { cursor:pointer; }
 .updbtns { display:flex; gap:8px; margin:10px 0 8px; }
 .updbtns .mini { flex:1; padding:9px 0; border-radius:9px; background:var(--panel2); border:none; color:var(--text); font-size:13px; cursor:pointer; }
 .updbtns .mini.logout { background:transparent; border:1px solid var(--accent); color:var(--accent); }
+/* 更新页: 版本 + 操作按钮同一张卡片, 更新记录只显示最近 2 个版本 */
+.updvercard { margin:8px 0 4px; padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:var(--panel2); }
+.updverline { display:flex; flex-wrap:wrap; gap:8px 30px; align-items:center; margin-bottom:9px; }
+.updver { display:flex; align-items:center; gap:8px; font-size:12.5px; }
+.updver b { font-size:15px; color:var(--text); }
+.updvercard .updbtns { margin:8px 0 0; flex-wrap:wrap; }
+.updvercard .updauto { margin:0 0 0 auto; padding-top:0; border-top:0; font-size:12.5px; flex:0 0 auto; }
+.updvercard .updauto span { flex:0 0 auto; }
+.updvercard .hint { margin-top:7px; }
+.updnotes-wrap { margin:14px 0 6px; }
+.updnotes-title { font-size:12.5px; font-weight:600; margin-bottom:7px; color:var(--text); }
+.updnotes-title span { font-weight:400; color:var(--muted); font-size:11.5px; margin-left:4px; }
+.updmore { display:inline-block; margin-top:8px; font-size:12px; color:var(--blue); text-decoration:none; }
+.updmore:hover { text-decoration:underline; }
+.updsep { margin:7px 0 3px; color:var(--muted); font-size:11.5px; font-weight:600; }
+.updrollback { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
 .updbtns .mini.primary { background:var(--accent); color:#fff; }
 .updbtns .mini:disabled { opacity:.45; cursor:default; }
 #gear { position:relative; }
@@ -2583,6 +2600,12 @@ body.settings-open { overflow:hidden; }
 .usage-row.nested { margin:0 0 14px; padding-left:0; border-left:0; }
 .usage-row.nested:last-child { margin-bottom:0; }
 .usage-row.free { margin:0; padding-top:18px; border-top:1px solid var(--line); }
+.usage-chart-box { margin:0 0 18px; }
+.usage-chart { display:flex; width:100%; height:16px; border-radius:8px; overflow:hidden; background:var(--line); }
+.usage-chart span { display:block; height:100%; min-width:0; transition:width .3s ease; }
+.usage-legend { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:9px; font-size:11.5px; color:var(--muted); }
+.usage-legend i { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+.usage-legend b { color:var(--text); font-weight:600; }
 .diag-tabs { display:flex; gap:8px; margin:10px 0 0; }
 .diag-tabs .mini { padding:7px 14px; border-radius:8px; background:var(--panel2); border:1px solid var(--line2); color:var(--text); font-size:12px; cursor:pointer; }
 .diag-tabs .mini.active { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -2964,7 +2987,7 @@ body.settings-open { overflow:hidden; }
     <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车语音</button>
     <button class="stab" id="st-wraps" onclick="stab('wraps')"><svg class="ic"><use href="#i-brush"/></svg>涂装</button>
     <h3>系统与偏好</h3>
-    <button class="stab" id="st-play" onclick="stab('play')"><svg class="ic"><use href="#i-eye"/></svg>播放画质</button>
+    <button class="stab" id="st-play" onclick="stab('play')"><svg class="ic"><use href="#i-eye"/></svg>播放设置</button>
     <button class="stab" id="st-notify" onclick="stab('notify')"><svg class="ic"><use href="#i-bell"/></svg>推送</button>
     <button class="stab" id="st-auth" onclick="stab('auth')"><svg class="ic"><use href="#i-key"/></svg>账号</button>
     <button class="stab" id="st-lang" onclick="stab('lang')"><svg class="ic"><use href="#i-globe"/></svg>语言</button>
@@ -3000,12 +3023,18 @@ body.settings-open { overflow:hidden; }
     <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
     </section><details class="storage-advanced" id="storage-usage" open><summary>实际用量 · 已用／上限</summary>
       <div class="storage-usage">
+        <div class="usage-chart-box">
+          <div class="usage-chart" id="usage-chart" role="img" aria-label="存储卡实际容量分布"></div>
+          <div class="usage-legend" id="usage-legend"></div>
+          <div class="hint" style="margin-top:7px">同一段视频被多个分类引用时以硬链接保存，只占一份空间；上图按分类归并显示，图例数值为各目录的实际大小。</div>
+        </div>
         <div class="usage-row"><span>车机 U 盘</span><output id="storage-used-usb">—</output><meter id="storage-meter-usb" min="0" max="100" value="0" aria-label="车机 U 盘用量"></meter></div>
         <div class="usage-row"><span>盒子归档</span><span class="usage-actions"><output id="storage-used-archive">—</output><button class="mini usage-clear" onclick="storageClearUsage('archive')">全部清空</button></span><meter id="storage-meter-archive" min="0" max="100" value="0" aria-label="盒子归档用量"></meter></div>
         <div class="usage-group">
           <div class="usage-row nested"><span>其中：驾驶记录</span><span class="usage-actions"><output id="storage-used-drive">—</output><button class="mini usage-clear" onclick="storageClearUsage('drive')">清空</button></span><meter id="storage-meter-drive" min="0" max="100" value="0" aria-label="驾驶记录用量"></meter></div>
           <div class="usage-row nested"><span>其中：哨兵</span><span class="usage-actions"><output id="storage-used-sentry">—</output><button class="mini usage-clear" onclick="storageClearUsage('sentry')">清空</button></span></div>
           <div class="usage-row nested"><span>其中：手动保存</span><span class="usage-actions"><output id="storage-used-saved">—</output><button class="mini usage-clear" onclick="storageClearUsage('saved')">清空</button></span></div>
+          <div class="usage-row nested"><span>其中：实时滚动记录</span><output id="storage-used-recent">—</output></div>
           <div class="usage-row nested"><span>其中：缓存目录</span><span class="usage-actions"><output id="storage-used-cache">—</output><button class="mini usage-clear" onclick="storageClearUsage('cache')">清空</button></span></div>
         </div>
         <div class="usage-row free"><span>存储卡当前空闲</span><output id="storage-used-free">—</output></div>
@@ -3047,15 +3076,6 @@ body.settings-open { overflow:hidden; }
     <section class="storage-danger"><h3>重启服务</h3>
     <div class="hint">修改存储路径、容量分配后，点此重启服务让设置生效。重启期间网页会短暂断开（约 5 秒），刷新后自动恢复。</div>
     <button class="mini" id="storage-restart" onclick="storageRestartService()">重启服务</button><div id="storage-restart-status"></div></section>
-    <section class="storage-danger"><h3>转码诊断</h3>
-    <div class="hint">转码失败或没有缩略图时点一下，会现场测试目录写入、ffmpeg 编码器/解码器、温度热区，并真的抽一帧、编 2 秒视频；结果可直接复制反馈。</div>
-    <button class="mini" id="storage-diag" onclick="storageDiag()">运行诊断</button>
-    <div class="diag-tabs" id="storage-diag-tabs" hidden>
-      <button class="mini active" data-diag-tab="brief" onclick="storageDiagShow('brief')">简要解析</button>
-      <button class="mini" data-diag-tab="full" onclick="storageDiagShow('full')">详细内容</button>
-      <button class="mini" id="storage-diag-copy" onclick="storageDiagCopy()">复制</button>
-    </div>
-    <pre id="storage-diag-out" style="display:none;white-space:pre-wrap;word-break:break-all;font-size:11.5px;line-height:1.45;margin:10px 0 0;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);max-height:340px;overflow:auto"></pre></section>
   </div>
   <div id="tab-brand" style="display:none">
     <div class="hint">标题栏左侧的图标与名称 · 改完立即生效, 访客刷新页面后看到新的; 名称留空即用默认「哨兵一剪梅」</div>
@@ -3155,6 +3175,15 @@ body.settings-open { overflow:hidden; }
     </label>
     <div class="hint" id="play-net"></div>
     <div class="hint" id="play-msg"></div>
+    <section class="storage-danger" style="margin-top:18px"><h3>转码诊断</h3>
+    <div class="hint">转码失败或没有缩略图时点一下，会现场测试目录写入、ffmpeg 编码器/解码器、温度热区，并真的抽一帧、编 2 秒视频；结果可直接复制反馈。</div>
+    <button class="mini" id="storage-diag" onclick="storageDiag()">运行诊断</button>
+    <div class="diag-tabs" id="storage-diag-tabs" hidden>
+      <button class="mini active" data-diag-tab="brief" onclick="storageDiagShow('brief')">简要解析</button>
+      <button class="mini" data-diag-tab="full" onclick="storageDiagShow('full')">详细内容</button>
+      <button class="mini" id="storage-diag-copy" onclick="storageDiagCopy()">复制</button>
+    </div>
+    <pre id="storage-diag-out" style="display:none;white-space:pre-wrap;word-break:break-all;font-size:11.5px;line-height:1.45;margin:10px 0 0;padding:10px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);max-height:340px;overflow:auto"></pre></section>
   </div>
   <div id="tab-notify" style="display:none">
     <div class="hint">哨兵触发时把时间/位置/触发原因和触发画面推送给你。先选择推送方式：飞书提醒支持封面卡片与视频；微信提醒支持爱语飞飞、Server酱等接口，只发文字提醒。</div>
@@ -3229,21 +3258,29 @@ body.settings-open { overflow:hidden; }
       <select class="ninput" id="upd-branch" style="flex:0 0 110px;min-width:0"></select>
       <button class="mini" onclick="otaSaveTarget()">切换</button>
     </div>
-    <div class="updrow"><span class="updk">当前版本</span><b id="upd-cur">—</b></div>
-    <div class="updrow"><span class="updk">最新版本</span><b id="upd-new">—</b><span class="updtag" id="upd-tag">未检查</span></div>
-    <div class="updnotes" id="upd-notes"></div>
-    <label class="updauto" title="检测到新版本时, 在没人看视频的空闲时刻自动升级 (只重启本服务, 约 5 秒)">
-      <span>自动更新</span>
-      <input type="checkbox" id="upd-auto" checked onchange="setAutoUpdate(this.checked)">
-    </label>
-    <div class="hint" id="upd-autohint">—</div>
-    <div class="updbtns">
-      <button class="mini" id="upd-check" onclick="otaCheck(true)">检查更新</button>
-      <button class="mini primary" id="upd-go" onclick="otaApply()" disabled>立即升级</button>
+    <div class="updvercard">
+      <div class="updverline">
+        <div class="updver"><span class="updk">当前版本</span><b id="upd-cur">—</b></div>
+        <div class="updver"><span class="updk">最新版本</span><b id="upd-new">—</b><span class="updtag" id="upd-tag">未检查</span></div>
+      </div>
+      <div class="updbtns">
+        <button class="mini" id="upd-check" onclick="otaCheck(true)">检查更新</button>
+        <button class="mini primary" id="upd-go" onclick="otaApply()" disabled>立即升级</button>
+        <label class="updauto" title="检测到新版本时, 在没人看视频的空闲时刻自动升级 (只重启本服务, 约 5 秒)">
+          <span>自动更新</span>
+          <input type="checkbox" id="upd-auto" checked onchange="setAutoUpdate(this.checked)">
+        </label>
+      </div>
+      <div class="hint" id="upd-autohint">—</div>
+      <div class="hint" id="upd-msg"></div>
     </div>
-    <div class="hint" id="upd-msg"></div>
-    <div class="updbtns"><button class="mini" id="upd-rb" onclick="otaRollback()" style="display:none">↩ 回滚到上一版本</button></div>
+    <div class="updnotes-wrap" id="upd-notes-wrap" style="display:none">
+      <div class="updnotes-title">更新记录<span>仅显示最近 2 个版本</span></div>
+      <div class="updnotes" id="upd-notes"></div>
+      <a class="updmore" id="upd-more" href="https://github.com/jiaoting/tesla-sentry-f50/blob/main/docs/RELEASE-NOTES.md" target="_blank" rel="noopener">查看完整更新记录 →</a>
+    </div>
     <div class="hint">升级会从 GitHub 及多个镜像并发竞速拉取最新程序, 覆盖本机文件并自动重启服务 (约5秒); 配置、录像、登录信息不受影响。</div>
+    <div class="updbtns updrollback"><button class="mini" id="upd-rb" onclick="otaRollback()" style="display:none">↩ 回滚到上一版本</button></div>
   </div>
   <div id="tab-lang" style="display:none">
     <div class="hint" style="margin-bottom:8px">选择语言</div>
@@ -6129,9 +6166,9 @@ function playSave() {
 }
 
 const STORAGE_HELP = {
-  total: '设备识别到的文件系统容量。可分配空间已扣除其他文件和文件系统保留量。1 GiB = 1024³ 字节，通常小于存储卡包装上的 GB 数值。',
+  total: '设备识别到的文件系统容量。可分配空间已扣除其他文件和文件系统保留量。1 GiB = 1024³ 字节，通常小于存储卡包装上的 GB 数值。哨兵、手动保存、驾驶记录中与实时滚动记录重复的片段会自动改为硬链接，同一段视频只占一份数据块。',
   usb: '车机可用的录像 U 盘容量，最大为存储卡实际容量的一半。归档区要与车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件，所以镜像不能超过整卡容量的一半。调整会清空车机 U 盘中的全部内容，盒子归档保留；期间车机暂停录像。',
-  archive: '哨兵、手动保存、实时滚动记录和驾驶记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。填 0 表示不设上限：不再按总量清理，只保留磁盘空闲保护线兜底。',
+  archive: '哨兵、手动保存、实时滚动记录和驾驶记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。填 0 表示不设上限：不再按总量清理，只保留磁盘空闲保护线兜底。四个分类中内容完全相同的片段会自动替换为硬链接，只计一份占用。',
   recentmax: '实时滚动记录单独的容量上限，已包含在归档总容量内。6 路 1 小时约 12 GiB；填 0 表示不限制，只按保留分钟数滚动清理。',
   drive: '驾驶记录的容量上限，已包含在归档总容量内。超限时从最旧行程开始清理，保留最新片段。',
   reserve: '空间不足时，希望清理后恢复的空闲容量，不创建独立分区。增大此值可能使旧归档更早被清理。',
@@ -6231,10 +6268,33 @@ function storageRenderUsage() {
     meter.value = limit > 0 ? Math.min(100, used / 1073741824 / limit * 100) : 0;
   }
   document.getElementById('storage-used-free').textContent = (disk.free_bytes / 1073741824).toFixed(1) + ' GiB';
-  for (const [name, bytes] of [['sentry', disk.sentry_bytes], ['saved', disk.saved_bytes], ['cache', disk.cache_bytes]]) {
+  for (const [name, bytes] of [['sentry', disk.sentry_bytes], ['saved', disk.saved_bytes], ['recent', disk.recent_bytes], ['cache', disk.cache_bytes]]) {
     const output = document.getElementById('storage-used-' + name);
     if (output) output.textContent = bytes == null ? '—' : (bytes / 1073741824).toFixed(2) + ' GiB';
   }
+  // 容量分布图: 归档内部按分类着色; 硬链接导致分项之和大于归档总量时按比例归并
+  const drive = disk.drive_bytes || 0, sentry = disk.sentry_bytes || 0, saved = disk.saved_bytes || 0, recent = disk.recent_bytes || 0;
+  const arch = disk.archive_bytes || 0, catSum = drive + sentry + saved + recent;
+  const scale = catSum > arch && catSum > 0 ? arch / catSum : 1;
+  const segs = [
+    ['车机 U 盘', disk.usb_used_bytes || 0, '#4c8dff'],
+    ['驾驶记录', drive * scale, '#35c288'],
+    ['哨兵', sentry * scale, '#e8443f'],
+    ['手动保存', saved * scale, '#b06cf0'],
+    ['实时滚动记录', recent * scale, '#f0a93b'],
+    ['归档其他', Math.max(0, arch - (drive + sentry + saved + recent) * scale), '#7a8794'],
+    ['缓存目录', disk.cache_bytes || 0, '#20b8c9'],
+    ['空闲', disk.free_bytes || 0, 'var(--line2)']
+  ].filter(s => s[1] > 0.5);
+  const total = segs.reduce((sum, s) => sum + s[1], 0);
+  const bar = document.getElementById('usage-chart');
+  const legend = document.getElementById('usage-legend');
+  if (!bar || !legend) return;
+  bar.innerHTML = total > 0 ? segs.map(([label, bytes, color]) =>
+    '<span style="width:' + (bytes / total * 100).toFixed(2) + '%;background:' + color + '" title="' +
+    label + ' ' + (bytes / 1073741824).toFixed(2) + ' GiB"></span>').join('') : '';
+  legend.innerHTML = segs.map(([label, bytes, color]) =>
+    '<span><i style="background:' + color + '"></i>' + label + ' <b>' + (bytes / 1073741824).toFixed(2) + ' GiB</b></span>').join('');
 }
 document.querySelectorAll('#tab-storage input').forEach(input => input.addEventListener('input', storageRenderAllocation));
 async function storageLoad() {
@@ -6412,6 +6472,18 @@ function storageDiagBrief(r) {
   ];
   const verr = (ff.version && ff.version.err) || '';
   if (verr) lines.push('ffmpeg 报错: ' + verr.split('\n').pop());
+  const tips = [];
+  if (!ff.exists) tips.push('安装 ffmpeg：OpenWrt 执行 apk add ffmpeg（或 opkg install ffmpeg），装完在设置里核对 TSF_FFMPEG / TSF_FFPROBE 路径。');
+  else if (!ff.x264) tips.push('ffmpeg 缺少 libx264：换成带 x264 的 ffmpeg 包，或重新执行 install.sh --install-deps。');
+  if (verr) tips.push('ffmpeg 无法正常执行：检查二进制权限与动态库依赖（ldd），必要时重装 ffmpeg。');
+  if (bad.length) tips.push('有目录不可写：检查 TF 卡挂载与目录权限（是否只读），或在「存储路径」里改到可写目录后重启服务。');
+  if (th.used_c != null && th.used_c >= 80) tips.push('设备温度偏高：暂停转码并加强散热，或把外网画质降到 480p / 360p。');
+  if (r.thumb && r.thumb.ok === false) tips.push('抽帧失败：确认样本视频未损坏、ffmpeg 可执行；仍失败可清空缓存目录后重试。');
+  if (r.encode && r.encode.ok === false) tips.push('编码失败：查看「详细内容」里的 ffmpeg 报错，常见原因是缺少编码器或存储空间不足，腾出空间后重试。');
+  if (!r.sample) tips.push('未找到可用的样本视频：先让车机录制并完成同步，再运行诊断。');
+  if (!tips.length) tips.push('未发现明显问题；若播放仍异常，请复制「详细内容」反馈。');
+  lines.push('', '解决方案:');
+  tips.forEach(x => lines.push('· ' + x));
   return lines.join('\n');
 }
 function storageDiagShow(tab) {
@@ -6766,10 +6838,27 @@ async function otaCheck(force) {
     tag.className = 'updtag' + (j.has_update ? ' new' : '');
     tag.textContent = j.error ? t('检查失败') : (j.has_update ? t('有新版本') : t('已是最新'));
     const n = document.getElementById('upd-notes');
+    const wrap = document.getElementById('upd-notes-wrap');
     if (j.notes && j.notes.length) {
-      n.innerHTML = j.notes.map(x => '· ' + esc(x)).join('<br>');
+      // 只显示最近 2 个版本: 第二个「历史更新」分界线之后的内容隐藏
+      const shown = [];
+      let seps = 0;
+      for (const x of j.notes) {
+        if (/^——.*历史更新.*——$/.test(x) && ++seps >= 2) break;
+        shown.push(x);
+      }
+      n.innerHTML = shown.map(x => /^——/.test(x)
+        ? '<div class="updsep">' + esc(x) + '</div>'
+        : '· ' + esc(x)).join('<br>');
       n.style.display = 'block';
-    } else { n.style.display = 'none'; n.innerHTML = ''; }
+      if (wrap) wrap.style.display = '';
+      const more = document.getElementById('upd-more');
+      if (more) more.href = 'https://github.com/' + (j.repo || 'jiaoting/tesla-sentry-f50') +
+        '/blob/' + encodeURIComponent(j.branch || 'main') + '/docs/RELEASE-NOTES.md';
+    } else {
+      n.style.display = 'none'; n.innerHTML = '';
+      if (wrap) wrap.style.display = 'none';
+    }
     document.getElementById('upd-go').disabled = !j.has_update;
     document.getElementById('upd-rb').style.display = j.rollback_ready ? '' : 'none';
     renderAutoUpdate(j);
@@ -9323,11 +9412,11 @@ DRIVE_PARK_SECONDS = 300
 DRIVE_MAX_GAP = 10
 DRIVE_MAX_GB = int(os.environ.get("TSF_DRIVE_MAX_GB", "12"))
 # 「实时滚动记录」与哨兵事件的重复片段合并:
-# 车机在哨兵触发时会把最近几分钟的片段从 RecentClips 复制进 SentryClips,
-# 盒子里因此存了两份内容完全相同的 mp4。RecentClips 只留约 1 小时,
-# 这 1 小时内同一段占了双份; 这里把 SentryClips 那份替换成指向 RecentClips
-# 的硬链接 (同一 inode), 只保留一份数据块。之后 RecentClips 被滚动删除时,
-# SentryClips 的硬链接继续持有数据, 回放与保留期都不受影响。
+# 车机在哨兵触发或手动保存时会把最近几分钟的片段从 RecentClips 复制一份,
+# 驾驶记录也会与实时滚动记录重叠, 盒子里因此可能存了多份内容完全相同的 mp4。
+# 这里把哨兵 / 手动保存 / 驾驶记录里重复的片段替换成指向原片的硬链接
+# (同一 inode), 同一段视频只保留一份数据块。RecentClips 被滚动删除后,
+# 其它分类的硬链接继续持有数据, 回放与保留期都不受影响。
 DEDUP_INTERVAL = max(0, int(os.environ.get("TSF_DEDUP_INTERVAL", "1800")))     # 秒; 0=关闭
 DEDUP_WINDOW_MIN = max(1, int(os.environ.get("TSF_DEDUP_WINDOW_MIN", "180")))  # 只查最近 N 分钟内有写入的事件目录
 DEDUP_MAX_MB = max(0, int(os.environ.get("TSF_DEDUP_MAX_MB", "4096")))         # 每轮最多校验的 MiB; 0=不限
@@ -9384,9 +9473,10 @@ def storage_status():
     values = storage_allocation.load()
     disk = storage_allocation.snapshot(IMG, ARCHIVE, TRANSCODE_DIR)
     disk['usb_used_bytes'] = _exfat_used(IMG)
-    # 实际用量分项: 哨兵 / 手动保存 / 转码缓存目录 (盒子归档内)
+    # 实际用量分项: 哨兵 / 手动保存 / 实时滚动记录 / 转码缓存目录 (盒子归档内)
     for name, target in (('sentry_bytes', os.path.join(ARCHIVE, 'SentryClips')),
                          ('saved_bytes', os.path.join(ARCHIVE, 'SavedClips')),
+                         ('recent_bytes', os.path.join(ARCHIVE, 'RecentClips')),
                          ('cache_bytes', TRANSCODE_DIR)):
         try:
             disk[name] = storage_allocation.tree_usage(target)[0]
@@ -10302,8 +10392,8 @@ def _dedupe_same_content(a, b, size):
     return first is not None and first == second
 
 
-def dedupe_recent_sentry(force=False):
-    """把 SentryClips 里与 RecentClips 同名的重复片段替换成硬链接。
+def dedupe_archive_clips(force=False):
+    """把哨兵 / 手动保存 / 驾驶记录里与实时滚动记录重复的片段替换成硬链接。
 
     同名意味着同一分钟、同一镜头 (车机按分钟时间戳命名), 再叠加首尾采样 +
     全量 SHA-256 校验, 确认内容一致才合并, 不会误删不同内容。
@@ -10316,93 +10406,116 @@ def dedupe_recent_sentry(force=False):
         return 0, 0
     _DEDUP["t"] = now
     recent_root = os.path.join(ARCHIVE, "RecentClips")
-    sentry_root = os.path.join(ARCHIVE, "SentryClips")
-    if not os.path.isdir(recent_root) or not os.path.isdir(sentry_root):
+    if not os.path.isdir(recent_root):
         return 0, 0
+    cutoff = now - DEDUP_WINDOW_MIN * 60
     index = {}
-    try:
-        for minute in os.listdir(recent_root):
-            folder = os.path.join(recent_root, minute)
-            if not os.path.isdir(folder):
-                continue
-            for name in os.listdir(folder):
+
+    def _remember(root, since=None):
+        """把目录树里的 mp4 按文件名记进索引; since 只收近期改动的子目录。"""
+        for base, dirs, names in os.walk(root):
+            dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(base, d))]
+            if since is not None and base != root:
+                try:
+                    if os.path.getmtime(base) < since:
+                        dirs[:] = []
+                        continue
+                except OSError:
+                    dirs[:] = []
+                    continue
+            for name in names:
                 if not name.lower().endswith(".mp4"):
                     continue
-                path = os.path.join(folder, name)
+                path = os.path.join(base, name)
+                if name in index or os.path.islink(path):
+                    continue
                 try:
                     info = os.stat(path)
                 except OSError:
                     continue
                 if stat.S_ISREG(info.st_mode) and info.st_size > 0:
                     index[name] = (path, info)
+
+    try:
+        _remember(recent_root)                       # 实时滚动记录优先作为链接源
+        for cat in ("SentryClips", "SavedClips", "DriveClips"):
+            _remember(os.path.join(ARCHIVE, cat), since=cutoff)
     except OSError:
         return 0, 0
     if not index:
         return 0, 0
-    try:
-        events = os.listdir(sentry_root)
-    except OSError:
-        return 0, 0
     budget = DEDUP_MAX_MB << 20 if DEDUP_MAX_MB else None
-    cutoff = now - DEDUP_WINDOW_MIN * 60
     merged = freed = 0
-    for event in events:
-        folder = os.path.join(sentry_root, event)
-        if not os.path.isdir(folder) or os.path.islink(folder):
+    for cat in ("SentryClips", "SavedClips", "DriveClips"):
+        cat_root = os.path.join(ARCHIVE, cat)
+        if not os.path.isdir(cat_root):
             continue
         try:
-            if os.path.getmtime(folder) < cutoff:     # 老事件早就过了 RecentClips 窗口
-                continue
-            names = os.listdir(folder)
+            items = os.listdir(cat_root)
         except OSError:
             continue
-        for name in names:
-            if not name.lower().endswith(".mp4"):
+        for item in items:
+            folder = os.path.join(cat_root, item)
+            if not os.path.isdir(folder) or os.path.islink(folder):
                 continue
-            source = os.path.join(folder, name)
-            item = index.get(name)
-            if item is None or os.path.islink(source):
-                continue
-            recent_path, recent_info = item
             try:
-                info = os.stat(source)
+                if os.path.getmtime(folder) < cutoff:  # 老事件早已离开最近1小时窗口
+                    continue
             except OSError:
                 continue
-            if not stat.S_ISREG(info.st_mode) or info.st_size != recent_info.st_size:
-                continue
-            if (info.st_dev, info.st_ino) == (recent_info.st_dev, recent_info.st_ino):
-                continue                               # 已经是同一份数据
-            if budget is not None:
-                if budget <= 0:
-                    return merged, freed
-                budget -= info.st_size
-            if not _dedupe_same_content(source, recent_path, info.st_size):
-                continue
-            tmp = os.path.join(folder, ".dedup-%s" % name)
-            try:
-                os.link(recent_path, tmp)
-                if not os.path.samestat(os.stat(tmp), recent_info):
-                    raise OSError("链接校验失败")
-                os.replace(tmp, source)
-            except OSError:
-                if os.path.exists(tmp):
+            for base, dirs, names in os.walk(folder):
+                dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(base, d))]
+                for name in names:
+                    if not name.lower().endswith(".mp4"):
+                        continue
+                    source = os.path.join(base, name)
+                    hit = index.get(name)
+                    if hit is None or os.path.islink(source):
+                        continue
+                    keep_path, keep_info = hit
                     try:
-                        os.unlink(tmp)
+                        info = os.stat(source)
+                    except OSError:
+                        continue
+                    if not stat.S_ISREG(info.st_mode) or info.st_size != keep_info.st_size:
+                        continue
+                    if (info.st_dev, info.st_ino) == (keep_info.st_dev, keep_info.st_ino):
+                        continue                       # 已经是同一份数据
+                    if budget is not None:
+                        if budget <= 0:
+                            return merged, freed
+                        budget -= info.st_size
+                    if not _dedupe_same_content(source, keep_path, info.st_size):
+                        continue
+                    tmp = os.path.join(base, ".dedup-%s" % name)
+                    try:
+                        os.link(keep_path, tmp)
+                        if not os.path.samestat(os.stat(tmp), keep_info):
+                            raise OSError("链接校验失败")
+                        os.replace(tmp, source)
+                    except OSError:
+                        if os.path.exists(tmp):
+                            try:
+                                os.unlink(tmp)
+                            except OSError:
+                                pass
+                        continue
+                    merged += 1
+                    try:                               # 后续分类继续指向同一份数据
+                        index[name] = (source, os.stat(source))
                     except OSError:
                         pass
-                continue
-            merged += 1
-            if info.st_nlink == 1:                     # 旧副本没有别的链接, 合并后释放
-                freed += info.st_size
-            try:                                       # 目录落盘失败不影响本次合并
-                dir_fd = os.open(folder, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-            except OSError:
-                pass
-            print("合并重复片段 %s/%s (%d KB)" % (event, name, info.st_size // 1024), flush=True)
+                    if info.st_nlink == 1:             # 旧副本没有别的链接, 合并后释放
+                        freed += info.st_size
+                    try:                               # 目录落盘失败不影响本次合并
+                        dir_fd = os.open(base, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                        try:
+                            os.fsync(dir_fd)
+                        finally:
+                            os.close(dir_fd)
+                    except OSError:
+                        pass
+                    print("合并重复片段 %s/%s (%d KB)" % (cat, name, info.st_size // 1024), flush=True)
     return merged, freed
 
 
@@ -10450,7 +10563,7 @@ def disk_guard():
         # 重复片段合并在清理锁之外执行: 全量校验可能耗时, 不该卡住用户的删除/移动操作
         try:
             if not storage_busy() and os.environ.get('TSF_ARCHIVE_MAINTENANCE') != '1':
-                merged, freed = dedupe_recent_sentry()
+                merged, freed = dedupe_archive_clips()
                 if merged:
                     print("重复片段合并完成: %d 个, 释放约 %.1f MiB" % (merged, freed / 1048576.0), flush=True)
         except Exception as ex:

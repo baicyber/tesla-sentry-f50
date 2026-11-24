@@ -77,7 +77,7 @@ sudo ./install.sh --size 120 --port 8080 --archive /archive    # 自定义参数
 
 安装会：检查内核 gadget / exFAT / Python → 建稀疏镜像并**预置 exFAT + `TeslaCam` 目录** → 装到 `/opt/tesla-sentry/`、写 `/etc/tesla-sentry.conf` → 注册 `tesla-gadget` / `tesla-viewer` / `tesla-live` 三个服务（OpenWrt procd、systemd 或 rc.local）与两条 cron → 生成随机登录密码 → 启动并打印状态。ffmpeg、字体、部分内核项缺失只警告不中止。
 
-> aarch64 OpenWrt 全新设备另有专用入口 `./install.sh f50`（默认只做环境检查，加 `--apply` 才真正写入，要求 Python 3.11+），与通用一键安装二选一，步骤见 [docs/INSTALL-F50.md](docs/INSTALL-F50.md)。
+> aarch64 OpenWrt 全新设备另有专用入口 `./install.sh f50`（默认只做环境检查，加 `--apply` 才真正写入，要求 Python 3.11+），与通用一键安装二选一。
 
 **2. 插到车上**：插进手套箱 USB 口 → 车机直接识别、显示容量并开始录制。镜像里已预建 `TeslaCam/{RecentClips,SavedClips,SentryClips,EncryptedClips}`，**不再需要点「格式化 USB 设备」**；若车机仍弹出该提示，点确认也无害，只是把同样的结构重建一遍。
 

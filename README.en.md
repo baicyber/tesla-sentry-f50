@@ -77,7 +77,7 @@ sudo ./install.sh --size 120 --port 8080 --archive /archive    # custom options 
 
 The installer will: check kernel gadget / exFAT / Python → create the sparse image and **pre-populate exFAT + the `TeslaCam` directory** → install into `/opt/tesla-sentry/` and write `/etc/tesla-sentry.conf` → register the `tesla-gadget` / `tesla-viewer` / `tesla-live` services (OpenWrt procd, systemd or rc.local) plus two cron jobs → generate a random login password → start everything and print status. Missing ffmpeg, fonts or optional kernel features produce warnings, not aborts.
 
-> A fresh aarch64 OpenWrt device can use the dedicated `./install.sh f50` entry point instead (it only checks prerequisites by default; add `--apply` to actually install, Python 3.11+ required). Use either it or the generic install, not both — see [docs/INSTALL-F50.md](docs/INSTALL-F50.md).
+> A fresh aarch64 OpenWrt device can use the dedicated `./install.sh f50` entry point instead (it only checks prerequisites by default; add `--apply` to actually install, Python 3.11+ required). Use either it or the generic install, not both.
 
 **2. Plug it into the car**: insert into the glovebox USB port — the head unit recognizes it, shows the capacity and starts recording. The image already contains `TeslaCam/{RecentClips,SavedClips,SentryClips,EncryptedClips}`, so **there is no "Format USB device" step**. If the car still asks, confirming is harmless — it just rebuilds the same structure.
 
