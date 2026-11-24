@@ -481,8 +481,7 @@ class Installer:
         for key, name in (('TSF_FFMPEG', 'ffmpeg'), ('TSF_FFPROBE', 'ffprobe')):
             if key not in seen:
                 lines.append('%s=%s' % (key, resolved[name]))
-        backup = conf.with_name(conf.name + '.bak-' + secrets.token_hex(3))
-        shutil.copy2(conf, backup)
+        backup = self.backup_conf(conf)
         temporary = conf.with_name('.tsf-conf-' + secrets.token_hex(6))
         write(temporary, '\n'.join(lines) + '\n', 0o644)
         temporary.replace(conf)
@@ -693,8 +692,7 @@ class Installer:
             # 升级场景: 旧 conf 存在时先备份一份用于回滚, 再读旧值合并到新配置
             old_conf_text = None
             if target.exists():
-                backup = target.with_name(target.name + '.bak-' + time.strftime('%Y%m%d-%H%M%S'))
-                shutil.copy2(target, backup)
+                backup = self.backup_conf(target)
                 print('旧配置已备份 -> %s  (回滚: cp %s %s)' % (backup, backup, target))
                 old_conf_text = target.read_text(encoding='utf-8')
             write(target, self.configuration(old_conf_text=old_conf_text), created=created)
@@ -744,6 +742,22 @@ class Installer:
             stream.flush()
             os.fsync(stream.fileno())
         temporary.replace(path)
+
+    @staticmethod
+    def backup_conf(conf):
+        """配置只保留一份备份 /etc/tesla-sentry.conf.bak，顺手清掉历史时间戳备份。"""
+        backup = conf.with_name(conf.name + '.bak')
+        if conf.exists():
+            shutil.copy2(conf, backup)
+        for pattern in (conf.name + '.bak-*', conf.name + '.bak.*'):
+            for old in conf.parent.glob(pattern):
+                if old == backup:
+                    continue
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+        return backup
 
     def upgrade_in_place(self, old_cron, old_cron_mode):
         """老版本原地升级：只替换程序、离线运行环境与启动脚本。
@@ -822,8 +836,7 @@ class Installer:
                 if not os.path.lexists(target):
                     target.symlink_to('../init.d/tsf-mount')
             if conf_path.exists():
-                conf_backup = conf_path.with_name(conf_path.name + '.bak-' + stamp)
-                shutil.copy2(conf_path, conf_backup)
+                conf_backup = self.backup_conf(conf_path)
             self._replace_file(conf_path, self.configuration(old_conf_text=old_conf_text, upgrade=True))
             cron_new = self.cron_text((old_cron or b'').decode('utf-8'))
             if (cron_path.read_bytes() if cron_path.exists() else None) != old_cron:

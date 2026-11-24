@@ -247,10 +247,14 @@ say "写入配置 $CONF ..."
 
 # ---- 3.1 升级场景: 备份旧 conf + 迁移旧值 ----
 # 如果旧 conf 存在, 先备份一份用于回滚 (F50 安装器和其他升级路径也这么做)
+# 只保留一份备份 ${CONF}.bak, 历史带时间戳的备份顺手清掉, 避免占满 /etc
 CONF_BAK=""
 if [ -f "$CONF" ]; then
-    CONF_BAK="${CONF}.bak.$(date +%Y%m%d-%H%M%S)"
+    CONF_BAK="${CONF}.bak"
     cp "$CONF" "$CONF_BAK"
+    for _old_bak in "${CONF}".bak.* "${CONF}".bak-????????-??????; do
+        [ -f "$_old_bak" ] && rm -f "$_old_bak"
+    done
     say "旧配置已备份 -> $CONF_BAK  (可直接 cp 回去回滚)"
     # 解析旧 conf 的 TSF_* 值到当前 shell
     set -a
