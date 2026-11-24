@@ -38,7 +38,8 @@ def arguments(argv=None):
     mode.add_argument('--check', action='store_true', help='只检查（默认）')
     mode.add_argument('--apply', action='store_true', help='安装到全新设备')
     parser.add_argument('--start', action='store_true', help='安装成功后启动；仅与 --apply 一起使用')
-    parser.add_argument('--data-mount', default='/mnt/mmc')
+    parser.add_argument('--data-mount', default='/mnt/mmc',
+                        help='视频存储（镜像+归档）所在盘的挂载点，建议 TF 卡；F50 默认 /dev/mmcblk1p1 挂载到 /mnt/mmc')
     parser.add_argument('--size-gb', type=int, default=64)
     parser.add_argument('--archive-gb', type=int, default=34)
     parser.add_argument('--drive-gb', type=int, default=12)
@@ -133,8 +134,9 @@ class Installer:
             raise InstallError('--start 需要同时指定 --apply')
 
     def required_bytes(self):
-        # Cache budget plus free-space target are reserved even for sparse images.
-        return storage_allocation.required_bytes(dict(archive_gib=self.args.archive_gb, free_target_gib=10), self.args.size_gb)
+        # 转码缓存放在归档区内(数据卡), 需按缓存预算预留; 程序缓存(缩略图等)在安装目录不占卡。
+        return storage_allocation.required_bytes(dict(archive_gib=self.args.archive_gb, free_target_gib=10),
+                                                 self.args.size_gb)
 
     def payload(self):
         result = {APP + '/' + name: self.source / name
@@ -163,7 +165,7 @@ class Installer:
                 matches = matches and self.path(CONF).is_file()
                 matches = matches and (self.path(APP) / 'auth.conf').is_file()
                 matches = matches and (self.path(APP) / 'settings.json').is_file()
-                image = self.path(self.data_home) / 'teslacam.img'
+                image = self.path(self.data_home) / 'img' / 'teslacam.img'
                 matches = matches and image.stat().st_size == self.args.size_gb * GIB
             except (OSError, ValueError, KeyError):
                 matches = False
@@ -183,12 +185,44 @@ class Installer:
             options['runtime'] = hashlib.sha256((self.runtime / 'manifest.json').read_bytes()).hexdigest()
         return options
 
-    def configuration(self):
+    @staticmethod
+    def _parse_old_conf(text):
+        """把 /etc/tesla-sentry.conf 的文本解析成 dict (TSF_* → value), 跳过注释和空行。"""
+        out = {}
+        for raw in (text or '').splitlines():
+            line = raw.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' not in line:
+                continue
+            k, _, v = line.partition('=')
+            k, v = k.strip(), v.strip()
+            if k.startswith('TSF_'):
+                out[k] = v
+        return out
+
+    def configuration(self, old_conf_text=None):
+        """生成 conf 字符串。
+
+        old_conf_text: 如果传入旧 conf 内容, 用于升级时继承用户修改过的键值。
+        迁移规则:
+          - TSF_TRANSCODE_DIR 旧形态 /.transcode → /transcode_cache
+          - 缺 TSF_VIDEO_ROOT 但有 TSF_ARCHIVE → 反推 VIDEO_ROOT
+          - 视频路径四键 (VIDEO_ROOT/IMG/ARCHIVE/TRANSCODE) 优先取新派生值,
+            其他参数 (PORT/IDLE/GADGET/FFMPEG 等) 旧 conf 有就继承
+        """
+        # F50 推荐 apk add ffmpeg；未显式指定时把配置固定到 /usr/bin，避免再去找旧 arm64 包。
+        ffmpeg = self.args.ffmpeg or ('/usr/bin/ffmpeg' if self.path('/usr/bin/ffmpeg').is_file()
+                                      else self.device['ffmpeg'])
+        ffprobe = self.args.ffprobe or ('/usr/bin/ffprobe' if self.path('/usr/bin/ffprobe').is_file()
+                                        else self.device['ffprobe'])
         settings = dict(TSF_DIR=APP, TSF_CARD_UUID=self.device['uuid'],
                         TSF_CARD_MNT=self.args.data_mount,
-                        TSF_IMG=self.data_home + '/teslacam.img',
+                        TSF_VIDEO_ROOT=self.data_home,
+                        TSF_IMG=self.data_home + '/img/teslacam.img',
                         TSF_ARCHIVE=self.data_home + '/archive',
-                        TSF_CACHE=self.data_home + '/cache',
+                        TSF_CACHE=APP + '/cache',
+                        TSF_TRANSCODE_DIR=self.data_home + '/archive/transcode_cache',
                         TSF_LOG_DIR=self.data_home + '/logs',
                         TSF_LIVE_LOG=self.data_home + '/logs/tesla-live.log',
                         TSF_LIVE_STATE=self.data_home + '/live-state.json',
@@ -196,13 +230,36 @@ class Installer:
                         TSF_PORT=self.args.port, TSF_IDLE=600, TSF_USB_TIMEOUT=300,
                         TSF_LOSETUP=self.device['losetup'], TSF_GADGET=self.device['gadget'],
                         TSF_GADGET_CONFIG=self.device['gadget_config'], TSF_UDC=self.device['udc'],
-                        TSF_FFMPEG=self.device['ffmpeg'], TSF_FFPROBE=self.device['ffprobe'],
+                        TSF_FFMPEG=ffmpeg, TSF_FFPROBE=ffprobe,
                         TSF_USB_LOCK='/tmp/tsf-usb.lock', TSF_RECENT_ROLL_MIN=60,
-                        TSF_RECENT_KEEP_MIN=60, TSF_BOX_KEEP_DAYS=14, TSF_BOX_MAX_GB=12,
+                        TSF_RECENT_KEEP_MIN=60, TSF_RECENT_MAX_GB=12,
+                        TSF_BOX_KEEP_DAYS=14, TSF_BOX_MAX_GB=12,
                         TSF_DRIVE_MAX_GB=self.args.drive_gb, TSF_ARCHIVE_TOTAL_GB=self.args.archive_gb,
                         TSF_DISK_GUARD_INTERVAL=60, TSF_FREE_MIN_MB=4096, TSF_FREE_TARGET_MB=10240,
                         TSF_LIVE_INTERVAL=15, TSF_SYNC_FAIL_RETRY_SEC=300,
                         TSF_SYNC_FAIL_RETRY_MAX_SEC=1800)
+
+        # ---- 升级迁移: 合并旧 conf ----
+        if old_conf_text:
+            old = self._parse_old_conf(old_conf_text)
+            # 1) 旧版 .transcode → transcode_cache
+            old_tc = old.get('TSF_TRANSCODE_DIR', '')
+            if old_tc.endswith('/.transcode'):
+                old['TSF_TRANSCODE_DIR'] = old_tc[:-len('/.transcode')] + '/transcode_cache'
+                print('迁移 TSF_TRANSCODE_DIR: %s -> %s' % (old_tc, old['TSF_TRANSCODE_DIR']))
+            # 2) 缺 VIDEO_ROOT 但有 ARCHIVE → 反推
+            if not old.get('TSF_VIDEO_ROOT') and old.get('TSF_ARCHIVE'):
+                old['TSF_VIDEO_ROOT'] = str(Path(old['TSF_ARCHIVE']).parent)
+                print('从旧 TSF_ARCHIVE 推导 TSF_VIDEO_ROOT = %s' % old['TSF_VIDEO_ROOT'])
+            # 3) 其他键继承 (用户改过的 PORT / IDLE / GADGET / FFMPEG 等不被覆盖)
+            #    排除视频路径四键 —— 让 install 自己的派生逻辑保持确定性
+            path_keys = {'TSF_VIDEO_ROOT', 'TSF_IMG', 'TSF_ARCHIVE', 'TSF_TRANSCODE_DIR'}
+            for k, v in old.items():
+                if k in path_keys:
+                    continue
+                if k in settings:
+                    settings[k] = v
+
         if self.runtime:
             runtime = APP + '/runtime'
             settings.update(TSF_PYTHON=runtime + '/bin/python3', TSF_FONTS=runtime + '/fonts')
@@ -228,8 +285,16 @@ class Installer:
                 end + '\n')
 
     def resolve_binary(self, name):
-        """按 --ffmpeg/--ffprobe -> PATH -> /opt/mu300/ffmpeg 的顺序找可执行文件。"""
-        binary = getattr(self.args, name) or self.tool(name)
+        """按 --ffmpeg/--ffprobe -> /usr/bin (apk 安装) -> PATH -> /opt/mu300 的顺序找可执行文件。
+        F50 是 aarch64/OpenWrt，推荐用 `apk add ffmpeg`；/usr/bin 的包与系统 ABI 一致，
+        不要优先使用来源不明的 arm64 静态包。"""
+        binary = getattr(self.args, name)
+        if not binary:
+            standard = '/usr/bin/' + name
+            if self.path(standard).is_file() and os.access(self.path(standard), os.X_OK):
+                binary = standard
+        if not binary:
+            binary = self.tool(name)
         if not binary and self.path('/opt/mu300/ffmpeg/' + name).is_file():
             binary = '/opt/mu300/ffmpeg/' + name
         if not binary or not re.fullmatch(r'/[A-Za-z0-9_./-]+', binary):
@@ -246,8 +311,8 @@ class Installer:
             managers.append((['opkg', 'install', 'ffmpeg'], ['opkg', 'update']))
         if not managers:
             raise InstallError('缺少 ffmpeg/ffprobe，且系统没有 apk/opkg；'
-                               '请把 ARM64 版放到 /opt/mu300/ffmpeg/{ffmpeg,ffprobe}，'
-                               '或用 --ffmpeg/--ffprobe 指定绝对路径')
+                               '请先执行 `apk add ffmpeg`，'
+                               '或用 --ffmpeg/--ffprobe 指定绝对路径 (F50 推荐 /usr/bin/ffmpeg)')
         for command, prepare in managers:
             if prepare:
                 try:
@@ -263,8 +328,8 @@ class Installer:
             if self.resolve_binary('ffmpeg') and self.resolve_binary('ffprobe'):
                 return
             tried.append('%s 安装后仍找不到 ffmpeg/ffprobe' % command[0])
-        raise InstallError('自动安装 FFmpeg 失败：%s；请手动放置 ARM64 版到 /opt/mu300/ffmpeg/'
-                           '或用 --ffmpeg/--ffprobe 指定' % '；'.join(tried))
+        raise InstallError('自动安装 FFmpeg 失败：%s；请手动执行 `apk add ffmpeg`，'
+                           '或用 --ffmpeg /usr/bin/ffmpeg 指定' % '；'.join(tried))
 
     def provision_ffmpeg(self):
         """--install-deps: 先补齐依赖, 再按 libx264/滤镜/实际编码一帧做完整校验。
@@ -275,16 +340,15 @@ class Installer:
         for name in ('ffmpeg', 'ffprobe'):
             binary = self.resolve_binary(name)
             if not binary:
-                raise InstallError('缺少 %s：请放到 /opt/mu300/ffmpeg/%s，或用 --%s 指定绝对路径'
+                raise InstallError('缺少 %s：请执行 `apk add ffmpeg`，或用 --%s /usr/bin/%s 指定'
                                    % (name, name, name))
             run([binary, '-version'], timeout=30)
             resolved[name] = binary
         filters = run([resolved['ffmpeg'], '-hide_banner', '-filters'], timeout=60)
         for required in ('scale', 'pad', 'fps', 'xstack', 'setsar', 'subtitles'):
             if not re.search(r'\s' + required + r'\s', filters):
-                raise InstallError('FFmpeg 缺少滤镜：%s。系统自带的精简 ffmpeg 往往没有 libx264 和 '
-                                   'subtitles，请换用完整构建（放进 /opt/mu300/ffmpeg 或 --ffmpeg 指定）'
-                                   % required)
+                raise InstallError('FFmpeg 缺少滤镜：%s。请用 `apk add ffmpeg` 安装完整构建，'
+                                   '或用 --ffmpeg /usr/bin/ffmpeg 指定' % required)
         run([resolved['ffmpeg'], '-v', 'error', '-f', 'lavfi', '-i',
              'color=size=64x64:rate=1', '-frames:v', '1', '-c:v', 'libx264',
              '-f', 'null', '-'], timeout=120)
@@ -317,8 +381,8 @@ class Installer:
 
     def preflight(self):
         self.validate_options()
-        if platform.system() != 'Linux' or platform.machine() not in ('aarch64', 'arm64'):
-            raise InstallError('安装目标须为 ARM64 Linux F50；本机测试请运行 tests/test_install_f50.py')
+        if platform.system() != 'Linux' or platform.machine() != 'aarch64':
+            raise InstallError('安装目标须为 aarch64 (ARM64) Linux F50；本机测试请运行 tests/test_install_f50.py')
         if os.geteuid() != 0:
             raise InstallError('请用 root 执行')
         if not self.path('/etc/rc.common').is_file() or not self.path('/etc/init.d/cron').is_file():
@@ -357,7 +421,8 @@ class Installer:
         mounts = [line.split() for line in self.path('/proc/mounts').read_text().splitlines()]
         mounted = next((row for row in mounts if row[1] == self.args.data_mount), None)
         if not mounted or mounted[2] != 'ext4' or 'rw' not in mounted[3].split(','):
-            raise InstallError('数据盘须预先以 ext4 读写挂载到 ' + self.args.data_mount)
+            raise InstallError('数据盘须预先以 ext4 读写挂载到 ' + self.args.data_mount
+                               + '（F50 默认 TF 卡 /dev/mmcblk1p1，建议视频存储装到 TF 卡）')
         if self.path(self.args.data_mount).is_symlink():
             raise InstallError('数据盘挂载路径不能是符号链接')
         uuid = run([self.tool('blkid'), '-o', 'value', '-s', 'UUID', mounted[0]]).strip()
@@ -409,8 +474,8 @@ class Installer:
         for name in ('ffmpeg', 'ffprobe'):
             binary = (resolved or {}).get(name) or self.resolve_binary(name)
             if not binary:
-                raise InstallError('缺少 %s；可用 --%s 指定绝对路径，或加 --install-deps 让安装器尝试安装'
-                                   % (name, name))
+                raise InstallError('缺少 %s；请执行 `apk add ffmpeg`，或用 --%s /usr/bin/%s 指定，'
+                                   '或加 --install-deps 让安装器尝试安装' % (name, name, name))
             run([binary, '-version'])
             self.device[name] = binary
         filters = run([self.device['ffmpeg'], '-hide_banner', '-filters'])
@@ -472,17 +537,20 @@ class Installer:
             write(app_stage / 'auth.conf', 'user=admin\npass=%s\nsecret=%s\nttl=2592000\n' %
                   (password, secrets.token_hex(32)), 0o600)
             write(app_stage / 'settings.json', '{"auto_update": false}\n', 0o600)
-            for name in ('archive', 'cache', 'logs'):
+            for name in ('archive', 'logs'):
                 (data_stage / name).mkdir()
+            (data_stage / 'img').mkdir()
+            (data_stage / 'archive' / 'transcode_cache').mkdir()
+            (app_stage / 'cache').mkdir()
             run([self.python(), '-B', str(self.source / 'scripts/mkexfat.py'),
-                 str(data_stage / 'teslacam.img'), str(self.args.size_gb)])
-            image = data_stage / 'teslacam.img'
+                 str(data_stage / 'img' / 'teslacam.img'), str(self.args.size_gb)])
+            image = data_stage / 'img' / 'teslacam.img'
             with image.open('rb') as stream:
                 header = stream.read(11)
             if header[3:11] != b'EXFAT   ' or image.stat().st_size != self.args.size_gb * GIB:
                 raise InstallError('新镜像校验失败')
             env = os.environ.copy()
-            env.update(TSF_ARCHIVE=str(data_stage / 'archive'), TSF_CACHE=str(data_stage / 'cache'),
+            env.update(TSF_ARCHIVE=str(data_stage / 'archive'), TSF_CACHE=str(app_stage / 'cache'),
                        TSF_AUTH_FILE=str(app_stage / 'auth.conf'),
                        TSF_SETTINGS=str(app_stage / 'settings.json'))
             run([self.python(), '-B', str(app_stage / 'sentry-viewer.py'), '--ota-check'], env=env)
@@ -498,7 +566,14 @@ class Installer:
                     target = self.path(dest)
                     write(target, src.read_text(encoding='utf-8'), 0o755, created)
             target = self.path(CONF)
-            write(target, self.configuration(), created=created)
+            # 升级场景: 旧 conf 存在时先备份一份用于回滚, 再读旧值合并到新配置
+            old_conf_text = None
+            if target.exists():
+                backup = target.with_name(target.name + '.bak-' + time.strftime('%Y%m%d-%H%M%S'))
+                shutil.copy2(target, backup)
+                print('旧配置已备份 -> %s  (回滚: cp %s %s)' % (backup, backup, target))
+                old_conf_text = target.read_text(encoding='utf-8')
+            write(target, self.configuration(old_conf_text=old_conf_text), created=created)
             # Only the mount gate starts at boot. It starts the dependent services in order.
             for name in ('S08tsf-mount', 'K99tsf-mount'):
                 target = self.path('/etc/rc.d/' + name)
@@ -540,7 +615,7 @@ class Installer:
         run(['/etc/init.d/tsf-mount', 'start'], timeout=90)
         run(['/etc/init.d/tesla-live', 'running'])
         run(['/etc/init.d/tesla-viewer', 'running'])
-        expected = self.data_home + '/teslacam.img'
+        expected = self.data_home + '/img/teslacam.img'
         lun = self.path(self.device['gadget']) / 'functions/mass_storage.0/lun.0/file'
         if lun.read_text().strip() != expected:
             raise InstallError('启动后 USB 镜像绑定校验失败；安装文件已保留')

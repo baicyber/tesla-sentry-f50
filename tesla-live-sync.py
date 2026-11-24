@@ -74,12 +74,23 @@ USB_LOCK = os.environ.get("TSF_USB_LOCK", "/tmp/tsf-usb.lock")
 # 形成 删除→重抄 的死循环, 既拖慢新片段落地又白写 eMMC
 ROLL_MIN = int(os.environ.get("TSF_RECENT_ROLL_MIN", "60"))
 FREE_MIN_MB = int(os.environ.get("TSF_FREE_MIN_MB", "4096"))
+SETTINGS_FILE = os.environ.get("TSF_SETTINGS") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "settings.json")
 
 
 def refresh_storage_settings():
-    global FREE_MIN_MB
+    global FREE_MIN_MB, ROLL_MIN
     try:
         FREE_MIN_MB = int(storage_allocation.load()['free_min_gib'] * 1024)
+    except (OSError, ValueError, TypeError):
+        pass
+    # 网页里设置的「最近1小时监控」窗口优先于静态 conf, 与 sentry-viewer.py 保持一致
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as stream:
+            saved = json.load(stream)
+        value = int(saved.get("recent_roll_min"))
+        if 0 <= value <= 1440:
+            ROLL_MIN = value
     except (OSError, ValueError, TypeError):
         pass
 
@@ -322,6 +333,15 @@ class ExFat:
             if e.name.lower() == low:
                 return e
         return None
+
+    def signature_ok(self):
+        """车机格式化/重建镜像期间引导扇区会被清空或改写，用它判断是否需要重开。
+        只读 11 字节，每个轮询周期做一次也不影响性能。"""
+        try:
+            vbr = os.pread(self.fd, 11, 0)
+        except OSError:
+            return False
+        return len(vbr) >= 11 and vbr[3:11] == b"EXFAT   "
 
     def close(self):
         try:
@@ -733,27 +753,39 @@ def main():
     if not os.path.exists(IMG):
         log("镜像不存在: %s" % IMG)
         return 1
-    try:
-        exfat = ExFat(IMG)
-    except Exception as e:
-        log("解析镜像失败: %s" % e)
-        return 1
+
+    def open_exfat(verbose=True):
+        """车机格式化时引导扇区会短暂无效；不要一次失败就退出服务。"""
+        try:
+            return ExFat(IMG)
+        except Exception as e:
+            if verbose:
+                log("解析镜像失败: %s（若车机正在格式化，稍后会自动重试）" % e)
+            return None
+
+    exfat = open_exfat()
 
     if args.dump:
+        if exfat is None:
+            return 1
         dump(exfat)
         exfat.close()
         return 0
 
-    log("在线同步启动: 行车 %d 秒（窗口内 1 秒），事件 %d 秒" % (RECENT_INTERVAL, args.interval))
-    state = load_state()
     if args.once:
+        if exfat is None:
+            return 1
+        state = load_state()
         n, b = do_sync(exfat, state)
         log("单轮完成: %d 个新片段, %.1f MB" % (n, b / 1048576))
         exfat.close()
         return 0
 
+    log("在线同步启动: 行车 %d 秒（窗口内 1 秒），事件 %d 秒" % (RECENT_INTERVAL, args.interval))
+    state = load_state()
     lock_miss = 0
     free_log_at = 0
+    open_log_at = 0.0
     intervals = {"RecentClips": RECENT_INTERVAL, "SentryClips": args.interval, "SavedClips": args.interval}
     next_scan = dict.fromkeys(intervals, 0)
     recent = RecentSchedule()
@@ -788,17 +820,33 @@ def main():
             # 网页正在管理U盘(已挂载)时跳过, 避免与挂载视图不一致
             if os.path.ismount(MNT):
                 continue
-            # 镜像被重建/替换时 fd 会指向旧 inode, 需要重开
+            # 镜像被重建/替换时 fd 会指向旧 inode; 车机格式化会改写引导扇区。
+            # 两种情况都把旧句柄关掉重开，且失败不退出常驻循环。
             try:
                 st = os.stat(IMG)
-                if st.st_ino != exfat.fd_ino:
-                    log("镜像 inode 变化, 重新打开")
+                if exfat is not None and (st.st_ino != exfat.fd_ino
+                                          or st.st_size != exfat.vol_len * exfat.bytes_per_sector):
+                    log("镜像大小或 inode 变化, 重新打开")
                     exfat.close()
-                    exfat = ExFat(IMG)
+                    exfat = None
+                    recent = RecentSchedule()
+                if exfat is not None and not exfat.signature_ok():
+                    log("镜像引导扇区无效 (可能车机正在格式化), 稍后重试")
+                    exfat.close()
+                    exfat = None
                     recent = RecentSchedule()
             except OSError as ex:
                 log("镜像不可读: %s" % ex)
                 continue
+            if exfat is None:
+                exfat = open_exfat(verbose=False)
+                if exfat is None:
+                    now_s = time.time()
+                    if now_s - open_log_at >= 60:
+                        open_log_at = now_s
+                        log("镜像暂不可解析，等待车机格式化完成")
+                    continue
+                log("镜像已恢复，继续在线同步")
             do_sync(exfat, state, cats=cats, recent=recent)
             if "RecentClips" in cats:
                 next_scan["RecentClips"] = recent.next_check(now)

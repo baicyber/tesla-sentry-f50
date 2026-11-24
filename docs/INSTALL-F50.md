@@ -32,7 +32,7 @@ sh install-f50.sh --apply --start
 - OpenWrt 的 `/etc/rc.common`、procd、cron，以及 `blkid`、`flock`、`mount`、`umount`、`readlink`、`setsid`、`losetup`。
 - 内核具备 ext4、exFAT、configfs、loop、USB mass storage；已加载对应模块或编译为内建支持。
 - 固件已经建立一个 USB Gadget 和一个 configuration；存在 USB Device 控制器。脚本保留固件的网卡、串口等功能，只增加 mass storage。多控制器设备须先由固件绑定正确控制器，安装器会记录该控制器。
-- FFmpeg 和 FFprobe 使用适配 ARM64 Linux 的可执行文件；FFmpeg 必须支持 `libx264`、`scale`、`pad`、`fps`、`xstack`、`setsar`、`subtitles`。安装检查会实际编码一帧。
+- F50 是 aarch64 / OpenWrt，FFmpeg 和 FFprobe 推荐用 `apk add ffmpeg` 安装到 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`（不要用来源不明的 arm64 静态包）。FFmpeg 必须支持 `libx264`、`scale`、`pad`、`fps`、`xstack`、`setsar`、`subtitles`。安装检查会实际编码一帧。
 
 先确认固件使用的包管理器与软件源：
 
@@ -43,7 +43,7 @@ command -v apk || command -v opkg
 python3 --version
 ```
 
-依赖包应从该固件匹配的软件源安装；不同固件的包名和内核版本可能不同，不混装其他版本的内核模块。系统自带的精简 FFmpeg 若没有 `libx264`，需换用具备上述能力的构建，或将经过来源与哈希校验的 ARM64 FFmpeg、FFprobe 放入单独目录，再用安装参数指定。
+依赖包应从该固件匹配的软件源安装；不同固件的包名和内核版本可能不同，不混装其他版本的内核模块。F50 直接用 `apk add ffmpeg`，并把配置里的 `TSF_FFMPEG`/`TSF_FFPROBE` 指向 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`；安装命令可用 `--ffmpeg /usr/bin/ffmpeg` 指定。
 
 ```sh
 /path/to/ffmpeg -hide_banner -encoders
@@ -115,7 +115,7 @@ sh install-f50.sh --apply --start --size-gb 16 --archive-gb 12 --drive-gb 4 \
 
 缩略图、清晰度转码、导出合成都依赖 `ffmpeg`/`ffprobe`，安装检查会实际编码一帧、核对 `libx264` 与 `scale/pad/fps/xstack/setsar/subtitles` 滤镜，缺任何一项都会在安装阶段直接失败，不会等到网页里点开视频才发现。
 
-设备上已经有安装、但依赖后来丢了（固件升级常把 `/opt/mu300` 冲掉），用同一条命令补：
+设备上已经有安装、但依赖后来丢了（固件升级常把旧版 `/opt/mu300` 依赖冲掉），先 `apk add ffmpeg`，再用同一条命令补：
 
 ```sh
 sh install-f50.sh --apply --install-deps
@@ -135,7 +135,7 @@ sh install-f50.sh --apply --install-deps
 | `/etc/tesla-sentry.conf` | 本设备 UUID、控制器、路径、配额和端口 |
 | `/mnt/mmc/tesla-sentry/teslacam.img` | 含 TeslaCam 目录的 exFAT 镜像 |
 | `/mnt/mmc/tesla-sentry/archive/` | 哨兵、手动保存、最近一小时和行车记录 |
-| `/mnt/mmc/tesla-sentry/cache/` | 缩略图、转码及遥测缓存 |
+| `/opt/tesla-sentry/cache/` | 缩略图、转码及遥测缓存（按用途分子目录） |
 | `/mnt/mmc/tesla-sentry/logs/` | 项目脚本日志 |
 | `/etc/init.d/` | 四个项目服务，仅 `tsf-mount` 注册开关机启动链接 |
 | `/etc/crontabs/root` | 追加项目区块，保留原有任务 |

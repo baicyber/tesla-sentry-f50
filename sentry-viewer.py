@@ -37,87 +37,106 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # 内嵌副本: 仅当同目录找不到同名 .py 时启用 (旧版 OTA 只下发主程序的兼容路径)
 _EMBED_MODULES = {
     "storage_allocation": (
-        "H4sIAAAAAAAC/61YbW8bxxH+zl+xUT7cXUSfRcUJUsUsIEuUIsCWC4kJGqjC4chbilcd79jbo2QlDeDGlWMHkiWkUe3ATls1"
-        "aaA2iJIGhqHKVv1neKT0yX+hM7t7b3yRA6QEJN7ezj47L8/OzHJkZGSxbvrUIizwfHOFkkrLWqEBI6ZrEavlmxWHEkaDwHZX"
-        "2NuE2R9QmPMpsd2ArlCfzNpX9JGRkZzdaHp+QOomqzt2JRr+lnlu9Nwwg3r07LFczfcapAnvQJzI179KiQS00azZDs3lZueu"
-        "kCIpkMuXyetjuanJqXdKhnh3KTczV7o6vQiPqmL61bq9Ro0Vu6LkiWL5qUHNp9Ro2G5mHJg+mMpfablXyRigtI+2Tw//2z76"
-        "9OyL3QkSnnzW2f/q4un+1unJN6eHP4Qne+HOv8Kd+92v/tB9+KD7z+Oz+z+2n3/Z+fTr7vHz7vE3nS//mkeM8PZ2Z+tu5+bT"
-        "s092Okeb3d3buXfnr85dmyuXps/XVcvlchatxS430EOqNpEj8PFp0PJd7iXVYzp112zfc3UwQlXKizPGYvn6wuRsyVgslctz"
-        "87OLikY8n69Mf/hyw0DfGoam+5R5zhpVNX3dDuqGazaoqkg26Bg/RYuUgj+z5QSsRx/LrgZqyqIicGOgfpMLU+/MvVcyytfL"
-        "k1eN2Sto+utjgJ/vUzL2yFCw6QWEujb5awlUGB8IlI78UKyZhRJAzc0b1zjUpbFfvAlg5CIpjI1fGoKZsOd82PLkwmypLJER"
-        "byyBjhy7Zjq2ZQbUgIcWZar4ypMWq+AG0t02p4Wc1MgrRT4UJ0CK8KiYNqPkPZQq+b7nq0r43YPw44Nw5+PO3g/IzsOtzt5j"
-        "oBq3xfMJR4QTTdTXBLgu9dB6VZBq2Mx2WWC6VSq0yZOK5znINuJ6wYBpFVyUJzXHMwMtBTVE3cP/wLk523/aPjoGRUFpzDJS"
-        "36EaCHCet1AHzDa6zWq2awdS5v+zsSsjwAPAn34WLPofzxy6X4QygXO8dcgWY7htJJKkEerANoW0amg2Lrks9WJLuGoZx8jo"
-        "l6rJs1376F42330f7n8LOpzuH3S/Pu7c/xtkxvDOkxfPHoabT9pP/5w2jhRenPwFt0rZB3pJCpFfksL4W+fx9F0CWTUGDB8d"
-        "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"
+        "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"
+        "AAA="
     ),
     "storage_resize": (
-        "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"
+        "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"
     ),
 }
 # <<< embedded local modules <<<
@@ -178,12 +197,97 @@ def _load_conf(path="/etc/tesla-sentry.conf"):
 
 _load_conf()
 
+CONF_FILE = os.environ.get("TSF_CONF", "/etc/tesla-sentry.conf")
+
+# --- 2.8.48 起统一视频存储根目录 (VIDEO_ROOT) ---
+# 目录结构:
+#   <VIDEO_ROOT>/
+#     img/               车机 U 盘镜像 (teslacam.img) 所在子目录
+#     archive/           归档区主目录
+#       transcode_cache/ 转码缓存子目录 (与归档视频一一对应)
+#
+# 启动时根据 env 自动派生:
+#   - 优先用 TSF_VIDEO_ROOT (新单键);
+#   - 否则从旧键 TSF_IMG / TSF_ARCHIVE 反推;
+#   - 没有任何配置时回退 /mnt/mmc (F50 TF 卡) 或 /archive (通用).
+VIDEO_ROOT = os.environ.get("TSF_VIDEO_ROOT", "").strip()
+if not VIDEO_ROOT:
+    _img_env = os.environ.get("TSF_IMG", "").strip()
+    _arch_env = os.environ.get("TSF_ARCHIVE", "").strip()
+    if _img_env and _arch_env:
+        # 新旧并存: 以 archive 父目录为根, 允许与 img 不同但推导一致就继续
+        VIDEO_ROOT = os.path.normpath(os.path.join(_arch_env, os.pardir))
+    elif _img_env:
+        VIDEO_ROOT = os.path.normpath(os.path.join(os.path.dirname(_img_env), os.pardir))
+    elif _arch_env:
+        VIDEO_ROOT = os.path.normpath(os.path.join(_arch_env, os.pardir))
+# F50 默认 TF 卡挂载点, 其次通用 /archive
+if not VIDEO_ROOT:
+    VIDEO_ROOT = "/mnt/mmc" if os.path.isdir("/mnt/mmc") else "/archive"
+os.environ.setdefault("TSF_VIDEO_ROOT", VIDEO_ROOT)
+os.environ.setdefault("TSF_IMG", os.path.join(VIDEO_ROOT, "img", "teslacam.img"))
+os.environ.setdefault("TSF_ARCHIVE", os.path.join(VIDEO_ROOT, "archive"))
+os.environ.setdefault("TSF_TRANSCODE_DIR", os.path.join(VIDEO_ROOT, "archive", "transcode_cache"))
+
+
+def sync_conf(mapping):
+    """把网页里改过的配额/时间限制写回 /etc/tesla-sentry.conf。
+
+    OpenWrt 开机时 init.d 脚本会 source 这个文件 (procd 不会继承网页进程的环境),
+    所以 conf 仍然必须保留; 网页保存后同步写回, 避免「网页改了、重启又变回去」。
+    文件不存在或无写权限时静默跳过 (例如开发机上跑测试)。
+    """
+    values = {str(k): str(v) for k, v in (mapping or {}).items()
+              if str(k).startswith("TSF_") and v is not None}
+    if not values:
+        return False
+    try:
+        with open(CONF_FILE, encoding="utf-8", errors="ignore") as stream:
+            lines = stream.read().splitlines()
+    except OSError:
+        return False
+    seen = set()
+    output = []
+    for line in lines:
+        text = line.strip()
+        if text and not text.startswith("#") and "=" in text:
+            key = text.split("=", 1)[0].strip()
+            if key in values:
+                output.append("%s=%s" % (key, values[key]))
+                seen.add(key)
+                continue
+        output.append(line)
+    for key, value in values.items():
+        if key not in seen:
+            output.append("%s=%s" % (key, value))
+    temporary = None
+    try:
+        directory = os.path.dirname(CONF_FILE) or "."
+        mode = stat.S_IMODE(os.stat(CONF_FILE).st_mode)
+        fd, temporary = tempfile.mkstemp(prefix=".tesla-sentry-", dir=directory)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write("\n".join(output) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, CONF_FILE)
+        return True
+    except OSError:
+        if temporary and os.path.exists(temporary):
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+        return False
+
 # 路径/端口优先取环境变量 (缺失时已由 _load_conf 从 conf 补齐), 便于装到非 F50 设备上时改归档区、端口等
 ARCHIVE = os.environ.get("TSF_ARCHIVE", "/archive")
 SKIN_DIR = os.path.join(ARCHIVE, ".skins")
 AUDIO_Q = os.path.join(ARCHIVE, "boombox-queue")
 AUDIO_DONE = os.path.join(ARCHIVE, "boombox-done")
 FILES_DIR = os.path.join(ARCHIVE, "files")
+# 转码缓存放在归档区 transcode_cache 子目录 (随数据卡), 与归档视频一一对应; 归档视频被删时自动清理对应缓存
+TRANSCODE_DIR = os.environ.get("TSF_TRANSCODE_DIR") or os.path.join(ARCHIVE, "transcode_cache")
 PORT = int(os.environ.get("TSF_PORT", "8080"))
 CATS = ["SentryClips", "SavedClips", "RecentClips", "DriveClips"]
 # ===== 多语言表 (由 tools/i18n_*.json 生成, key 为中文原文) =====
@@ -230,7 +334,7 @@ def lang_from_accept(hdr, default="zh"):
     return default
 
 CAT_NAMES = {"SentryClips": "哨兵告警", "SavedClips": "手动保存",
-             "RecentClips": "最近1小时", "DriveClips": "行车记录"}
+             "RecentClips": "最近1小时监控", "DriveClips": "行车记录"}
 for language, recent_label in (
     ("de", "Letzte Stunde"),
     ("en", "Last hour"),
@@ -242,7 +346,8 @@ for language, recent_label in (
     ("nl", "Afgelopen uur"),
     ("ru", "Последний час"),
 ):
-    LANG_TABLE[language].update({"最近1小时": recent_label})
+    LANG_TABLE[language].update({"最近1小时": recent_label, "1小时监控": recent_label,
+                                  "最近1小时监控": recent_label})
 # 注入页面用的 JSON (预生成, 避免每次请求都序列化)
 I18N_JS = json.dumps(LANG_TABLE, ensure_ascii=False, separators=(",", ":"))
 LANG_JS = json.dumps([[c, n] for c, n in LANG_NAMES], ensure_ascii=False, separators=(",", ":"))
@@ -254,7 +359,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.45"
+APP_VERSION = "2.8.48"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -1114,8 +1219,33 @@ BRAND_LOGO_B64 = (
 )
 
 
+PLAYBACK_QUALITIES = ("orig", "720p", "480p", "360p")
+
+# 时间/保留策略: 默认值来自 /etc/tesla-sentry.conf 或环境变量, 网页保存后以 settings.json 为准
+RETENTION_FIELDS = {
+    "recent_roll_min": (0, 1440),   # 「最近1小时监控」滚动窗口(分钟), 0=不按时间滚动
+    "recent_keep_min": (0, 1440),   # 空间兜底清理时最近必留(分钟)
+    "recent_max_gb": (0, 4096),     # 「最近1小时监控」体积上限(GiB), 0=不限; 归档不限量时仍独立生效
+    "box_keep_days": (0, 3650),     # 哨兵/手动保存按天数保留, 0=不按天数清理
+    "box_max_gb": (0, 4096),        # 哨兵/手动保存单个分类体积上限(GiB), 0=不限
+}
+
+
+def _retention_default(name, default):
+    try:
+        return max(0, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
 def load_settings():
-    d = {"auto_update": True, "ui_style": "default", "brand_name": "", "brand_logo": ""}
+    d = {"auto_update": True, "ui_style": "default", "brand_name": "", "brand_logo": "",
+         "remote_quality": "480p",
+         "recent_roll_min": _retention_default("TSF_RECENT_ROLL_MIN", 60),
+         "recent_keep_min": _retention_default("TSF_RECENT_KEEP_MIN", 60),
+         "recent_max_gb": _retention_default("TSF_RECENT_MAX_GB", 12),
+         "box_keep_days": _retention_default("TSF_BOX_KEEP_DAYS", 14),
+         "box_max_gb": _retention_default("TSF_BOX_MAX_GB", 12)}
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
             j = json.load(f)
@@ -1134,6 +1264,20 @@ def load_settings():
             lg = str(j.get("brand_logo") or "")
             if lg and "/" not in lg and "\\" not in lg and lg.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
                 d["brand_logo"] = lg
+            # 外网访问默认画质; 内网始终原画, 不受此项影响。
+            wq = str(j.get("remote_quality") or "")
+            if wq in PLAYBACK_QUALITIES:
+                d["remote_quality"] = wq
+            # 保留时间/容量策略: 只接受范围内的整数, 非法值忽略并用默认
+            for name, (low, high) in RETENTION_FIELDS.items():
+                if name not in j or isinstance(j[name], bool):
+                    continue
+                try:
+                    value = int(j[name])
+                except (TypeError, ValueError):
+                    continue
+                if low <= value <= high:
+                    d[name] = value
     except (OSError, ValueError):
         pass
     return d
@@ -1465,6 +1609,12 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .pscroll { flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:2px 14px 14px; display:flex; flex-direction:column; gap:12px; }
 .pscroll > * { flex:0 0 auto; }
 .vwrap { position:relative; border-radius:14px; overflow:hidden; max-width:980px; width:100%; margin:0 auto; background:var(--stage); }
+.netspeed { position:absolute; right:10px; top:10px; z-index:6; padding:3px 9px; border-radius:999px;
+  background:rgba(10,13,18,.72); color:#dfe6ee; font-size:12px; font-variant-numeric:tabular-nums;
+  pointer-events:none; backdrop-filter:blur(4px); }
+.vcell .cload { flex-wrap:wrap; text-align:center; padding:8px; word-break:break-word; }
+.vcell .cload .chint { flex-basis:100%; max-width:92%; font-size:11px; line-height:1.45; color:#9aa4ae; }
+.vcell .cload button { margin-top:4px; }
 /* 行车遥测面板 (视频上方, Tesla App 样式, 不遮挡画面) */
 .tpanel { display:none; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px 18px 10px; max-width:980px; width:100%; margin:0 auto; }
 .tpanel.show { display:block; }
@@ -2040,6 +2190,10 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .storval { font-variant-numeric:tabular-nums; }
 .storbar { height:3px; margin:7px 0 0; background:var(--line); }
 .filter-reset { color:var(--accent); background:none; border:0; padding:4px 0; min-height:36px; cursor:pointer; }
+.livebtn { color:#fff; background:var(--blue); border:0; border-radius:8px; padding:5px 11px; min-height:32px;
+  font-size:12.5px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
+.livebtn[hidden] { display:none; }
+.livebtn:hover { filter:brightness(1.08); }
 .storextra { width:100%; margin:0; padding-top:14px; border-top:1px solid var(--line); }
 .stortog { right:7px; top:16px; }
 .library-toolbar { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
@@ -2151,6 +2305,9 @@ body.settings-open { overflow:hidden; }
 .usage-row.free { margin:0; padding-top:18px; border-top:1px solid var(--line); }
 .storage-usage output { font-variant-numeric:tabular-nums; }
 .storage-danger { margin-top:26px; padding-top:22px; border-top:1px solid var(--line); position:relative; }
+#storage-retention { margin-top:26px; }
+#storage-retention .storage-row { max-width:420px; }
+.retention-unit { color:var(--muted); font-size:12.5px; flex:0 0 auto; }
 .storage-danger h3 { color:var(--danger); }
 .storage-danger .storage-row { max-width:420px; }
 #storage-resize { border-color:var(--danger); color:var(--danger); background:transparent; }
@@ -2365,7 +2522,7 @@ body.settings-open { overflow:hidden; }
 </defs></svg>
 <header class="app-header"><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">哨兵一剪梅</span></h1><span class="sub" id="stat"></span>
 <div class="system-status" aria-label="系统状态"><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
-<div class="ffwarn" id="ffwarn" role="status" hidden><b>FFmpeg 未配置</b><span>列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。请在设备上执行 <code>install-f50.sh --apply --install-deps</code> 补齐依赖，或用 <code>--ffmpeg /opt/mu300/ffmpeg/ffmpeg</code> 指定路径。</span></div>
+<div class="ffwarn" id="ffwarn" role="status" hidden><b>FFmpeg 未配置</b><span>列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。F50 请执行 <code>apk add ffmpeg</code>，然后运行 <code>install-f50.sh --apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。</span></div>
 <nav class="tabs" id="tabs" aria-label="录像分类"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button><button id="gear" title="设置" aria-expanded="false" aria-controls="panel"><svg class="ic"><use href="#i-gear"/></svg><span>设置</span></button></header>
 <main class="library-page">
 <nav class="storwrap status-only" id="storwrap">
@@ -2386,6 +2543,7 @@ body.settings-open { overflow:hidden; }
 <div class="library-toolbar"><h2 id="library-title">录像</h2><span id="library-count"></span><div class="library-filters">
 <nav class="filters" id="dfilters"></nav>
 <nav class="filters" id="filters"></nav>
+<button class="livebtn" id="live-btn" onclick="openLive()" hidden>📡 <span>实时预览</span></button>
 <button class="filter-reset" onclick="reasonFilter='all';dateFilter='all';render(currentCat)">重置</button>
 </div></div>
 <input type="date" id="dpick" class="dpick" onchange="if(this.value) setDate(this.value)">
@@ -2428,6 +2586,7 @@ body.settings-open { overflow:hidden; }
     <div class="vwrap">
       <button type="button" class="startmask" id="startmask">▶ 轻触开始同步播放</button>
       <div class="vgrid" id="vgrid"></div>
+      <span class="netspeed" id="netspeed" hidden></span>
     </div>
     <div class="cambar" id="cambar" aria-label="摄像头"></div>
     <section class="transport" aria-label="回放控制">
@@ -2494,6 +2653,7 @@ body.settings-open { overflow:hidden; }
     <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车语音</button>
     <button class="stab" id="st-wraps" onclick="stab('wraps')"><svg class="ic"><use href="#i-brush"/></svg>涂装</button>
     <h3>系统与偏好</h3>
+    <button class="stab" id="st-play" onclick="stab('play')"><svg class="ic"><use href="#i-eye"/></svg>播放画质</button>
     <button class="stab" id="st-notify" onclick="stab('notify')"><svg class="ic"><use href="#i-bell"/></svg>推送</button>
     <button class="stab" id="st-auth" onclick="stab('auth')"><svg class="ic"><use href="#i-key"/></svg>账号</button>
     <button class="stab" id="st-lang" onclick="stab('lang')"><svg class="ic"><use href="#i-globe"/></svg>语言</button>
@@ -2531,8 +2691,36 @@ body.settings-open { overflow:hidden; }
     </section><details class="storage-advanced" id="storage-usage" open><summary>实际用量 · 已用／上限</summary>
       <div class="storage-usage"><div class="usage-row"><span>车机 U 盘</span><output id="storage-used-usb">—</output><meter id="storage-meter-usb" min="0" max="100" value="0" aria-label="车机 U 盘用量"></meter></div><div class="usage-row"><span>盒子归档</span><output id="storage-used-archive">—</output><meter id="storage-meter-archive" min="0" max="100" value="0" aria-label="盒子归档用量"></meter></div><div class="usage-row nested"><span>其中：行车记录</span><output id="storage-used-drive">—</output><meter id="storage-meter-drive" min="0" max="100" value="0" aria-label="行车记录用量"></meter></div><div class="usage-row free"><span>存储卡当前空闲</span><output id="storage-used-free">—</output></div></div>
     </details></div>
+    <section class="storage-quota" id="storage-retention">
+      <h3>保留时间与自动清理</h3>
+      <div class="hint">时间限制立即作用于后台清理，并同步写入 /etc/tesla-sentry.conf，重启后仍然生效。归档总上限填 0 时「最近1小时监控」仍按下面的窗口滚动清理，并可单独用体积上限控制（6 路 1 小时约 12GiB）。</div>
+      <div class="storage-row"><label for="retention-roll">最近1小时监控保留</label><input class="ninput" id="retention-roll" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟（0 = 不限制）</span></div>
+      <div class="storage-row"><label for="retention-recentmax">最近1小时监控体积上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">GiB（0 = 不限；6 路 1 小时约 12GiB）</span></div>
+      <div class="storage-row"><label for="retention-keep">空间紧张时最近必留</label><input class="ninput" id="retention-keep" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div>
+      <div class="storage-row"><label for="retention-days">哨兵 / 手动保存保留</label><input class="ninput" id="retention-days" type="number" min="0" max="3650" step="1" inputmode="numeric"><span class="retention-unit">天（0 = 不限）</span></div>
+      <div class="storage-row"><label for="retention-maxgb">单个分类体积上限</label><input class="ninput" id="retention-maxgb" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">GiB（0 = 不限）</span></div>
+      <div class="updbtns"><button class="mini primary" id="retention-save" onclick="storageSaveRetention()" disabled>保存时间限制</button></div>
+      <div class="hint" id="retention-msg" role="status" aria-live="polite"></div>
+    </section>
+    <section class="storage-quota" id="storage-paths">
+      <h3>存储路径</h3>
+      <div class="hint">程序本体在 /opt/tesla-sentry。视频存储建议放在 TF 卡（F50 默认 /dev/mmcblk1p1，挂载 /mnt/mmc）。目录结构固定为「根目录/img/teslacam.img」和「根目录/archive/transcode_cache」。修改后需重启服务生效，现有录像不会自动迁移。</div>
+      <div class="storage-row"><label for="storage-path-root">视频存储根目录</label><input class="ninput" id="storage-path-root" type="text" spellcheck="false" style="min-width:320px"><span class="retention-unit">绝对路径</span></div>
+      <div class="storage-row"><label>车机 U 盘镜像</label><input class="ninput" id="storage-path-img" type="text" disabled style="min-width:360px"></div>
+      <div class="storage-row"><label>归档区目录</label><input class="ninput" id="storage-path-archive" type="text" disabled style="min-width:360px"></div>
+      <div class="storage-row"><label>转码缓存目录</label><input class="ninput" id="storage-path-transcode" type="text" disabled style="min-width:360px"></div>
+      <div class="storage-row"><label>程序缓存目录</label><input class="ninput" id="storage-path-cache" type="text" disabled style="min-width:360px"></div>
+      <div class="updbtns"><button class="mini primary" id="paths-save" onclick="storageSavePaths()" disabled>保存路径设置</button></div>
+      <div class="hint" id="paths-msg" role="status" aria-live="polite"></div>
+    </section>
+    <section class="storage-danger" id="storage-cleanup">
+      <h3>一键清理</h3>
+      <div class="hint">以下操作会立即清空对应目录下的所有文件，不可恢复。目录结构本身会保留。</div>
+      <div class="storage-row"><label>转码缓存</label><button class="mini" id="cleanup-transcode" onclick="storageCleanup('transcode')">清空转码缓存（保留目录）</button><span class="retention-unit" id="cleanup-transcode-status"></span></div>
+      <div class="storage-row"><label>归档区录像</label><button class="mini" id="cleanup-archive" onclick="storageCleanup('archive')">清空归档区录像（保留目录）</button><span class="retention-unit" id="cleanup-archive-status"></span></div>
+    </section>
     <section class="storage-danger"><h3>调整车机 U 盘容量</h3><div class="storage-row"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
-    <div class="hint">调整会清空车机 U 盘全部内容，盒子归档保留。</div><button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button><div id="storage-resize-status"></div></section>
+    <div class="hint">调整会清空车机 U 盘全部内容，盒子归档保留。容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div><button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button><div id="storage-resize-status"></div></section>
   </div>
   <div id="tab-brand" style="display:none">
     <div class="hint">标题栏左侧的图标与名称 · 改完立即生效, 访客刷新页面后看到新的; 名称留空即用默认「哨兵一剪梅」</div>
@@ -2614,6 +2802,19 @@ body.settings-open { overflow:hidden; }
       </div>
       <div id="file-list"></div>
     </div>
+  </div>
+  <div id="tab-play" style="display:none">
+    <div class="hint">内网访问自动用原画，不转码，加载最快；外网访问默认用下面选择的画质。选择非「原画」时，设备会在空闲时按该画质预先转码哨兵/手动保存事件的片段（最近1小时监控影像不预热）。</div>
+    <label class="nrow"><span>外网默认画质</span>
+      <select class="ninput" id="play-quality" onchange="playSave()">
+        <option value="orig">原画 — 不转码，最清晰但外网流量大</option>
+        <option value="720p">720p — 清晰，约 2.2 Mbps</option>
+        <option value="480p">480p — 均衡（推荐），约 1.2 Mbps</option>
+        <option value="360p">360p — 省流量，约 0.7 Mbps</option>
+      </select>
+    </label>
+    <div class="hint" id="play-net"></div>
+    <div class="hint" id="play-msg"></div>
   </div>
   <div id="tab-notify" style="display:none">
     <div class="hint">哨兵触发时把时间/位置/触发原因和触发画面推到飞书。默认走自建应用私聊(只有你本人可见)；也可切到群机器人 webhook(群里都能看到)。视频推送只支持私聊。</div>
@@ -2837,11 +3038,22 @@ function setStyle(s) {
   } catch (e) {}
 }
 applyStyle(localStorage.getItem(STYLE_KEY) || 'default');
-/* 本地没选过时跟随服务端保存的风格 (在别的设备上设过) */
+/* 本地没选过时跟随服务端保存的风格/外网画质 (在别的设备上设过) */
 (function () {
-  try { if (localStorage.getItem(STYLE_KEY)) return; } catch (e) { return; }
+  let localStyle = '';
+  try { localStyle = localStorage.getItem(STYLE_KEY) || ''; } catch (e) {}
   fetch('/api/settings', { cache: 'no-store' }).then(r => r.json()).then(j => {
-    if (j && j.ui_style) applyStyle(j.ui_style);
+    if (!j) return;
+    if (!localStyle && j.ui_style) applyStyle(j.ui_style);
+    if (j.remote_quality) {
+      remoteQuality = j.remote_quality;
+      let stored = '';
+      try { stored = localStorage.getItem('tsfq3') || ''; } catch (e) {}
+      if (!stored) {
+        curQ = defaultQualityFor();
+        if (document.getElementById('qsel')) renderQSel();
+      }
+    }
   }).catch(() => {});
 })();
 /* ---------- 存储卡展开/收起 ----------
@@ -2858,13 +3070,20 @@ if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListen
 });
 /* 清晰度偏好按播放入口保存。 */
 const Q_LIST = [['orig', '原画'], ['720p', '720p'], ['480p', '480p'], ['360p', '360p']];
-const localAddress = /^(localhost$|127\.|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.|\[::1\]$)/i.test(location.hostname);
-const defaultQuality = localAddress ? 'orig' : '480p';
-let curQ = localStorage.getItem('tsfq3') || defaultQuality;
+const Q_KBPS = {720: 900, 480: 500, 360: 320};
+/* 内网 = 原画 (不转码, 加载最快); 外网 = 设置里的远程画质 (默认 480p)。
+   也覆盖 IPv6 内网段 (fc00::/7, fe80::) 和无点主机名 (如 f50.local 的短名)。 */
+const localAddress = /^(localhost$|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1\]?$|\[?f[cd][0-9a-f]{2}:|\[?fe[89ab][0-9a-f]:)/i.test(location.hostname)
+  || (!location.hostname.includes('.') && !location.hostname.includes(':'));
+let remoteQuality = '480p';
+function defaultQualityFor() {
+  return localAddress ? 'orig' : (Q_LIST.some(x => x[0] === remoteQuality) ? remoteQuality : '480p');
+}
+let curQ = localStorage.getItem('tsfq3') || defaultQualityFor();
 /* 苹果设备: 合成改走设备端 (Safari 的 MediaRecorder 只能出 webm, 微信不认) */
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-if (!Q_LIST.some(x => x[0] === curQ)) curQ = defaultQuality;
+if (!Q_LIST.some(x => x[0] === curQ)) curQ = defaultQualityFor();
 function renderQSel() {
   const curLabel = (Q_LIST.find(x => x[0] === curQ) || Q_LIST[0])[1];
   document.getElementById('qsel').innerHTML =
@@ -2989,19 +3208,20 @@ async function load() {
   const liveOpen = liveMode;
   for (const c of Object.keys(data)) {
     const b = document.createElement('button');
-    b.className = 'tab' + (!liveOpen && c === currentCat ? ' active' : '');
+    b.className = 'tab' + ((liveOpen && c === 'RecentClips') || (!liveOpen && c === currentCat) ? ' active' : '');
     b.dataset.category = c;
     b.innerHTML = `<span class="tl">${t(CATS_NAME[c] || c)}</span><span class="tn">${data[c].length}</span>`;
-    b.onclick = () => { closePanel(); closePlayer(); document.querySelectorAll('.tab').forEach(t => t.classList.remove('active')); b.classList.add('active'); currentCat = c; reasonFilter = 'all'; dateFilter = 'all'; render(c); };
+    /* 「最近1小时监控」页签 = 最近 1 小时滚动录像列表 + 页内的「实时预览」入口,
+       两者是同一个功能, 合并为一个页面 */
+    b.onclick = () => {
+      closePanel(); closePlayer();
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      b.classList.add('active');
+      currentCat = c; reasonFilter = 'all'; dateFilter = 'all';
+      render(c);
+    };
     tabs.appendChild(b);
   }
-  /* 实时预览与分类页签同级 */
-  const lv = document.createElement('button');
-  lv.className = 'tab' + (liveOpen ? ' active' : '');
-  lv.id = 'tab-live';
-  lv.innerHTML = `<span class="tl">${t('实时预览')}</span>`;   // 与其它页签同结构 (单行分段控件里才不会错位)
-  lv.onclick = () => { closePanel(); document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); lv.classList.add('active'); openLive(); };
-  tabs.appendChild(lv);
   document.getElementById('stat').textContent = `${t('归档')} ${Object.values(data).reduce((a, v) => a + v.length, 0)} ${t('条')}`;
   lastSig = sigOf(data);
   renderQSel();
@@ -3293,6 +3513,8 @@ function render(cat) {
   if (dateFilter !== 'all') evs = evs.filter(ev => dateOf(ev) === dateFilter);
   document.getElementById('library-title').textContent = t(CATS_NAME[cat] || cat);
   document.getElementById('library-count').textContent = evs.length + ' ' + t('条');
+  const liveBtn = document.getElementById('live-btn');
+  if (liveBtn) liveBtn.hidden = cat !== 'RecentClips';
   e.style.display = evs.length ? 'none' : 'block';
   if (!evs.length) {
     e.innerHTML = (reasonFilter !== 'all' || dateFilter !== 'all')
@@ -3610,13 +3832,13 @@ async function openPlayer(ev, live = false, camera = '', clipName = '') {
   libraryCat = live ? 'RecentClips' : currentCat;
   playerRecording = ev ? {cat:libraryCat, name:ev.name, clips:ev.clips || [ev.name], locked:!!ev.locked, lock_unknown:!!ev.lock_unknown, label:evTime(ev)} : null;
   updateRecordingActions();
-  curQ = localStorage.getItem(live ? 'tsfliveq' : 'tsfq3') || (live && localStorage.getItem('tsfq3')) || defaultQuality;
-  if (!Q_LIST.some(([q]) => q === curQ)) curQ = defaultQuality;
+  curQ = localStorage.getItem(live ? 'tsfliveq' : 'tsfq3') || (live && localStorage.getItem('tsfq3')) || defaultQualityFor();
+  if (!Q_LIST.some(([q]) => q === curQ)) curQ = defaultQualityFor();
   renderQSel();
   byId('player').classList.add('open');
   document.body.classList.add('watching');
   byId('livep').hidden = !live;
-  byId('ptitle').textContent = live ? t('实时预览') : evTime(ev);
+  byId('ptitle').textContent = live ? t('最近1小时监控') : evTime(ev);
   byId('vgrid').textContent = '正在加载录像…';
   byId('vgrid').classList.add('loading');
   byId('trigger-marker').hidden = true;
@@ -3720,17 +3942,30 @@ function previewReadyToPlay(video) {
   return video.readyState >= 2 && !video.seeking && !video.dataset.positioning && hasPreviewLead(video);
 }
 
-async function readySource(file, quality, signal, openParts) {
+async function readySource(file, quality, signal, openParts, onState) {
   if (quality === 'orig') return file.url;
   const params = new URLSearchParams({file: file.url, q: quality});
   if (openParts) params.set('parts', '1');
   const response = await fetch('/api/playback-source?' + params, {signal, cache: 'no-store'});
   if (!response.ok) throw Error('source');
-  const {state, seconds} = await response.json();
-  if (state === 'parts' && openParts && !signal.aborted) return openParts(seconds, quality);
-  if (state === 'pending' || state === 'cooling') return null;
+  const payload = await response.json();
+  const state = payload.state;
+  if (state === 'parts' && openParts && !signal.aborted) return openParts(payload.seconds, quality);
+  if (state === 'pending' || state === 'cooling') {
+    if (onState) onState(payload);
+    return null;
+  }
+  if (state === 'failed') {
+    const error = Error(payload.error || 'transcode failed');
+    error.hint = payload.hint || '';
+    throw error;
+  }
   if (state !== 'ready') throw Error('quality');
   return file.url + '?q=' + quality + '&exact=1';
+}
+function cellStatus(video) {
+  const cell = video.parentElement;
+  return cell ? cell.querySelector('.cload') : null;
 }
 
 function previewStream(video, file, seconds, quality, signal, failed) {
@@ -3822,19 +4057,38 @@ function previewStream(video, file, seconds, quality, signal, failed) {
       params.set('ahead', ahead ? '1' : '0');
       if (prime) params.set('prime', '1');
       else params.delete('prime');
+      const status = cellStatus(video);
+      // 只有真正等画面时才盖住视频显示进度；后台预读分片不要闪黑罩。
+      const waiting = !hasPreviewLead(video, position()) || video.readyState < 2;
+      if (status && waiting) {
+        status.hidden = false;
+        status.classList.add('buffering');
+        status.textContent = '正在转码 ' + Math.round(index / total * 100) + '%';
+      }
+      const startedAt = performance.now();
       const response = await fetch('/api/playback-preview/part.mp4?' + params, {signal:request.signal});
       if (response.status === 503) {
+        if (status) status.textContent = '仍在转码…';
         if (performance.now() - waitingSince > 30000) throw Error('preview timeout');
         return;
       }
-      if (!response.ok) throw Error('preview part');
+      if (!response.ok) {
+        const reason = response.headers.get('X-TSF-Reason');
+        const error = Error(reason ? decodeURIComponent(reason) : 'preview part');
+        const hint = response.headers.get('X-TSF-Hint');
+        error.hint = hint ? decodeURIComponent(hint) : '';
+        throw error;
+      }
       const data = await response.arrayBuffer();
+      const elapsed = performance.now() - startedAt;
+      if (data.byteLength && elapsed > 0) noteTransfer(data.byteLength, elapsed);
       if (request.signal.aborted || signal.aborted) return;
       buffer.timestampOffset = index * seconds;
       buffer.appendBuffer(data);
       waitingIndex = -1;
       buffer.addEventListener('updateend', () => {
         if (signal.aborted) return;
+        if (status) { status.hidden = true; status.classList.remove('buffering'); }
         const target = position(), playable = bufferedPosition(video, target);
         if (playable > target && !video.dataset.positioning) {
           video.dataset.seekTarget = String(playable);
@@ -4038,6 +4292,9 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false)
   }
   const v = prepared || makeVideo();
   v.dataset.cam = cam;
+  if (file && file.size) v.dataset.size = String(file.size);
+  if (file && videoDuration(file)) v.dataset.duration = String(videoDuration(file));
+  if (curQ !== 'orig') v.dataset.bitrate = String(Q_KBPS[parseInt(curQ, 10)] || 0);
   if (seekStartup) v.dataset.previewLead = String(previewLeadForQuality());
   v.dataset.seekTarget = String(offset);
   v.dataset.positioning = '1';
@@ -4052,6 +4309,7 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false)
       const group = currentClip();
       if (!videoDuration(file)) {
         file.duration = length;
+        v.dataset.duration = String(length);
         arrangeTimeline(curClips, group);
         drawTimeline();
       }
@@ -4087,12 +4345,25 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false)
     }
     tick();
   };
-  const failed = () => {
+  const failed = error => {
     if (generation !== renderId) return;
     v.dataset.loadFailed = '1';
     status.classList.remove('buffering');
     status.hidden = false;
-    status.textContent = curQ === 'orig' ? '画面加载失败' : curQ + ' 暂不可用';
+    const detail = error instanceof Error && error.message &&
+      !/^(source|quality|preview( |$)|part$)/.test(error.message) ? error.message : '';
+    status.textContent = curQ === 'orig' ? '画面加载失败'
+      : detail ? '转码失败：' + detail : curQ + ' 暂不可用';
+    if (error && error.hint) {
+      status.title = error.hint;
+      const hint = document.createElement('span');
+      hint.className = 'chint'; hint.textContent = error.hint;
+      status.append(hint);
+    }
+    /**
+     * 注意：转码失败时如果直接给「重试」，用户往往反复失败。
+     * 提示里同时保留「播放原画」作为兜底，避免看不到录像。
+     */
     const retry = document.createElement('button'); retry.textContent = '重试';
     retry.onclick = e => { e.stopPropagation(); showClip(curClipIx, playbackOffset()); };
     status.append(retry);
@@ -4109,14 +4380,24 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false)
   } else if (curQ === 'orig') {
     v.src = file.url;
   } else {
+    const onState = info => {
+      if (generation !== renderId || signal.aborted) return;
+      status.classList.add('buffering');
+      status.hidden = false;
+      if (info.state === 'pending') {
+        status.textContent = '仍在转码' + (info.percent ? ' ' + info.percent + '%' : '…');
+      } else {
+        status.textContent = '设备降温中，稍后继续转码…';
+      }
+    };
     const resolve = async () => {
       try {
         const openParts = usesPreviewParts(file) ? (seconds, quality) => previewStream(v, file, seconds, quality, signal, failed) : null;
-        const url = await readySource(file, curQ, signal, openParts);
+        const url = await readySource(file, curQ, signal, openParts, onState);
         if (signal.aborted) return;
         if (url) v.src = url;
         else setTimeout(() => { if (!signal.aborted) resolve(); }, 1500);
-      } catch (e) { if (!signal.aborted) failed(); }
+      } catch (e) { if (!signal.aborted) failed(e); }
     };
     resolve();
   }
@@ -4177,7 +4458,7 @@ function showClip(ix, offset, continuous = false, seekStartup = false) {
 
 function renderInfo() {
   const md = cur.meta || {};
-  byId('ptitle').textContent = liveMode ? t('实时预览') : (reasonLabel(md.reason) || t(CATS_NAME[libraryCat])) + ' · ' + evTime(cur);
+  byId('ptitle').textContent = liveMode ? t('最近1小时监控') : (reasonLabel(md.reason) || t(CATS_NAME[libraryCat])) + ' · ' + evTime(cur);
   byId('ic-rows').replaceChildren();
   const fields = [['录像时间', evTime(cur)], ['分类', t(CATS_NAME[libraryCat])], ['大小', fmtSize(cur.size || 0)],
     ['本段时长', fmtSec(currentClip().length)], ['画面', curVids().length + ' 路'], ['触发原因', reasonLabel(md.reason)], ['位置', [md.city, md.street].filter(Boolean).join(' · ')],
@@ -5083,6 +5364,7 @@ function tick() {
   const now = performance.now(), elapsed = (now - lastTick) / 1000;
   lastTick = now;
   const videos = activeVideos();
+  sampleTransferSpeed(videos, now, elapsed);
   if (wantedPlay && camSel === 'all' && !syncOverview(videos)) {
     updateControls(); updateHud(clipOffset);
     return;
@@ -5129,8 +5411,62 @@ function tick() {
     if (!editingSeek) advanceClip();
     return;
   }
-  if (wantedPlay) prepareNext();
+  if (wantedPlay) prepareNext(); else hideNetSpeed();
   updateControls(); updateHud(clipOffset);
+}
+
+/* ---------- 实时传输速度 ---------- */
+const NET = {bps: 0, at: 0, timer: 0, buffered: new Map()};
+function fmtBitrate(bps) {
+  if (!(bps > 0)) return '';
+  if (bps >= 1024 * 1024) return (bps / 1048576).toFixed(bps >= 10 * 1048576 ? 0 : 1) + ' MB/s';
+  return Math.max(1, Math.round(bps / 1024)) + ' KB/s';
+}
+function showNetSpeed(bps) {
+  const el = document.getElementById('netspeed');
+  if (!el) return;
+  const text = fmtBitrate(bps);
+  if (!text) return;
+  el.textContent = '↓ ' + text;
+  el.hidden = false;
+  clearTimeout(NET.timer);
+  NET.timer = setTimeout(hideNetSpeed, 2200);
+}
+function hideNetSpeed() {
+  const el = document.getElementById('netspeed');
+  if (el) el.hidden = true;
+  clearTimeout(NET.timer); NET.timer = 0;
+  NET.bps = 0; NET.buffered.clear();
+}
+function noteTransfer(bytes, ms) {
+  if (!(bytes > 0) || !(ms > 0)) return;
+  const bps = bytes * 1000 / ms;
+  NET.bps = NET.bps ? NET.bps * 0.65 + bps * 0.35 : bps;
+  NET.at = performance.now();
+  showNetSpeed(NET.bps);
+}
+function sampleTransferSpeed(videos, now, elapsed) {
+  // MSE 分片在 fetch 时已用 noteTransfer 精确统计, 这里只估直连/HLS 的缓冲增长。
+  let bytes = 0;
+  for (const v of videos) {
+    if (v.dataset.mse === '1' || v.dataset.parts === '1' || !v.duration) continue;
+    const fixed = Number(v.dataset.bitrate) * 1000 / 8;
+    if (!fixed && !Number(v.dataset.size)) continue;
+    let end = 0;
+    try { end = v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0; } catch (e) { continue; }
+    const prev = NET.buffered.get(v);
+    NET.buffered.set(v, end);
+    if (prev !== undefined && end > prev + 0.05) {
+      bytes += (end - prev) * (fixed || Number(v.dataset.size) / v.duration);
+    }
+  }
+  if (bytes > 0 && elapsed > 0) {
+    const bps = bytes / elapsed;
+    NET.bps = NET.bps ? NET.bps * 0.5 + bps * 0.5 : bps;
+    showNetSpeed(NET.bps);
+  } else if (now - NET.at > 2500 && NET.bps) {
+    hideNetSpeed();
+  }
 }
 
 function playAll() {
@@ -5167,6 +5503,7 @@ function fmtSec(x) {
 
 function closePlayback() {
   ++sessionId; ++renderId;
+  hideNetSpeed();
   releaseDemand();
   if (liveStream) liveStream.close();
   liveStream = null; liveDirty = false; liveSignature = '';
@@ -5202,12 +5539,6 @@ function closePlayer() {
   byId('player').classList.remove('open', 'expanded', 'library-open');
   byId('livep').hidden = true;
   document.body.classList.remove('watching');
-  const liveTab = byId('tab-live');
-  if (liveTab && liveTab.classList.contains('active')) {
-    liveTab.classList.remove('active');
-    const ix = Object.keys(data).indexOf(currentCat);
-    if (ix >= 0) byId('tabs').children[ix].classList.add('active');
-  }
   render(currentCat); window.scrollTo(0, listScroll);
 }
 
@@ -5285,7 +5616,7 @@ function stab(which) {
   storageHelpClose();
   document.getElementById('panel').classList.add('settings-detail');
   document.getElementById('st-archive').classList.remove('active');
-  ['files', 'storage', 'audio', 'wraps', 'notify', 'auth', 'lang', 'skin', 'brand', 'update'].forEach(k => {
+  ['files', 'storage', 'audio', 'wraps', 'play', 'notify', 'auth', 'lang', 'skin', 'brand', 'update'].forEach(k => {
     const b = document.getElementById('st-' + k), t = document.getElementById('tab-' + k);
     if (b) b.classList.toggle('active', k === which);
     if (t) t.style.display = k === which ? '' : 'none';
@@ -5295,6 +5626,7 @@ function stab(which) {
   if (which === 'audio') refreshAudio();
   if (which === 'update') { otaCheck(false); autoLoad(); }
   if (which === 'notify') ntLoad();
+  if (which === 'play') playLoad();
   if (which === 'auth') pwLoad();
   if (which === 'wraps') refreshWraps();
   if (which === 'brand') refreshBrand();
@@ -5302,10 +5634,40 @@ function stab(which) {
   if (which === 'storage') storageLoad();
 }
 
+function playLoad() {
+  const sel = document.getElementById('play-quality');
+  const net = document.getElementById('play-net'), msg = document.getElementById('play-msg');
+  if (net) net.textContent = localAddress
+    ? '当前是内网访问：播放器默认原画，不转码（此项只影响外网访问）。'
+    : '当前是外网访问：新打开的播放默认使用下面选择的画质。';
+  if (msg) msg.textContent = '';
+  fetch('/api/settings', {cache:'no-store'}).then(r => r.json()).then(j => {
+    if (j && j.remote_quality) {
+      remoteQuality = j.remote_quality;
+      if (sel) sel.value = j.remote_quality;
+    }
+  }).catch(() => {});
+}
+function playSave() {
+  const sel = document.getElementById('play-quality');
+  const msg = document.getElementById('play-msg');
+  const quality = sel ? sel.value : '480p';
+  if (msg) msg.textContent = '保存中…';
+  fetch('/api/playback/quality', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({quality})}).then(r => r.json()).then(j => {
+    if (!j.ok) throw Error(j.msg || '保存失败');
+    remoteQuality = quality;
+    try { if (!localStorage.getItem('tsfq3')) { curQ = defaultQualityFor(); renderQSel(); } } catch (e) {}
+    if (msg) msg.textContent = quality === 'orig'
+      ? '已保存：外网也播放原画（不预热缓存）。'
+      : '已保存：外网默认 ' + quality + '，后台会按此画质预热哨兵/保存事件。';
+  }).catch(e => { if (msg) msg.textContent = '保存失败：' + e.message; });
+}
+
 const STORAGE_HELP = {
   total: '设备识别到的文件系统容量。可分配空间已扣除其他文件和文件系统保留量。1 GiB = 1024³ 字节，通常小于存储卡包装上的 GB 数值。',
   usb: '车机可用的录像 U 盘容量，支持 1～128 GiB。调整会清空车机 U 盘中的全部内容，盒子归档保留；期间车机暂停录像。',
-  archive: '哨兵、手动保存、最近一小时和行车记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。填 0 表示不设上限：不再按总量清理，只保留磁盘空闲保护线兜底。',
+  archive: '哨兵、手动保存、最近1小时监控和行车记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。填 0 表示不设上限：不再按总量清理，只保留磁盘空闲保护线兜底；此时「最近1小时监控」仍可单独按体积上限清理。',
   drive: '行车记录的容量上限，已包含在归档总容量内。超限时从最旧行程开始清理，保留最新片段。',
   reserve: '空间不足时，希望清理后恢复的空闲容量，不创建独立分区。增大此值可能使旧归档更早被清理。',
   minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间。这条保护线不另占容量，不能高于安全预留空间。'
@@ -5335,7 +5697,7 @@ document.addEventListener('click', event => {
 window.addEventListener('resize', storageHelpClose);
 document.querySelector('.settings-content').addEventListener('scroll', storageHelpClose);
 function storageDisable(disabled) {
-  document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize').forEach(element => element.disabled = disabled);
+  document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize, #retention-save, #paths-save').forEach(element => element.disabled = disabled);
 }
 function storageMessage(message, resize = false) {
   const output = document.getElementById('storage-msg');
@@ -5381,11 +5743,17 @@ function storageRenderAllocation() {
       (name === 'archive' && unlimited) ? t('无限制') : values[name].toFixed(1) + ' GiB';
   }
   document.getElementById('storage-bar').setAttribute('aria-label', '容量分配：车机 U 盘 ' + values.usb + '，盒子归档 ' + (unlimited ? '无限制' : values.archive) + '，安全预留 ' + values.reserve + '，缓存预算 ' + values.cache + '，未分配 ' + values.free.toFixed(1) + ' GiB');
-  let message = '';
-  if (!unlimited && values.drive > values.archive) message = '行车记录上限不能超过归档总上限';
-  else if (values.minimum > values.reserve) message = '暂停同步保护线不能高于安全预留';
-  else if (!unlimited && allocated > budget) message = '超过可分配容量 ' + (allocated - budget).toFixed(1) + ' GiB';
-  budgetText.dataset.error = String(Boolean(message));
+  let message = '', blocking = false;
+  const actualArchive = Math.max(0, Number(storageData.disk.archive_bytes) || 0) / 1073741824;
+  // 调整 U 盘容量只需要为归档的「实际占用」留空间，归档上限只是长期清理策略。
+  const resizeAllocated = values.usb + Math.min(unlimited ? actualArchive : values.archive, actualArchive)
+    + values.reserve + values.cache;
+  if (!unlimited && values.drive > values.archive) { message = '行车记录上限不能超过归档总上限'; blocking = true; }
+  else if (values.minimum > values.reserve) { message = '暂停同步保护线不能高于安全预留'; blocking = true; }
+  else if (!unlimited && allocated > budget && resizeAllocated <= budget)
+    message = '归档上限预留超出 ' + (allocated - budget).toFixed(1) + ' GiB，但按归档实际占用仍可调整 U 盘容量';
+  else if (!unlimited && allocated > budget) { message = '超过可分配容量 ' + (allocated - budget).toFixed(1) + ' GiB'; blocking = true; }
+  budgetText.dataset.error = String(blocking);
   budgetText.textContent = message || (unlimited
     ? t('归档不设上限') + '，' + t('仅受磁盘空闲保护') + '（' + values.free.toFixed(1) + ' GiB ' + t('未分配') + '）'
     : '还可分配 ' + values.free.toFixed(1) + ' GiB');
@@ -5414,10 +5782,18 @@ async function storageLoad() {
     document.getElementById('storage-total').textContent = (data.disk.total_bytes / 1073741824).toFixed(1);
     document.getElementById('storage-usb').value = data.usb_gib;
     for (const [id, key] of [['archive','archive_gib'],['drive','drive_gib'],['reserve','free_target_gib'],['minimum','free_min_gib']]) document.getElementById('storage-' + id).value = data.values[key];
+    if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days'],['maxgb','box_max_gb']]) document.getElementById('retention-' + id).value = data.retention[key];
+    if (data.paths) {
+      document.getElementById('storage-path-root').value = data.paths.video_root;
+      document.getElementById('storage-path-img').value = data.paths.img;
+      document.getElementById('storage-path-archive').value = data.paths.archive;
+      document.getElementById('storage-path-transcode').value = data.paths.transcode;
+      document.getElementById('storage-path-cache').value = data.paths.cache;
+    }
     storageRenderAllocation();
     storageRenderUsage();
     storageShowJob(data.job);
-  } catch (error) { if (request === storageRequest) { storageData = null; storageRenderAllocation(); storageMessage(error.message); } }
+  } catch (error) { if (request === storageRequest) { storageData = null; storageRenderAllocation(); storageMessage(error.message); storageDisable(false); } }
 }
 function storageShowJob(job) {
   const busy = ['running', 'recovery'].includes(job.state);
@@ -5458,6 +5834,72 @@ async function storageSave() {
     storageMessage('归档设置已保存');
   } catch (error) { storageMessage(error.message); }
   finally { storageDisable(false); }
+}
+async function storageSaveRetention() {
+  const ids = [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days'],['maxgb','box_max_gb']];
+  const body = {};
+  for (const [id, key] of ids) {
+    const input = document.getElementById('retention-' + id);
+    if (!input.reportValidity()) return;
+    body[key] = Number(input.value);
+  }
+  const msg = document.getElementById('retention-msg');
+  const button = document.getElementById('retention-save');
+  button.disabled = true;
+  if (msg) msg.textContent = '正在保存…';
+  try {
+    const response = await fetch('/api/settings/retention', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const result = await response.json();
+    if (!result.ok) throw Error(result.msg || '保存失败');
+    if (msg) msg.textContent = result.conf_synced
+      ? '已保存，并同步写入 /etc/tesla-sentry.conf'
+      : '已保存；当前环境没有可写的 /etc/tesla-sentry.conf（不影响运行）';
+    if (storageData) storageData.retention = result.values;
+  } catch (error) {
+    if (msg) msg.textContent = '保存失败：' + error.message;
+  } finally { button.disabled = false; }
+}
+async function storageSavePaths() {
+  const root = document.getElementById('storage-path-root').value.trim();
+  const msg = document.getElementById('paths-msg');
+  const button = document.getElementById('paths-save');
+  if (!root) { if (msg) msg.textContent = '视频存储根目录不能为空'; return; }
+  button.disabled = true;
+  if (msg) msg.textContent = '正在保存…';
+  try {
+    const response = await fetch('/api/settings/paths', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({video_root:root})});
+    const result = await response.json();
+    if (!result.ok) throw Error(result.msg || '保存失败');
+    if (msg) msg.textContent = result.conf_synced
+      ? '已保存并写入 /etc/tesla-sentry.conf；请重启服务生效（现有录像不会自动迁移）'
+      : '已保存；当前环境没有可写的 /etc/tesla-sentry.conf（重启后请检查）';
+    if (result.paths) {
+      for (const [id, key] of [['storage-path-root','video_root'],['storage-path-img','img'],['storage-path-archive','archive'],['storage-path-transcode','transcode'],['storage-path-cache','cache']]) {
+        const el = document.getElementById(id);
+        if (el) el.value = result.paths[key];
+      }
+      if (storageData) storageData.paths = result.paths;
+    }
+  } catch (error) {
+    if (msg) msg.textContent = '保存失败：' + error.message;
+  } finally { button.disabled = false; }
+}
+async function storageCleanup(target) {
+  const labels = {transcode:'转码缓存', archive:'归档区录像'};
+  const label = labels[target] || target;
+  const status = document.getElementById('cleanup-' + target + '-status');
+  if (!confirm('即将清空' + label + '目录下的全部文件（保留目录本身），操作不可恢复。确认继续？')) return;
+  if (status) status.textContent = '清理中…';
+  try {
+    const response = await fetch('/api/admin/cleanup-' + target, {method:'POST'});
+    const result = await response.json();
+    if (!result.ok) throw Error(result.msg || '清理失败');
+    if (status) status.textContent = '已清空 ' + (result.removed_files || 0) + ' 个文件（释放 ' + (result.freed_bytes || 0) + ' 字节）';
+    // 清理后刷新一次存储状态
+    if (storageData) storageLoad();
+  } catch (error) {
+    if (status) status.textContent = '清理失败：' + error.message;
+  }
 }
 async function storageResize() {
   if (!storageData || !document.getElementById('storage-usb').reportValidity()) return;
@@ -6258,11 +6700,60 @@ loadFontInfo().then(paintFont);
 </script></body></html>"""
 
 
+_TRANSCODE_MIGRATED = [False]
+
+
+def _migrate_transcode_cache():
+    """把旧版两种转码缓存形态都迁到新 TRANSCODE_DIR:
+
+    1) 更早版本转码缓存在程序目录 cache/res-cache (随程序走, 不在数据盘);
+    2) 2.8.47~2.8.48 pre 在归档区叫 .transcode (点开头隐藏目录);
+    统一迁到归档区 transcode_cache (TRANSCODE_DIR)。
+    """
+    if _TRANSCODE_MIGRATED[0]:
+        return
+    _TRANSCODE_MIGRATED[0] = True
+    os.makedirs(TRANSCODE_DIR, exist_ok=True)
+    # --- 旧形态 1: 程序目录 cache/res-cache ---
+    old_prog = os.path.join(CACHE_ROOT, "res-cache")
+    if old_prog != TRANSCODE_DIR and os.path.isdir(old_prog):
+        _move_children(old_prog, TRANSCODE_DIR)
+    # --- 旧形态 2: 归档区 .transcode ---
+    old_arch = os.path.join(ARCHIVE, ".transcode")
+    if old_arch != TRANSCODE_DIR and os.path.isdir(old_arch):
+        _move_children(old_arch, TRANSCODE_DIR)
+
+
+def _move_children(src_dir, dst_dir):
+    """把 src_dir 下的文件都搬到 dst_dir, 冲突时覆盖 dst 后再 rename (同一盘最省)."""
+    try:
+        for name in os.listdir(src_dir):
+            src = os.path.join(src_dir, name)
+            dst = os.path.join(dst_dir, name)
+            if os.path.lexists(dst):
+                try:
+                    os.remove(dst)
+                except OSError:
+                    continue
+            try:
+                os.rename(src, dst)
+            except OSError:
+                shutil.move(src, dst)
+        try:
+            os.rmdir(src_dir)
+        except OSError:
+            pass
+    except OSError:
+        pass
+
+
 def ensure_dirs():
-    for d in (SKIN_DIR, AUDIO_Q, AUDIO_DONE, FILES_DIR, ARCHIVE):
+    for d in (VIDEO_ROOT, os.path.join(VIDEO_ROOT, "img"),
+              SKIN_DIR, AUDIO_Q, AUDIO_DONE, FILES_DIR, ARCHIVE, TRANSCODE_DIR):
         os.makedirs(d, exist_ok=True)
     for c in CATS:
         os.makedirs(os.path.join(ARCHIVE, c), exist_ok=True)
+    _migrate_transcode_cache()
 
 
 def safe_name(name):
@@ -6361,6 +6852,7 @@ def list_events(category=None, event=None, durations=False, trips=False):
                             path = os.path.join(d, f)
                             stat = os.stat(path)
                             total += stat.st_size
+                            vids[-1]["size"] = stat.st_size
                             if durations or cat == "DriveClips":
                                 vids[-1]["duration"] = movie_duration(path, stat.st_size, stat.st_mtime_ns)
                                 vids[-1]["revision"] = "%d:%d" % (stat.st_size, stat.st_mtime_ns)
@@ -7707,10 +8199,12 @@ def active_skin():
 
 
 # ---------------- 多路合成导出 (ffmpeg) ----------------
+# F50 是 aarch64/OpenWrt，推荐 `apk add ffmpeg` 安装到 /usr/bin；
+# 不再优先使用来源不明的 arm64 静态包。
 FFMPEG_BIN = os.environ.get("TSF_FFMPEG") or (
-    "/opt/mu300/ffmpeg/ffmpeg" if os.path.exists("/opt/mu300/ffmpeg/ffmpeg") else "ffmpeg")
+    "/usr/bin/ffmpeg" if os.path.exists("/usr/bin/ffmpeg") else "ffmpeg")
 FFPROBE_BIN = os.environ.get("TSF_FFPROBE") or (
-    "/opt/mu300/ffmpeg/ffprobe" if os.path.exists("/opt/mu300/ffmpeg/ffprobe") else "ffprobe")
+    "/usr/bin/ffprobe" if os.path.exists("/usr/bin/ffprobe") else "ffprobe")
 _FF_OK = {"t": 0.0, "v": None}
 
 
@@ -7732,13 +8226,23 @@ def ffmpeg_ready(refresh=False):
     ok = _binary_ok(FFMPEG_BIN) and _binary_ok(FFPROBE_BIN)
     _FF_OK.update(t=now, v=ok)
     return ok
-STITCH_DIR = os.environ.get("TSF_CACHE", "/opt/mu300") + "/stitch-tmp"  # 不用 /tmp: tmpfs 占内存, 大视频会挤爆 RAM
+APP_HOME = os.path.dirname(os.path.realpath(__file__))
+# 程序缓存 (缩略图/遥测/多路合成临时) 放在安装目录 cache/ 下, 不占数据卡:
+#   thumbs / tel-cache / stitch-tmp。转码缓存单独放在归档区内 (TRANSCODE_DIR,
+#   见文件顶部定义), 与归档视频一一对应, 删归档视频时自动清理对应缓存。
+# TSF_CACHE 仍可覆盖程序缓存根; 旧版自动选择的 /opt/mu300 或数据卡 cache
+# 视为历史默认值, 升级后自动迁到安装目录, 避免继续占用数据卡。
+CACHE_ROOT = os.environ.get("TSF_CACHE") or os.path.join(APP_HOME, "cache")
+if CACHE_ROOT in ("/opt/mu300", os.path.join(os.environ.get("TSF_CARD_MNT", "/mnt/mmc"),
+                                             "tesla-sentry", "cache")):
+    CACHE_ROOT = os.path.join(APP_HOME, "cache")
+STITCH_DIR = CACHE_ROOT + "/stitch-tmp"  # 不用 /tmp: tmpfs 占内存, 大视频会挤爆 RAM
 STITCH_JOBS = {}
 STITCH_LOCK = threading.Lock()
 # 视频流并发上限: 事件多的时候浏览器会一口气请求上百个预览, 不限流会拖死设备
 MEDIA_SEM = threading.BoundedSemaphore(int(os.environ.get("TSF_MEDIA_CONN", "16")))  # 媒体流并发上限: 4路视频+封面+接口要同时走, 太小会让新请求排队
 MEDIA_ACTIVE = [0]        # 正在推送的视频流数量: 自动升级要等它归零, 别打断正在看的人
-THUMB_DIR = os.environ.get("TSF_CACHE", "/opt/mu300") + "/thumbs"
+THUMB_DIR = CACHE_ROOT + "/thumbs"
 THUMB_SEM = threading.BoundedSemaphore(2)
 THUMB_W = 400
 THUMB_KEEP = 4000          # 缓存文件上限, 超出按最旧删 (eMMC 很小, 不能只增不减)
@@ -7848,7 +8352,7 @@ RES_SCALE = {"360p": (480, 360, 320), "480p": (640, 480, 500), "720p": (960, 720
 TR_THREADS = max(1, min(8, int(os.environ.get("TSF_TR_THREADS", "4"))))
 # 编码参数版本号: 参与缓存 key。改码率/帧率等参数时 +1, 旧缓存自动失效重新生成。
 RES_ENC_VER = "2"   # v2: 统一 24fps, 码率 500->320/800->500/1500->900 (4G+frp 链路 4 路同播实测扛不住旧码率)
-RES_DIR = os.environ.get("TSF_CACHE", "/opt/mu300") + "/res-cache"
+RES_DIR = TRANSCODE_DIR  # 转码缓存放在归档区内(数据卡), 删归档视频时对应缓存会自动清理
 try:
     os.makedirs(RES_DIR, exist_ok=True)
 except OSError:
@@ -7856,6 +8360,71 @@ except OSError:
 Q_SEM = threading.BoundedSemaphore(1)
 USER_TRANS = [0]      # 正在排队/占用转码槽的用户请求数; 后台预热看到 >0 就让位
 RES_MAX = 2 * 1024 * 1024 * 1024  # 清晰度缓存总量上限 2GB, 超了从最旧开始删
+
+# 转码进度/失败原因: 页面轮询 /api/playback-source 时直接展示「仍在转码 42%」。
+# 以前失败被吞进 DEVNULL, 用户只看到永远「缓冲中」。
+TRANSCODE_LOCK = threading.Lock()
+TRANSCODE_STATE = {}
+PREVIEW_ERROR = [""]
+
+
+def transcode_key(fp, qv):
+    return (os.path.abspath(fp), qv)
+
+
+def transcode_note(fp, qv, **fields):
+    key = transcode_key(fp, qv)
+    with TRANSCODE_LOCK:
+        state = dict(TRANSCODE_STATE.get(key) or {})
+        state.update(fields)
+        state["updated"] = time.time()
+        TRANSCODE_STATE[key] = state
+    return state
+
+
+def transcode_info(fp, qv):
+    key = transcode_key(fp, qv)
+    with TRANSCODE_LOCK:
+        state = dict(TRANSCODE_STATE.get(key) or {})
+    if state and time.time() - state.get("updated", 0) > 1800:
+        state = {}
+    return state
+
+
+def transcode_hint(error):
+    text = (error or "").lower()
+    if "libx264" in text or "unknown encoder" in text:
+        return "设备 FFmpeg 缺少 H.264 编码器：请执行 apk add ffmpeg，再运行 install-f50.sh --apply --install-deps --ffmpeg /usr/bin/ffmpeg"
+    if "no such file" in text or "not found" in text:
+        return "找不到 FFmpeg：请确认 /usr/bin/ffmpeg 存在，并检查配置里的 TSF_FFMPEG"
+    if "invalid data" in text or "moov atom not found" in text:
+        return "源视频不完整或已损坏：等片段写完后刷新；仍失败可改用「原画」播放"
+    if "no space" in text:
+        return "缓存盘空间不足：请在存储设置里清理归档，或降低播放画质"
+    return "可先点「重试」；仍失败请改用「原画」播放，并检查设备上的 FFmpeg 依赖"
+
+
+def transcode_progress_loop(key, progress_file, duration, stop):
+    """解析 ffmpeg -progress 输出（文件每 0.5 秒覆盖一次），换算成百分比。"""
+    while not stop.wait(0.5):
+        try:
+            with open(progress_file, encoding="utf-8", errors="ignore") as stream:
+                text = stream.read()
+        except OSError:
+            continue
+        matches = re.findall(r"out_time_(?:ms|us)=(\d+)", text)
+        if not matches or not duration:
+            continue
+        try:
+            seconds = int(matches[-1]) / 1e6
+        except (TypeError, ValueError):
+            continue
+        percent = int(max(1, min(99, seconds / duration * 100)))
+        with TRANSCODE_LOCK:
+            state = TRANSCODE_STATE.get(key)
+            if state and state.get("state") == "running":
+                state["percent"] = max(state.get("percent", 0), percent)
+                state["updated"] = time.time()
 
 
 def res_cleanup():
@@ -7883,6 +8452,59 @@ def res_cleanup():
         pass
 
 
+_TRANSCODE_PRUNE = {"t": 0.0}
+_TRANSCODE_PRUNE_INTERVAL = 3600.0  # 每小时最多扫一次, 避免频繁遍历归档
+
+
+def _valid_transcode_keys():
+    """遍历归档区所有视频源文件, 返回它们对应的转码缓存文件名集合 (用于孤儿清理)。"""
+    valid = set()
+    for cat in CATS:
+        base = os.path.join(ARCHIVE, cat)
+        if not os.path.isdir(base):
+            continue
+        for root, dirs, files in os.walk(base):
+            for name in files:
+                fp = os.path.join(root, name)
+                for qv in PLAYBACK_QUALITIES:
+                    p = _variant_path(fp, qv)
+                    if p:
+                        valid.add(os.path.basename(p))
+    return valid
+
+
+def prune_orphan_transcodes(force=False):
+    """转码缓存与归档视频一一对应: 源文件已被删的缓存也一并清除。
+
+    只清理 32 位十六进制 + .mp4 的变体缓存; push 导出 / 水印字幕 / 临时文件不动。
+    节流到每小时一次 (force=True 可立即执行)。
+    """
+    now = time.time()
+    if not force and now - _TRANSCODE_PRUNE["t"] < _TRANSCODE_PRUNE_INTERVAL:
+        return 0
+    _TRANSCODE_PRUNE["t"] = now
+    if not os.path.isdir(RES_DIR):
+        return 0
+    valid = _valid_transcode_keys()
+    removed = 0
+    hexset = set("0123456789abcdef")
+    for name in os.listdir(RES_DIR):
+        full = os.path.join(RES_DIR, name)
+        if not os.path.isfile(full):
+            continue
+        if len(name) != 36 or not name.endswith(".mp4"):
+            continue
+        if not all(c in hexset for c in name[:32]):
+            continue
+        if name not in valid:
+            try:
+                os.remove(full)
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
 # ---------- 归档滚动窗口 + 磁盘空间兜底 ----------
 # 车机 U 盘里的 RecentClips 本身就是"滚动缓冲": 只留最近约 1 小时, 更旧的由车机自己覆盖。
 # 但盒子这边过去是每来一段就抄一份、永久留着, 而哨兵开着时车整夜不睡, 4 路约 140MB/分钟
@@ -7895,6 +8517,7 @@ RECENT_ROLL_MIN = int(os.environ.get("TSF_RECENT_ROLL_MIN", "60"))    # 归档�
 FREE_MIN_MB = int(os.environ.get("TSF_FREE_MIN_MB", "4096"))          # 剩余低于此值开始兜底清理
 FREE_TARGET_MB = int(os.environ.get("TSF_FREE_TARGET_MB", "10240"))   # 兜底清理到恢复到该值为止
 RECENT_KEEP_MIN = int(os.environ.get("TSF_RECENT_KEEP_MIN", "60"))    # 兜底清理时最近 N 分钟必留
+RECENT_MAX_GB = int(os.environ.get("TSF_RECENT_MAX_GB", "12"))        # 「最近1小时监控」体积上限(GiB), 0=不限; 6 路 1 小时约 12GiB
 # 盒子侧 SentryClips / SavedClips 定期清理 (方案B):
 # 哨兵开着时 4 路约 8.4GB/小时, 哨兵事件 + 手动保存的录像只增不删, 盘迟早被吃满。
 # 车机 U 盘那份永远不碰, 这里只清盒子归档副本。三个维度独立生效:
@@ -7935,14 +8558,22 @@ if storage_resize.pending_recovery(IMG):
 
 def refresh_storage_settings():
     global ARCHIVE_TOTAL_GB, DRIVE_MAX_GB, FREE_MIN_MB, FREE_TARGET_MB
+    global RECENT_ROLL_MIN, RECENT_KEEP_MIN, RECENT_MAX_GB, BOX_KEEP_DAYS, BOX_MAX_GB
     try:
         values = storage_allocation.load()
     except (OSError, ValueError, TypeError):
-        return
-    ARCHIVE_TOTAL_GB = values['archive_gib']
-    DRIVE_MAX_GB = values['drive_gib']
-    FREE_MIN_MB = int(values['free_min_gib'] * 1024)
-    FREE_TARGET_MB = int(values['free_target_gib'] * 1024)
+        values = None
+    if values:
+        ARCHIVE_TOTAL_GB = values['archive_gib']
+        DRIVE_MAX_GB = values['drive_gib']
+        FREE_MIN_MB = int(values['free_min_gib'] * 1024)
+        FREE_TARGET_MB = int(values['free_target_gib'] * 1024)
+    saved = load_settings()
+    RECENT_ROLL_MIN = int(saved['recent_roll_min'])
+    RECENT_KEEP_MIN = int(saved['recent_keep_min'])
+    RECENT_MAX_GB = int(saved['recent_max_gb'])
+    BOX_KEEP_DAYS = int(saved['box_keep_days'])
+    BOX_MAX_GB = int(saved['box_max_gb'])
 
 
 refresh_storage_settings()
@@ -7959,10 +8590,133 @@ def storage_busy():
 
 def storage_status():
     values = storage_allocation.load()
-    disk = storage_allocation.snapshot(IMG, ARCHIVE, os.environ.get('TSF_CACHE', '/opt/mu300'))
+    disk = storage_allocation.snapshot(IMG, ARCHIVE, TRANSCODE_DIR)
     disk['usb_used_bytes'] = _exfat_used(IMG)
     return dict(ok=True, values=values, disk=disk, revision=storage_allocation.revision(values, IMG),
-                job=storage_job(), usb_gib=disk['usb_bytes'] / storage_allocation.GIB)
+                job=storage_job(), usb_gib=disk['usb_bytes'] / storage_allocation.GIB,
+                retention=retention_values(),
+                paths=dict(video_root=VIDEO_ROOT, img=IMG, archive=ARCHIVE,
+                           transcode=TRANSCODE_DIR, cache=CACHE_ROOT))
+
+
+def retention_values():
+    saved = load_settings()
+    return {name: int(saved[name]) for name in RETENTION_FIELDS}
+
+
+def save_retention(body):
+    """保存「最近1小时监控」/哨兵归档的时间与容量限制, 并同步写回 /etc/tesla-sentry.conf。"""
+    if not isinstance(body, dict):
+        raise ValueError('参数错误')
+    current = retention_values()
+    for name, (low, high) in RETENTION_FIELDS.items():
+        if name not in body:
+            continue
+        value = body[name]
+        if isinstance(value, bool):
+            raise ValueError('时间限制须为整数')
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise ValueError('时间限制须为整数')
+        if not low <= value <= high:
+            raise ValueError('时间限制超出范围（%s 须为 %d～%d）' % (name, low, high))
+        current[name] = value
+    save_settings(current)
+    refresh_storage_settings()
+    written = sync_conf({
+        'TSF_RECENT_ROLL_MIN': current['recent_roll_min'],
+        'TSF_RECENT_KEEP_MIN': current['recent_keep_min'],
+        'TSF_RECENT_MAX_GB': current['recent_max_gb'],
+        'TSF_BOX_KEEP_DAYS': current['box_keep_days'],
+        'TSF_BOX_MAX_GB': current['box_max_gb'],
+    })
+    return dict(ok=True, values=current, conf_synced=written)
+
+
+def save_paths(body):
+    """保存视频存储根目录 (VIDEO_ROOT), 同步写回 /etc/tesla-sentry.conf。
+
+    IMG / ARCHIVE / TRANSCODE_DIR 均从 VIDEO_ROOT 固定派生:
+      <VIDEO_ROOT>/img/teslacam.img          ← 车机 U 盘镜像
+      <VIDEO_ROOT>/archive/                  ← 归档区主目录
+      <VIDEO_ROOT>/archive/transcode_cache/  ← 转码缓存子目录
+    运行期不移动数据也不立即切换 (切换会打断同步与录像), 只写 conf, 重启后生效。
+    """
+    if not isinstance(body, dict):
+        raise ValueError('参数错误')
+    # 兼容上一版前端仍可能发送 img/archive 双字段
+    root = (body.get('video_root') or body.get('root') or '').strip()
+    if not root and body.get('img') and body.get('archive'):
+        # 旧前端发送 img+archive → 反推 root
+        img_p = os.path.normpath(body['img'].strip())
+        arc_p = os.path.normpath(body['archive'].strip())
+        root = os.path.normpath(os.path.join(arc_p, os.pardir))
+    if not isinstance(root, str) or not root:
+        raise ValueError('视频存储根目录不能为空')
+    root = os.path.normpath(root)
+    if not os.path.isabs(root):
+        raise ValueError('路径必须为绝对路径')
+    if root in ('/', '/root', '/tmp'):
+        raise ValueError('路径不能设为系统根目录 (/、/root、/tmp)')
+    img = os.path.join(root, "img", "teslacam.img")
+    archive = os.path.join(root, "archive")
+    transcode = os.path.join(archive, "transcode_cache")
+    written = sync_conf({
+        'TSF_VIDEO_ROOT': root,
+        'TSF_IMG': img,
+        'TSF_ARCHIVE': archive,
+        'TSF_TRANSCODE_DIR': transcode,
+    })
+    return dict(ok=True, conf_synced=written, restart_required=True,
+                paths=dict(video_root=root, img=img, archive=archive,
+                           transcode=transcode, cache=CACHE_ROOT))
+
+
+def cleanup_transcode():
+    """清空 TRANSCODE_DIR (转码缓存) 下的全部文件, 保留目录本身。"""
+    if not os.path.isdir(TRANSCODE_DIR):
+        return dict(ok=True, removed_files=0, freed_bytes=0)
+    removed = 0
+    freed = 0
+    for dirpath, dirnames, filenames in os.walk(TRANSCODE_DIR):
+        for name in filenames:
+            p = os.path.join(dirpath, name)
+            try:
+                freed += os.path.getsize(p)
+                os.remove(p)
+                removed += 1
+            except OSError:
+                pass
+    return dict(ok=True, removed_files=removed, freed_bytes=freed,
+                msg='已清空转码缓存 (%d 个文件, %.1f MiB)' % (removed, freed / (1 << 20)))
+
+
+def cleanup_archive():
+    """清空 ARCHIVE 下的录像分类 (CATS) 里的全部文件, 保留目录结构与非录像目录。
+
+    会保留 files/ (索引), transcode_cache/ (转码缓存), .skins/, boombox-queue/, boombox-done/
+    等非录像目录, 避免误删非视频数据。
+    """
+    removed = 0
+    freed = 0
+    if not os.path.isdir(ARCHIVE):
+        return dict(ok=True, removed_files=0, freed_bytes=0)
+    for cat in CATS:
+        cat_dir = os.path.join(ARCHIVE, cat)
+        if not os.path.isdir(cat_dir):
+            continue
+        for dirpath, dirnames, filenames in os.walk(cat_dir):
+            for name in filenames:
+                p = os.path.join(dirpath, name)
+                try:
+                    freed += os.path.getsize(p)
+                    os.remove(p)
+                    removed += 1
+                except OSError:
+                    pass
+    return dict(ok=True, removed_files=removed, freed_bytes=freed,
+                msg='已清空归档录像 (%d 个文件, %.1f MiB)' % (removed, freed / (1 << 20)))
 
 
 def storage_apply(body):
@@ -7993,6 +8747,11 @@ def storage_apply(body):
                         archive_over_gib=round(over, 2), drive_over_gib=round(drive_over, 2))
         storage_allocation.save(values)
         refresh_storage_settings()
+        # 同步写回 conf: 开机 init 脚本只读这个文件, 不继承网页进程的环境
+        sync_conf({'TSF_ARCHIVE_TOTAL_GB': values['archive_gib'],
+                   'TSF_DRIVE_MAX_GB': values['drive_gib'],
+                   'TSF_FREE_MIN_MB': int(values['free_min_gib'] * 1024),
+                   'TSF_FREE_TARGET_MB': int(values['free_target_gib'] * 1024)})
         return storage_status()
 
 
@@ -8010,7 +8769,7 @@ def storage_start_resize(body):
             raise ValueError('存储配置已变化，请重新加载')
         size = body.get('usb_gib')
         storage_allocation.validate_values(current['values'], size)
-        storage_allocation.check_budget(current['values'], size, current['disk'])
+        storage_allocation.check_resize_budget(current['values'], size, current['disk'])
         if size * storage_allocation.GIB == current['disk']['usb_bytes']:
             raise ValueError('U 盘容量未改变')
         if usb_attached or os.path.ismount(MNT):
@@ -8027,6 +8786,14 @@ def storage_start_resize(body):
                     if usb_attached or os.path.ismount(MNT) or not _acquire_usb_flock():
                         raise ValueError('U 盘正被其他任务占用，请稍后重试')
                     try:
+                        # 上一次 U 盘管理/归档若留下 loop 绑定, 镜像文件会被独占打开,
+                        # rename 时报 EBUSY。只释放确实指向本镜像的 loop, 不动系统其它 loop。
+                        try:
+                            probe = subprocess.run([LOSETUP, LOOPDEV], capture_output=True, text=True, timeout=10)
+                            if probe.returncode == 0 and IMG in (probe.stdout or ""):
+                                subprocess.run([LOSETUP, '-d', LOOPDEV], capture_output=True, timeout=10)
+                        except (OSError, subprocess.SubprocessError):
+                            pass
                         script = os.path.join(os.path.dirname(__file__), 'mkexfat.py')
                         if not os.path.isfile(script):
                             script = os.path.join(os.path.dirname(__file__), 'scripts', 'mkexfat.py')
@@ -8041,8 +8808,14 @@ def storage_start_resize(body):
                     _storage_job.update(state='done', message='容量调整完成', percent=100)
             except Exception as exc:
                 recovery = recovery or storage_resize.pending_recovery(IMG)
+                message = str(exc)
+                busy_text = message.lower()
+                if (getattr(exc, 'errno', None) == 16 or 'errno 16' in busy_text
+                        or 'resource busy' in busy_text):
+                    message = ('调整失败：USB 导出仍被车机占用 (Resource busy)。'
+                               '请在车机上弹出 U 盘/拔插一次数据线后重试；若仍失败，重启设备再试。')
                 with _storage_job_lock:
-                    _storage_job.update(state='recovery' if recovery else 'error', message=str(exc))
+                    _storage_job.update(state='recovery' if recovery else 'error', message=message)
         try:
             threading.Thread(target=work, daemon=True, name='storage-resize').start()
         except Exception:
@@ -8289,6 +9062,65 @@ def roll_recent():
     return n
 
 
+def roll_recent_size():
+    """「最近1小时监控」体积上限 (RECENT_MAX_GB): 归档区设为 0(不限量) 时也独立生效。
+
+    超过上限时从最旧事件开始删, 但保留最近 RECENT_KEEP_MIN 分钟内、正在写入和受
+    保护的片段。0 = 不按体积限制。6 路 1 小时约 12GiB, 默认 12。
+    """
+    if RECENT_MAX_GB <= 0:
+        return 0
+    rd = os.path.join(ARCHIVE, "RecentClips")
+    if not os.path.isdir(rd):
+        return 0
+    budget = RECENT_MAX_GB * (1 << 30)
+    locks = recording_locks()
+    now = time.time()
+    evs = []
+    for e in os.listdir(rd):
+        dt = _ev_dt(e)
+        p = os.path.join(rd, e)
+        if not dt or not os.path.isdir(p):
+            continue
+        try:
+            if now - os.path.getmtime(p) < 300:     # 跳过正在写入的目录
+                continue
+        except OSError:
+            continue
+        partial = False
+        sz = 0
+        for root, _, files in os.walk(p):
+            for f in files:
+                if f.endswith(".part"):
+                    partial = True
+                try:
+                    sz += os.stat(os.path.join(root, f)).st_size
+                except OSError:
+                    pass
+        if not partial:
+            evs.append((dt, e, p, sz))
+    evs.sort(key=lambda x: x[0])
+    total = sum(x[3] for x in evs)
+    newest = evs[-1][0] if evs else None
+    keep_cutoff = (newest - datetime.timedelta(minutes=RECENT_KEEP_MIN)
+                   if newest and RECENT_KEEP_MIN > 0 else None)
+    n = 0
+    for dt, e, p, sz in evs:
+        if total <= budget:
+            break
+        if "RecentClips/" + e in locks:
+            continue
+        if keep_cutoff and dt >= keep_cutoff:         # 最近必留窗口内的不删
+            continue
+        if not _tombstone("RecentClips", e):
+            continue
+        shutil.rmtree(p, ignore_errors=True)
+        if not os.path.isdir(p):
+            total -= sz
+            n += 1
+    return n
+
+
 def _dir_size(p, deduplicate=False):
     sz = 0
     seen = set()
@@ -8414,6 +9246,9 @@ def roll_archive_total(recent_ready=True):
                 rows.append((dt, cat, e, p, sz))
     rows.sort(key=lambda x: x[0])
     total = sum(x[4] for x in rows) + _dir_size(os.path.join(ARCHIVE, "DriveClips"))
+    recent_newest = max((dt for dt, cat, _e, _p, _sz in rows if cat == "RecentClips"), default=None)
+    recent_keep = (recent_newest - datetime.timedelta(minutes=RECENT_KEEP_MIN)
+                   if recent_newest and RECENT_KEEP_MIN > 0 else None)
     n = 0
     for _, cat, e, p, sz in rows:
         available = free_mb(ARCHIVE)
@@ -8421,8 +9256,11 @@ def roll_archive_total(recent_ready=True):
             break
         if cat + '/' + e in locks:
             continue
-        # 最近一小时独立滚动，实际可用空间不足时仍允许原有空间兜底。
+        # 最近一小时独立滚动，实际可用空间不足时仍允许原有空间兜底；
+        # 兜底时最近 RECENT_KEEP_MIN 分钟内（默认 60 分钟）的片段始终保留。
         if cat == "RecentClips" and (not recent_ready or not sz or available >= FREE_TARGET_MB):
+            continue
+        if cat == "RecentClips" and recent_keep and _ev_dt(e) and _ev_dt(e) >= recent_keep:
             continue
         if not _tombstone(cat, e):
             continue
@@ -8485,9 +9323,16 @@ def disk_guard_cycle(drive):
         try:
             drive.review()
             recent_ready = True
-            roll_recent()
         except Exception as ex:
             print("行车记录检查失败: %s" % ex, flush=True)
+        try:   # 「最近1小时监控」滚动窗口独立执行: 归档区设为 0(不限量) 时也必须继续按时间淘汰
+            roll_recent()
+        except Exception as ex:
+            print("最近1小时滚动清理失败: %s" % ex, flush=True)
+        try:   # 「最近1小时监控」体积上限: 归档不限量时也独立生效 (6 路 1 小时约 12GiB)
+            roll_recent_size()
+        except Exception as ex:
+            print("最近1小时体积清理失败: %s" % ex, flush=True)
         try:   # 盒子侧哨兵/手动保存归档定期清理 (方案B)
             roll_box()
         except Exception:
@@ -8498,6 +9343,10 @@ def disk_guard_cycle(drive):
             pass
         try:   # 车机U盘幽灵占用回收 (位图自愈, 空闲窗口内才动手)
             reclaim_ghost_allocations()
+        except Exception:
+            pass
+        try:   # 归档视频被删后, 对应的转码缓存也清掉 (节流每小时一次)
+            prune_orphan_transcodes()
         except Exception:
             pass
 
@@ -9791,7 +10640,8 @@ class SentryPreviewJobs:
         return True
 
 
-def run_variant(cmd, wanted, jobs=None, key=None, preferred=None, hd_preview=False, startup_boost=False):
+def run_variant(cmd, wanted, jobs=None, key=None, preferred=None, hd_preview=False, startup_boost=False,
+                err_path=None):
     count = preview_cores()
     if wanted is not None and (not count or not wanted()):
         return False
@@ -9828,8 +10678,20 @@ def run_variant(cmd, wanted, jobs=None, key=None, preferred=None, hd_preview=Fal
         pin = [sys.executable, '-c', launcher, cpu_list]
         if preferred and not jobs and shutil.which('taskset'):
             pin = ['taskset', '-c', cpu_list]
-        proc = subprocess.Popen(pin + cmd,
-                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        err_stream = subprocess.DEVNULL
+        err_file = None
+        if err_path:
+            try:
+                err_file = open(err_path, "wb")
+                err_stream = err_file
+            except OSError:
+                err_stream = subprocess.DEVNULL
+        try:
+            proc = subprocess.Popen(pin + cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=err_stream)
+        finally:
+            if err_file is not None:
+                err_file.close()
         deadline = time.monotonic() + 900
     parked = False
     try:
@@ -9868,7 +10730,9 @@ def get_variant(fp, qv, slot=True, wanted=None, jobs=None):
         return fp
     if os.path.isfile(out) and os.path.getsize(out) > 0:
         return out
-    if not os.path.isfile(FFMPEG_BIN):
+    if not _binary_ok(FFMPEG_BIN):
+        transcode_note(fp, qv, state="failed", percent=0,
+                       error="设备上没有可用的 FFmpeg (%s)" % FFMPEG_BIN)
         return fp
     if slot:
         # 排队等空闲转码槽 (最多 10 分钟, 超时回退原文件); 期间的等待要让预热线程看见
@@ -9878,14 +10742,19 @@ def get_variant(fp, qv, slot=True, wanted=None, jobs=None):
         finally:
             USER_TRANS[0] = max(0, USER_TRANS[0] - 1)
         if not got:
+            transcode_note(fp, qv, state="pending", error="", percent=0)
             return fp
     try:
         if os.path.isfile(out) and os.path.getsize(out) > 0:  # 别人刚转完
+            transcode_note(fp, qv, state="ready", percent=100, error="")
             return out
         if not preview_memory_available():
+            transcode_note(fp, qv, state="cooling", error="内存不足，等待其他任务结束")
             return fp
         w, h, kbps = RES_SCALE[qv]
         tmp = out + ".%d_%d.tmp" % (os.getpid(), threading.get_ident())
+        progress_file = out + ".progress"
+        error_file = out + ".err"
         # 子进程把 oom_score_adj 调回正数 (父进程是 -300 会被继承), OOM 时优先杀转码而不是主服务
         cmd = ["sh", "-c",
                'echo 300 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
@@ -9895,20 +10764,55 @@ def get_variant(fp, qv, slot=True, wanted=None, jobs=None):
                "-c:v", "libx264", "-threads:v", str(TR_THREADS), "-preset", "superfast",
                "-b:v", "%dk" % kbps, "-maxrate", "%dk" % (kbps * 3 // 2),
                "-bufsize", "%dk" % (kbps * 3),
-               "-c:a", "copy", "-movflags", "+faststart", "-f", "mp4", "-y", tmp]
+               "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
+               "-progress", progress_file, "-nostats", "-f", "mp4", "-y", tmp]
+        duration = probe_duration(fp) if _binary_ok(FFPROBE_BIN) else 0
+        transcode_note(fp, qv, state="running", percent=0, error="", duration=duration)
+        stop_progress = threading.Event()
+        threading.Thread(target=transcode_progress_loop,
+                         args=(transcode_key(fp, qv), progress_file, duration, stop_progress),
+                         daemon=True).start()
+        ok = False
         try:
-            if run_variant(cmd, wanted, jobs, (fp, qv)) and os.path.isfile(tmp) and os.path.getsize(tmp) > 0:
+            ok = run_variant(cmd, wanted, jobs, (fp, qv), err_path=error_file)
+        except Exception as exc:
+            transcode_note(fp, qv, state="failed", error="%s: %s" % (type(exc).__name__, exc))
+        finally:
+            stop_progress.set()
+        if ok and os.path.isfile(tmp) and os.path.getsize(tmp) > 0:
+            try:
                 os.replace(tmp, out)
+            except OSError as exc:
+                transcode_note(fp, qv, state="failed", error="写入缓存失败：%s" % exc)
+            else:
+                transcode_note(fp, qv, state="ready", percent=100, error="")
                 res_cleanup()
                 return out
-        except Exception:
-            pass
-        finally:
-            if jobs is None or (fp, qv) not in jobs.stopped:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
+        elif not transcode_info(fp, qv).get("state") == "failed":
+            try:
+                with open(error_file, "rb") as stream:
+                    lines = stream.read()[-600:].decode("utf-8", "ignore").strip().splitlines()
+                detail = (lines[-1] if lines else "").strip()
+            except OSError:
+                detail = ""
+            parked = jobs is not None and (fp, qv) in jobs.stopped
+            if not detail and not preview_cores():
+                transcode_note(fp, qv, state="cooling", error="设备温度过高，暂停转码")
+            elif not detail and (parked or (wanted is not None and not wanted())):
+                transcode_note(fp, qv, state="pending", error="")
+            else:
+                transcode_note(fp, qv, state="failed",
+                               error=detail or "FFmpeg 未产出有效文件（可能被中断或内存不足）")
+        for path in (progress_file, error_file):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        if jobs is None or (fp, qv) not in jobs.stopped:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         return fp
     finally:
         if slot:
@@ -10020,12 +10924,38 @@ def live_demand(body):
     return files
 
 
-def playback_variant_state(fp, qv):
+def playback_variant_info(fp, qv):
+    """给页面的转码状态：ready / pending(带 percent) / cooling / failed(带原因与建议)。"""
     if _variant_ready(fp, qv):
-        return "ready"
-    if not os.access(FFMPEG_BIN, os.X_OK):
-        return "failed"
-    return "pending" if preview_cores() else "cooling"
+        return {"state": "ready", "percent": 100}
+    if not ffmpeg_ready():
+        return {"state": "failed", "percent": 0,
+                "error": "设备未配置 FFmpeg", "hint": transcode_hint("ffmpeg not found")}
+    state = transcode_info(fp, qv)
+    if state.get("state") == "failed":
+        # 失败 15 秒后再点播放会自动重试一次，避免一次瞬时错误永久卡死。
+        if time.time() - state.get("updated", 0) > 15:
+            return {"state": "pending", "percent": 0}
+        return {"state": "failed", "percent": 0,
+                "error": state.get("error") or "转码失败",
+                "hint": transcode_hint(state.get("error"))}
+    if state.get("state") == "running":
+        return {"state": "pending", "percent": int(state.get("percent") or 0)}
+    if state.get("state") == "cooling":
+        # 温度恢复后 20 秒允许重新排队，避免一次降温柔性停止后永远停在 cooling。
+        if preview_cores() and time.time() - state.get("updated", 0) > 20:
+            return {"state": "pending", "percent": 0}
+        return {"state": "cooling", "percent": int(state.get("percent") or 0),
+                "error": state.get("error") or "设备温度过高，暂停转码"}
+    if not preview_cores():
+        return {"state": "cooling", "percent": int(state.get("percent") or 0),
+                "error": "设备温度过高，暂停转码"}
+    return {"state": "pending", "percent": int(state.get("percent") or 0)}
+
+
+def playback_variant_state(fp, qv):
+    """兼容旧调用：只返回状态字符串。新页面用 playback_variant_info 取百分比/错误。"""
+    return playback_variant_info(fp, qv)["state"]
 
 
 PREVIEW_PART_SECONDS = 1
@@ -10081,8 +11011,19 @@ def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead
         middle_index = (index + camera_index) % len(middle_cores)
         middle = middle_cores[middle_index]
         next_middle = middle_cores[(middle_index + 1) % len(middle_cores)]
+        err_path = prefix + "%d-%d.err" % (os.getpid(), threading.get_ident())
         complete = run_variant(cmd + ["-y", tmp], connected, preferred=(middle, 0, 1, next_middle), hd_preview=fast_hd,
-                               startup_boost=fast_hd and startup_boost)
+                               startup_boost=fast_hd and startup_boost, err_path=err_path)
+        try:
+            with open(err_path, "rb") as stream:
+                lines = stream.read()[-600:].decode("utf-8", "ignore").strip().splitlines()
+            PREVIEW_ERROR[0] = (lines[-1] if lines else "").strip()
+        except OSError:
+            PREVIEW_ERROR[0] = ""
+        try:
+            os.unlink(err_path)
+        except OSError:
+            pass
         for part in range(index, index + count):
             # FFmpeg closes a segment before opening its successor. On cancellation
             # only those closed files can safely enter the cache.
@@ -10255,7 +11196,13 @@ def order_files(names):
 #   * 最近 2 分钟还在写的事件跳过, 免得转半截文件
 PREWARM = {"on": os.environ.get("TSF_PREWARM", "1") != "0", "done": 0, "last": "", "skip": {}}
 PREWARM_CATS = ("SentryClips", "SavedClips")
-PREWARM_Q = "480p"
+
+
+def prewarm_quality():
+    """后台预热跟随设置里的「外网访问画质」; 选原画就不预热。
+    RecentClips (1 小时行车影像) 永远不预热 —— 它们滚动删除，缓存没有意义。"""
+    q = load_settings().get("remote_quality") or "480p"
+    return q if q in ("720p", "480p", "360p") else ""
 
 
 def _cam_of(f):
@@ -10302,8 +11249,8 @@ def _prewarm_targets(cat, name):
     return [os.path.join(d, by_group[g]) for g in order if g in by_group]
 
 
-def _prewarm_pick():
-    """挑一个还有 480p 没转的事件 (新的优先), 返回 (mtime, cat, name, [待转文件])"""
+def _prewarm_pick(q):
+    """挑一个还有 q 档位没转的事件 (新的优先), 返回 (mtime, cat, name, [待转文件])"""
     best = None
     for cat in PREWARM_CATS:
         base = os.path.join(ARCHIVE, cat)
@@ -10325,7 +11272,7 @@ def _prewarm_pick():
                 continue
             if best is not None and mt <= best[0]:
                 continue                       # 已经有更新的事件排在前面
-            todo = [f for f in _prewarm_targets(cat, name) if not _variant_ready(f, PREWARM_Q)]
+            todo = [f for f in _prewarm_targets(cat, name) if not _variant_ready(f, q)]
             if todo:
                 best = (mt, cat, name, todo)
     return best
@@ -10335,17 +11282,18 @@ def _prewarm_pick():
 # 预转出来的缓存几乎立刻作废, 只会让设备一直满载转码、SoC 长期高温, 所以不预热。
 # 用户真的点开行车记录/实时预览时, /media 仍会按需后台转码 (不挡首帧)。
 def prewarm_loop():
-    """后台把新哨兵/手动保存事件的触发段转成 480p; 有人看视频时让位"""
+    """后台把新哨兵/手动保存事件的触发段转成设置里的外网画质; 有人看视频时让位"""
     time.sleep(45)                             # 开机先让同步和服务稳定
     while True:
         try:
-            if not PREWARM["on"]:
-                time.sleep(600)
+            q = prewarm_quality()
+            if not PREWARM["on"] or not q:
+                time.sleep(60)                 # 选原画就关闭预热；一分钟复查一次设置
                 continue
             if MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0 or not preheat_allowed():
                 time.sleep(15)                 # 有人在用, 别抢
                 continue
-            job = _prewarm_pick()
+            job = _prewarm_pick(q)
             if not job:
                 time.sleep(12)                 # 都转好了, 短轮询以便接住新的哨兵/保存事件
                 continue
@@ -10357,8 +11305,8 @@ def prewarm_loop():
                 if not Q_SEM.acquire(blocking=False):
                     break                      # 转码槽被用户占着, 让位
                 try:
-                    get_variant(fp, PREWARM_Q, slot=False, wanted=preheat_allowed)
-                    if _variant_ready(fp, PREWARM_Q):
+                    get_variant(fp, q, slot=False, wanted=preheat_allowed)
+                    if _variant_ready(fp, q):
                         n += 1
                 finally:
                     Q_SEM.release()
@@ -10830,7 +11778,7 @@ def start_export(cat, name, cams, wm=True, q="720p", files=None):
 #   1 version, 2 gear(0P/1D/2R/3N), 3 frame_seq, 4 speed_mps, 5 油门%,
 #   6 方向盘角度, 7/8 左右转向灯, 9 刹车, 10 AP状态, 11/12 经纬度,
 #   13 航向, 14/15/16 三轴加速度
-TEL_DIR = os.environ.get("TSF_CACHE", "/opt/mu300") + "/tel-cache"
+TEL_DIR = CACHE_ROOT + "/tel-cache"
 TEL_SEM = threading.BoundedSemaphore(int(os.environ.get("TSF_TEL_CONN", "1")))
 
 
@@ -11489,7 +12437,18 @@ class Handler(BaseHTTPRequestHandler):
                                 warm=ahead and not prime and query.get("warm") == ["1"], prime=prime,
                                 cache_only=cache_only)
         except (OSError, ValueError):
-            return self._send(422, b"preview encoding failed", "text/plain")
+            detail = PREVIEW_ERROR[0] or "预览片段编码失败"
+            reason = urllib.parse.quote(detail[-180:], safe="")
+            hint = urllib.parse.quote(transcode_hint(detail), safe="")
+            body = b"preview encoding failed"
+            self.send_response(422)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-TSF-Reason", reason)
+            self.send_header("X-TSF-Hint", hint)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if not connected():
             return
         if data is None:
@@ -11973,11 +12932,23 @@ class Handler(BaseHTTPRequestHandler):
             if not fp:
                 self._json({"state": "missing"}, 404)
                 return
-            state = playback_variant_state(fp, quality)
+            info = playback_variant_info(fp, quality)
+            state = info["state"]
             if state in ("pending", "cooling") and query.get("parts") == ["1"]:
                 self._json({"state": "parts", "seconds": PREVIEW_PART_SECONDS})
             else:
-                self._json({"state": state})
+                # 页面轮询本身就要能推进转码：否则 RecentClips 等不触发 /api/kick 的场景
+                # 会永远停在 pending（以前表现为「转码总是失败/一直缓冲」）。
+                if state == "pending":
+                    spawn_variant(fp, quality)
+                payload = {"state": state}
+                if info.get("percent"):
+                    payload["percent"] = info["percent"]
+                if info.get("error"):
+                    payload["error"] = info["error"]
+                if info.get("hint"):
+                    payload["hint"] = info["hint"]
+                self._json(payload)
         elif path == "/api/events":
             self._json(list_events(trips=True))
         elif path == "/api/live/ready":
@@ -12015,11 +12986,14 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError, TypeError) as exc:
                 self._json(dict(ok=False, msg='无法读取存储分配：' + str(exc)), 400)
         elif path == "/api/settings":
-            self._json({"ok": True, "auto_update": load_settings().get("auto_update", True),
-                        "ui_style": load_settings().get("ui_style", "default"),
+            saved = load_settings()
+            self._json({"ok": True, "auto_update": saved.get("auto_update", True),
+                        "ui_style": saved.get("ui_style", "default"),
                         "brand_name": brand_name(), "brand_default": BRAND_NAME_DEFAULT,
-                        "brand_logo": load_settings().get("brand_logo", ""),
+                        "brand_logo": saved.get("brand_logo", ""),
                         "brand_logo_v": brand_logo_ver(),
+                        "remote_quality": saved.get("remote_quality", "480p"),
+                        "retention": retention_values(),
                         "auto_checked": AUTO_UPD["last_check"], "auto_msg": AUTO_UPD["last_result"]})
         elif path == "/api/font":
             fp = _wm_font()
@@ -12030,7 +13004,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/prewarm":
             # 480p 预热进度 (调试/自检用): done=累计转好路数, last=最近做的事件
             self._json({"on": PREWARM["on"], "done": PREWARM["done"], "last": PREWARM["last"],
-                        "q": PREWARM_Q, "busy_users": USER_TRANS[0],
+                        "q": prewarm_quality() or "orig", "busy_users": USER_TRANS[0],
                         "media_active": MEDIA_ACTIVE[0]})
         elif path == "/api/brand/logo":
             data, ct = brand_logo_bytes()
@@ -12073,8 +13047,11 @@ class Handler(BaseHTTPRequestHandler):
             if not d or not os.path.isdir(d):
                 self._json({"ok": False, "msg": "目录不存在或不在 /archive 内"}, 404)
                 return
+            _hidden = {os.path.basename(TRANSCODE_DIR), ".thumbs"}
             dirs, files = [], []
             for e in sorted(os.listdir(d)):
+                if e in _hidden:
+                    continue
                 ep = os.path.join(d, e)
                 if os.path.isdir(ep):
                     dirs.append(e)
@@ -12194,6 +13171,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "video/mp4")
                 self.send_header("Content-Length", str(length))
                 self.send_header("Accept-Ranges", "bytes")
+                # 归档文件名带时间戳, 内容不会再变: 允许浏览器长期缓存, 拖动/重播不必回源。
+                # 但本次是「目标画质尚未转好, 暂时用替代档/原画顶上」时不能长缓存,
+                # 否则目标档生成后浏览器仍拿旧缓存。
+                try:
+                    info = os.stat(fp)
+                    self.send_header("ETag", '"%x-%x-%x"' % (info.st_ino, info.st_mtime_ns, info.st_size))
+                except OSError:
+                    pass
+                if variant_note:
+                    self.send_header("Cache-Control", "private, max-age=30")
+                else:
+                    self.send_header("Cache-Control", "private, max-age=604800, immutable")
                 if variant_note:
                     self.send_header("X-TSF-Variant", variant_note)   # 本次暂用替代档/原画, 后台正在转目标档
                 if rng:
@@ -12562,6 +13551,58 @@ class Handler(BaseHTTPRequestHandler):
                 return
             save_settings({"ui_style": st})
             self._json({"ok": True, "style": st})
+            return
+        if path == "/api/settings/retention":
+            body = self._read_json()
+            if body == "TOOBIG" or not isinstance(body, dict):
+                self._json({"ok": False, "msg": "参数错误"}, 400)
+                return
+            try:
+                result = save_retention(body)
+            except (OSError, ValueError, TypeError) as exc:
+                self._json({"ok": False, "msg": str(exc)}, 400)
+                return
+            self._json(result)
+            return
+        if path == "/api/settings/paths":
+            body = self._read_json()
+            if body == "TOOBIG" or not isinstance(body, dict):
+                self._json({"ok": False, "msg": "参数错误"}, 400)
+                return
+            try:
+                result = save_paths(body)
+            except (OSError, ValueError, TypeError) as exc:
+                self._json({"ok": False, "msg": str(exc)}, 400)
+                return
+            self._json(result)
+            return
+        if path == "/api/admin/cleanup-transcode":
+            try:
+                result = cleanup_transcode()
+            except OSError as exc:
+                self._json({"ok": False, "msg": str(exc)}, 500)
+                return
+            self._json(result)
+            return
+        if path == "/api/admin/cleanup-archive":
+            try:
+                result = cleanup_archive()
+            except OSError as exc:
+                self._json({"ok": False, "msg": str(exc)}, 500)
+                return
+            self._json(result)
+            return
+        if path == "/api/playback/quality":
+            body = self._read_json()
+            if body == "TOOBIG" or not isinstance(body, dict):
+                self._json({"ok": False, "msg": "参数错误"}, 400)
+                return
+            quality = str(body.get("quality") or "")
+            if quality not in PLAYBACK_QUALITIES:
+                self._json({"ok": False, "msg": "画质参数错误"}, 400)
+                return
+            save_settings({"remote_quality": quality})
+            self._json({"ok": True, "quality": quality})
             return
         if path == "/api/ota/auto":
             body = self._read_json()

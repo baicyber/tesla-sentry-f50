@@ -330,7 +330,8 @@ def open_live_overview(browser, base, camera_count, quality='orig', init_script=
     if init_script:
         page.add_init_script(init_script)
     page.goto(base)
-    page.locator('#tab-live').click()
+    page.locator('#tabs [data-category="RecentClips"]').click()
+    page.locator('#live-btn').click()
     page.locator('#lv-iv').select_option('0')
     page.wait_for_function("""count => followLatest && activeVideos().length === count &&
         activeVideos().every(v => v.videoHeight && !v.paused && v.currentTime > .4)""", arg=camera_count)
@@ -614,7 +615,8 @@ def check(root, sample, ffmpeg, chrome, mbps, native_hls, entry, quality, viewer
             page.on('pageerror', lambda e: errors.append(str(e)))
             page.goto(base)
             if entry == 'live':
-                page.locator('#tab-live').click()
+                page.locator('#tabs [data-category="RecentClips"]').click()
+                page.locator('#live-btn').click()
             else:
                 page.locator(f'#tabs [data-category="{category}"]').click()
                 page.locator('#grid .card').first.click()

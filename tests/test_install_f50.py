@@ -30,7 +30,8 @@ class InstallTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module.InstallError, '路径'):
             self.installer.validate_options()
 
-    def test_disk_budget_includes_full_image_archive_cache_and_reserve(self):
+    def test_disk_budget_includes_full_image_archive_and_reserve(self):
+        # 转码缓存放在归档区内(数据卡), 需计入缓存预算: 1G 镜像 + 2G 归档 + 4G 缓存 + 10G 安全预留
         self.assertEqual(self.installer.required_bytes(), 17 * (1 << 30))
 
     def test_existing_unmanaged_install_is_never_overwritten(self):
@@ -54,9 +55,14 @@ class InstallTest(unittest.TestCase):
                                  'losetup': '/sbin/losetup', 'loop': '/dev/loop3'}
         conf = self.installer.configuration()
         self.assertIn('TSF_CARD_UUID=new-card-uuid\n', conf)
-        self.assertIn('TSF_CACHE=/mnt/mmc/tesla-sentry/cache\n', conf)
+        self.assertIn('TSF_CACHE=/opt/tesla-sentry/cache\n', conf)
+        self.assertIn('TSF_TRANSCODE_DIR=/mnt/mmc/tesla-sentry/archive/transcode_cache\n', conf)
+        self.assertIn('TSF_VIDEO_ROOT=/mnt/mmc/tesla-sentry\n', conf)
+        self.assertIn('TSF_IMG=/mnt/mmc/tesla-sentry/img/teslacam.img\n', conf)
+        self.assertNotIn('.transcode', conf)
         self.assertNotIn('/opt/mu300', conf)
         self.assertIn('TSF_DRIVE_MAX_GB=1\n', conf)
+        self.assertIn('TSF_RECENT_MAX_GB=12\n', conf)
 
     def test_cron_merge_preserves_other_jobs_and_is_idempotent(self):
         original = '# local tasks\n0 * * * * /usr/bin/backup\n'

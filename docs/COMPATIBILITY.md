@@ -173,7 +173,7 @@ CPU 实测参考（F50，8 核 A76/A55 混合）：SEI 遥测 40 秒片段首次
 | `TSF_LOOP` | `/dev/loop3` | 归档用的 loop 设备 |
 | `TSF_LOSETUP` | 有 `/opt/mu300/busybox-bin/losetup` 就用它，否则走 PATH | 精简系统可指定 busybox 版 |
 | `TSF_GADGET` | `/sys/kernel/config/usb_gadget/linux` | 现有 gadget 目录名各设备不同，自检脚本不会改它，装错时手工指定 |
-| `TSF_CACHE` | 有 `/opt/mu300` 就用它，否则 `$TSF_DIR/cache` | 缩略图/遥测/合成临时缓存 |
+| `TSF_CACHE` | `$TSF_DIR/cache`（安装目录下，按用途分子目录） | 缩略图/遥测/合成临时缓存 |
 | `TSF_FFMPEG` / `TSF_FFPROBE` | 同上策略，否则走 PATH | 缩略图与转码 |
 | `TSF_MEDIA_CONN` | `8` | 视频流并发上限（弱设备调小） |
 | `TSF_TEL_CONN` | `1` | 遥测解码并发（单核设备保持 1） |

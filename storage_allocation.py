@@ -95,14 +95,30 @@ def save(values, path=None):
             os.unlink(temporary)
 
 
-def tree_usage(path, seen=None):
-    """Count hardlinked files once; exclude symlinks and use allocated blocks for budget."""
+def tree_usage(path, seen=None, skip=None):
+    """Count hardlinked files once; exclude symlinks; skip dirs whose realpath is in skip.
+
+    skip 用于把落在归档区内的转码缓存排除在归档用量之外 (它单独计入缓存预算)。
+    """
     seen = seen if seen is not None else set()
+    skip = skip or set()
     logical = allocated = 0
     if not Path(path).exists():
         return logical, allocated
     for root, dirs, files in os.walk(path):
-        dirs[:] = [name for name in dirs if not Path(root, name).is_symlink()]
+        kept = []
+        for name in dirs:
+            sub = Path(root, name)
+            if sub.is_symlink():
+                continue
+            if skip:
+                try:
+                    if os.path.realpath(sub) in skip:
+                        continue
+                except OSError:
+                    pass
+            kept.append(name)
+        dirs[:] = kept
         for name in files:
             target = Path(root, name)
             try:
@@ -125,15 +141,23 @@ def snapshot(image, archive, cache):
     filesystem = os.statvfs(image.parent)
     image_allocated = getattr(info, 'st_blocks', (info.st_size + 511) // 512) * 512
     seen = {(info.st_dev, info.st_ino)}
-    archive_used, archive_allocated = tree_usage(archive, seen)
+    # 转码缓存落在归档区内: 统计归档用量时排除它, 再单独计入缓存预算
+    skip = set()
+    try:
+        skip.add(os.path.realpath(cache))
+    except OSError:
+        pass
+    archive_used, archive_allocated = tree_usage(archive, seen, skip)
     cache_parent = cache
     while not cache_parent.exists() and cache_parent != cache_parent.parent:
         cache_parent = cache_parent.parent
-    cache_on_card = cache_parent.stat().st_dev == info.st_dev
+    try:
+        cache_on_card = cache_parent.stat().st_dev == info.st_dev
+    except OSError:
+        cache_on_card = False
     cache_allocated = 0
     if cache_on_card:
-        for name in ('res-cache', 'thumbs', 'stitch-tmp', 'tel-cache'):
-            cache_allocated += tree_usage(cache / name, seen)[1]
+        cache_allocated = tree_usage(cache, seen)[1]
     free = filesystem.f_bavail * filesystem.f_frsize
     return dict(total_bytes=filesystem.f_blocks * filesystem.f_frsize, free_bytes=free,
                 budget_bytes=free + image_allocated + archive_allocated + cache_allocated,
@@ -142,5 +166,33 @@ def snapshot(image, archive, cache):
 
 
 def check_budget(values, usb_gib, disk):
-    if required_bytes(values, usb_gib, disk.get('cache_gib', CACHE_GIB)) > disk['budget_bytes']:
-        raise ValueError('容量分配超过可用预算（包含缓存预算和安全预留空间）')
+    need = required_bytes(values, usb_gib, disk.get('cache_gib', CACHE_GIB))
+    if need > disk['budget_bytes']:
+        raise ValueError(
+            '容量分配超过归档所在盘的可用容量 %.1f GiB：需要 %.1f（镜像 %d + 归档上限 %d + 缓存 %d + 安全预留 %d），'
+            '可用 %.1f。规则：归档区上限 + 镜像容量（连同缓存预算与安全预留）不得超过归档区所在盘；'
+            '可把归档总上限、镜像容量或安全预留调小，或将视频存储改到更大的盘。'
+            % ((need - disk['budget_bytes']) / GIB, need / GIB, usb_gib,
+               values['archive_gib'], disk.get('cache_gib', CACHE_GIB),
+               values['free_target_gib'], disk['budget_bytes'] / GIB))
+
+
+def check_resize_budget(values, usb_gib, disk):
+    """调整镜像容量时按「归档实际占用」评估，而不是归档上限。
+
+    归档上限是长期清理策略，随时可以下调；把上限全额预留会让「调大 U 盘」
+    在还有很多未分配空间时也被误判为超出安全容量。缓存和安全预留仍然全额预留。
+    """
+    cache = disk.get('cache_gib', CACHE_GIB)
+    archive_actual = max(0, disk.get('archive_bytes', 0))
+    if values['archive_gib']:
+        archive_need = min(values['archive_gib'] * GIB, archive_actual)
+    else:
+        archive_need = archive_actual
+    need = usb_gib * GIB + archive_need + cache * GIB + values['free_target_gib'] * GIB
+    if need > disk['budget_bytes']:
+        raise ValueError(
+            '容量调整超出可用空间 %.1f GiB：需要 %.1f GiB（U 盘 %d + 归档实际 %.1f + 缓存 %d + 安全预留 %d），'
+            '可用 %.1f GiB。请减小 U 盘容量，或先清理归档/降低安全预留后重试。'
+            % ((need - disk['budget_bytes']) / GIB, need / GIB, usb_gib, archive_need / GIB,
+               cache, values['free_target_gib'], disk['budget_bytes'] / GIB))

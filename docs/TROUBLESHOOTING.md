@@ -80,11 +80,15 @@ cron 是否在跑：`ps | grep cron`、`cat /etc/crontabs/root`。
 
 ## 合成导出报「设备上未安装 ffmpeg」
 
-多路合成用的是静态版 ffmpeg，默认路径 `/opt/mu300/ffmpeg/ffmpeg`（含 `ffprobe`）。
+F50 是 aarch64 / OpenWrt（musl），请直接用系统包安装，不要再用 arm64 静态包：
 
-- 用**静态链接**的 aarch64 构建（如 ffbinaries 或 johnvansickle 的 static 版），OpenWrt 是 musl，glibc 动态版跑不起来
-- 安装：`mkdir -p /opt/mu300/ffmpeg && cp ffmpeg /opt/mu300/ffmpeg/ && chmod +x /opt/mu300/ffmpeg/*`
-- 路径不同可用环境变量 `TSF_FFMPEG` / `TSF_FFPROBE` 覆盖（init 脚本里传给 Python）
+```sh
+apk add ffmpeg
+./install-f50.sh --apply --install-deps --ffmpeg /usr/bin/ffmpeg
+```
+
+配置里的 `TSF_FFMPEG` / `TSF_FFPROBE` 应分别指向 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`。
+`apk` 安装的包与系统 ABI 一致，转码/缩略图最稳。路径不同时可用这两个环境变量覆盖。
 
 ## 网页上有视频，但 U 盘里看不到 / 可用空间不变
 
@@ -113,7 +117,7 @@ cron 是否在跑：`ps | grep cron`、`cat /etc/crontabs/root`。
 服务端抽帧失败留下的空文件被当成缓存。已在代码中修复（写 `.tmp.jpg` 成功且非空才落盘、命中 0 字节自动删除重建），若仍有：
 
 ```sh
-python3 -c "import glob,os;[os.remove(p) for p in glob.glob('/opt/mu300/thumbs/*') if os.path.getsize(p)==0]"
+python3 -c "import glob,os;[os.remove(p) for p in glob.glob('/opt/tesla-sentry/cache/thumbs/*') if os.path.getsize(p)==0]"
 ```
 
 顺手确认 `ffmpeg` 路径（`TSF_FFMPEG`）正确，且该片段文件大小非 0。
@@ -122,7 +126,7 @@ python3 -c "import glob,os;[os.remove(p) for p in glob.glob('/opt/mu300/thumbs/*
 
 1. **停车片段本来就没有**：SEI 只在行驶中录制时写入，哨兵片段大多没有 → 属正常
 2. 判断某片段有没有：`ffmpeg -loglevel trace -i 片段.mp4 -c copy -bsf:v trace_headers -frames:v 5 -f null - 2>&1 | grep -o 'nal_unit_type = [0-9]*' | sort | uniq -c`，出现 `6` 即有 SEI
-3. 有 SEI 但接口返回 `{ok:false}` → 删掉 `/opt/mu300/tel-cache` 对应缓存后重试
+3. 有 SEI 但接口返回 `{ok:false}` → 删掉 `/opt/tesla-sentry/cache/tel-cache` 对应缓存后重试
 
 ## 手机上展开信息卡后被视频/面板遮挡
 

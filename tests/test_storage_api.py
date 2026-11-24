@@ -18,6 +18,7 @@ class StorageIntegrationTest(unittest.TestCase):
         self.enterContext(patch.dict(os.environ, TSF_IMG=str(self.root / 'image'),
             TSF_ARCHIVE=str(self.root / 'archive'), TSF_CACHE=str(self.root / 'cache'),
             TSF_STORAGE_SETTINGS=str(self.root / 'storage.json'), TSF_SETTINGS=str(self.root / 'settings.json'),
+            TSF_CONF=str(self.root / 'tesla-sentry.conf'),
             TSF_ARCHIVE_TOTAL_GB='34', TSF_DRIVE_MAX_GB='12', TSF_FREE_MIN_MB='4096', TSF_FREE_TARGET_MB='10240'))
         (self.root / 'image').write_bytes(b'image')
         spec = importlib.util.spec_from_file_location('storage_viewer', REPO / 'sentry-viewer.py')
@@ -44,6 +45,73 @@ class StorageIntegrationTest(unittest.TestCase):
             spec.loader.exec_module(sync)
         sync.refresh_storage_settings()
         self.assertEqual(sync.FREE_MIN_MB, 3072)
+
+    def test_retention_settings_are_applied_and_written_back_to_conf(self):
+        conf = self.root / 'tesla-sentry.conf'
+        conf.write_text('TSF_DIR=/opt/tesla-sentry\nTSF_RECENT_ROLL_MIN=60\n', encoding='utf-8')
+        result = self.viewer.save_retention(dict(recent_roll_min=90, recent_keep_min=30,
+                                                 recent_max_gb=15, box_keep_days=7, box_max_gb=8))
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['conf_synced'])
+        self.assertEqual(self.viewer.RECENT_ROLL_MIN, 90)
+        self.assertEqual(self.viewer.RECENT_KEEP_MIN, 30)
+        self.assertEqual(self.viewer.RECENT_MAX_GB, 15)
+        self.assertEqual(self.viewer.BOX_KEEP_DAYS, 7)
+        self.assertEqual(self.viewer.BOX_MAX_GB, 8)
+        text = conf.read_text(encoding='utf-8')
+        self.assertIn('TSF_RECENT_ROLL_MIN=90\n', text)
+        self.assertIn('TSF_RECENT_KEEP_MIN=30\n', text)
+        self.assertIn('TSF_RECENT_MAX_GB=15\n', text)
+        self.assertIn('TSF_BOX_KEEP_DAYS=7\n', text)
+        self.assertIn('TSF_BOX_MAX_GB=8\n', text)
+        self.assertIn('TSF_DIR=/opt/tesla-sentry\n', text)
+
+    def test_retention_rejects_out_of_range_values(self):
+        for bad in (dict(recent_roll_min=99999), dict(recent_max_gb=99999),
+                    dict(recent_max_gb=-1)):
+            with self.assertRaises(ValueError):
+                self.viewer.save_retention(bad)
+        self.assertFalse((self.root / 'settings.json').exists())
+
+    def test_save_paths_writes_video_root_and_derives_paths(self):
+        conf = self.root / 'tesla-sentry.conf'
+        conf.write_text('TSF_DIR=/opt/tesla-sentry\n', encoding='utf-8')
+        # 新前端: 发送 video_root 单值
+        root = os.path.normpath('/mnt/mmc/tesla-sentry')
+        img = os.path.join(root, 'img', 'teslacam.img')
+        archive = os.path.join(root, 'archive')
+        transcode = os.path.join(archive, 'transcode_cache')
+        result = self.viewer.save_paths(dict(video_root='/mnt/mmc/tesla-sentry'))
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['conf_synced'])
+        self.assertTrue(result['restart_required'])
+        self.assertEqual(result['paths']['video_root'], root)
+        self.assertEqual(result['paths']['img'], img)
+        self.assertEqual(result['paths']['archive'], archive)
+        self.assertEqual(result['paths']['transcode'], transcode)
+        text = conf.read_text(encoding='utf-8')
+        self.assertIn('TSF_VIDEO_ROOT=' + root + '\n', text)
+        self.assertIn('TSF_IMG=' + img + '\n', text)
+        self.assertIn('TSF_ARCHIVE=' + archive + '\n', text)
+        self.assertIn('TSF_TRANSCODE_DIR=' + transcode + '\n', text)
+        self.assertIn('TSF_DIR=/opt/tesla-sentry\n', text)
+
+    def test_save_paths_accepts_legacy_img_archive_payload_and_derives_root(self):
+        conf = self.root / 'tesla-sentry.conf'
+        conf.write_text('TSF_DIR=/opt/tesla-sentry\n', encoding='utf-8')
+        # 旧前端: 发送 img+archive → 反推 root
+        result = self.viewer.save_paths(dict(img='/mnt/mmc/teslacam.img', archive='/mnt/mmc/archive'))
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['paths']['video_root'], '/mnt/mmc')
+        self.assertEqual(result['paths']['archive'], '/mnt/mmc/archive')
+
+    def test_save_paths_rejects_invalid_paths(self):
+        for bad in (dict(video_root=''),
+                    dict(video_root='relative/path'),
+                    dict(video_root='/mnt/mmc/same', img='', archive=''),
+                    dict(img='', archive='/mnt/mmc/archive')):
+            with self.assertRaises(ValueError):
+                self.viewer.save_paths(bad)
 
     def test_storage_usage_uses_usb_filesystem_and_keeps_unknown_usage_unknown(self):
         for amount in (3 << 30, None):

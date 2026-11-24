@@ -11,8 +11,17 @@ PURGE=0
 [ "$(id -u)" = "0" ] || { echo "请用 root 运行"; exit 1; }
 . /etc/tesla-sentry.conf 2>/dev/null || true
 : "${TSF_DIR:=/opt/tesla-sentry}"
-: "${TSF_IMG:=$TSF_DIR/teslacam.img}"
-: "${TSF_ARCHIVE:=/archive}"
+# 2.8.48+: 优先 VIDEO_ROOT, 否则从 IMG/ARCHIVE 反推
+if [ -z "$TSF_VIDEO_ROOT" ]; then
+    if [ -n "$TSF_ARCHIVE" ]; then
+        TSF_VIDEO_ROOT=$(dirname "$TSF_ARCHIVE")
+    elif [ -n "$TSF_IMG" ]; then
+        TSF_VIDEO_ROOT=$(dirname "$(dirname "$TSF_IMG")")
+    fi
+fi
+: "${TSF_VIDEO_ROOT:=/archive}"
+: "${TSF_IMG:=$TSF_VIDEO_ROOT/img/teslacam.img}"
+: "${TSF_ARCHIVE:=$TSF_VIDEO_ROOT/archive}"
 : "${TSF_MNT:=/tmp/teslamnt}"
 : "${TSF_CACHE:=$TSF_DIR/cache}"
 
@@ -66,7 +75,8 @@ rm -f "$TSF_DIR/sentry-viewer.py" "$TSF_DIR/tesla-live-sync.py" \
       "$TSF_DIR/tsf-check.sh" "$TSF_DIR/tsf-start.sh" \
       "$TSF_DIR/uninstall.sh" "$TSF_DIR/auth.conf" \
       "$TSF_DIR/sentry-viewer.bak.py" "$TSF_DIR"/*.log
-rm -rf "$TSF_DIR/fonts" "$TSF_CACHE/thumbs" "$TSF_CACHE/tel-cache"
+rm -rf "$TSF_DIR/fonts" "$TSF_CACHE/thumbs" "$TSF_CACHE/tel-cache" \
+       "$TSF_CACHE/stitch-tmp"
 rm -f /etc/tesla-sentry.conf
 
 if [ "$PURGE" = "1" ]; then

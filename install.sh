@@ -1,34 +1,117 @@
 #!/bin/sh
 # Tesla Sentry F50 - 一键安装脚本
-# 用法: sudo ./install.sh [选项]
-#   --size GB        虚拟U盘容量, 默认 64
-#   --port PORT      网页端口, 默认 8080
-#   --archive DIR    归档区路径, 默认 /archive
-#   --dir DIR        安装目录, 默认 /opt/tesla-sentry
-#   -h, --help       显示帮助
+#
+# 用法 1 - 简易安装 (通用 Linux / OpenWrt):
+#   sudo ./install.sh [选项]
+#     --size GB            虚拟U盘容量, 默认 64
+#     --port PORT          网页端口, 默认 8080
+#     --video-root PATH    视频存储根目录 (固定结构: <根>/img/teslacam.img + <根>/archive/transcode_cache)
+#                          默认检测 TF 卡 (/dev/mmcblk1p1), 挂载后放 <挂载点>/tesla-sentry;
+#                          未检测到 TF 卡时回退 /archive
+#     --dir DIR            程序安装目录, 默认 /opt/tesla-sentry
+#     -h, --help           显示帮助
+#
+# 用法 2 - F50 完整安装 (调用 scripts/install-f50.py):
+#   sudo ./install.sh f50 [install-f50.py 的参数...]
+#   sudo ./install.sh f50-check          # 仅预检 (默认 --apply 关闭)
+#   sudo ./install.sh f50-apply          # 预检 + 真正安装 (--apply)
+#   sudo ./install.sh f50-install        # 预检 + 安装 + 服务启动 (--apply --start)
+#   等价于: ./install-f50.sh --apply --start --data-mount /mnt/mmc ...
+#
+# install-f50.sh 已内嵌进本脚本: 直接 exec 同一套 Python 安装器,
+# 可执行离线 runtime (runtime/bin/python3) 或系统 python3. 旧 install-f50.sh 保留为
+# 兼容别名, 内容仅为调用 ./install.sh f50.
+
 set -e
 
+# ---- 公共工具函数 ----
+say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# ---- 子命令分发: f50 / f50-check / f50-apply / f50-install ----
+# install-f50.py 的启动器; install-f50.sh 原 20 行逻辑全部内嵌于此
+_run_f50_installer() {
+    local sub="$1"; shift
+    local src py
+    src=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+    py=""
+    if [ -d "$src/runtime" ]; then
+        case "$(uname -m)" in
+            aarch64) py="$src/runtime/bin/python3" ;;
+            *) die "离线运行环境仅支持 aarch64 架构的 F50" ;;
+        esac
+    fi
+    if [ -z "$py" ]; then
+        py=$(command -v python3 || true)
+        [ -n "$py" ] || die "需要 Python 3.11+ (OpenWrt: opkg install python3 python3-pip)"
+        "$py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
+            || die "需要 Python 3.11 或更新版本"
+    fi
+    local extra_args=()
+    case "$sub" in
+        f50-check)   : ;;                           # 仅预检
+        f50-apply)   extra_args+=(--apply) ;;
+        f50-install) extra_args+=(--apply --start) ;;
+        f50)         : ;;                           # 用户自己传参数, 不追加
+        *) die "未知子命令: $sub" ;;
+    esac
+    say "调用 scripts/install-f50.py (子命令: $sub)"
+    exec "$py" -B "$src/scripts/install-f50.py" "${extra_args[@]}" "$@"
+}
+
+case "${1:-}" in
+    f50|f50-check|f50-apply|f50-install)
+        sub_cmd="$1"; shift; _run_f50_installer "$sub_cmd" "$@" ;;
+esac
+
+# ---- 正常 install.sh 选项解析 (非子命令路径) ----
 SIZE_GB=64
 PORT=8080
-ARCHIVE=/archive
+VIDEO_ROOT=""
 TSF_DIR=/opt/tesla-sentry
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --size)    SIZE_GB="$2"; shift 2 ;;
-        --port)    PORT="$2"; shift 2 ;;
-        --archive) ARCHIVE="$2"; shift 2 ;;
-        --dir)     TSF_DIR="$2"; shift 2 ;;
-        -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+        --size)       SIZE_GB="$2"; shift 2 ;;
+        --port)       PORT="$2"; shift 2 ;;
+        --video-root) VIDEO_ROOT="$2"; shift 2 ;;
+        --archive|--img) echo "[提示] $1 已废弃, 请改用 --video-root"; shift 2 ;;
+        --dir)        TSF_DIR="$2"; shift 2 ;;
+        -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
         *) echo "未知参数: $1 (用 --help 查看)"; exit 1 ;;
     esac
 done
 
-IMG="$TSF_DIR/teslacam.img"
 CONF=/etc/tesla-sentry.conf
 
-say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
-die() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
+# 视频存储根目录默认放到 TF 卡: F50 上 /dev/mmcblk1p1 一般挂载到 /mnt/mmc
+TF_MOUNT=""
+if [ -r /proc/mounts ]; then
+    TF_MOUNT=$(awk '$1 ~ /mmcblk1p1$/ {print $2; exit}' /proc/mounts 2>/dev/null || true)
+fi
+[ -z "$TF_MOUNT" ] && [ -d /mnt/mmc ] && TF_MOUNT=/mnt/mmc
+
+if [ -z "$VIDEO_ROOT" ]; then
+    if [ -n "$TF_MOUNT" ]; then
+        VIDEO_ROOT="$TF_MOUNT/tesla-sentry"
+        say "检测到 TF 卡 ($TF_MOUNT), 视频存储默认放在 $VIDEO_ROOT"
+    else
+        VIDEO_ROOT=/archive
+        echo "  [提示] 未检测到 TF 卡 (/dev/mmcblk1p1)。建议把视频存储装到 TF 卡上;"
+        echo "         F50 默认设备 /dev/mmcblk1p1, 挂载点 /mnt/mmc。"
+        echo "         可用 --video-root 指定根目录, 或挂载 TF 卡后重新运行。"
+    fi
+fi
+
+# 从 VIDEO_ROOT 固定派生三个路径
+IMG="$VIDEO_ROOT/img/teslacam.img"
+ARCHIVE="$VIDEO_ROOT/archive"
+TRANSCODE_DIR="$ARCHIVE/transcode_cache"
+
+say "视频存储根目录: $VIDEO_ROOT"
+say "  车机U盘镜像: $IMG"
+say "  归档区:     $ARCHIVE"
+say "  转码缓存:   $TRANSCODE_DIR"
 
 # ---------------- 0. 权限与环境 ----------------
 [ "$(id -u)" = "0" ] || die "请用 root 运行 (sudo ./install.sh)"
@@ -73,15 +156,21 @@ if [ "$FREE_MB" != "?" ]; then
     fi
 fi
 
-# 缓存目录 (缩略图/遥测/合成临时文件): F50 沿用 /opt/mu300, 其它设备放安装目录下
-if [ -d /opt/mu300 ]; then CACHE_DIR=/opt/mu300; else CACHE_DIR="$TSF_DIR/cache"; fi
-mkdir -p "$CACHE_DIR/thumbs" "$CACHE_DIR/tel-cache" 2>/dev/null || true
+# 程序缓存 (缩略图/遥测/合成临时文件): 放在安装目录 cache/ 下, 不占数据卡
+CACHE_DIR="$TSF_DIR/cache"
+mkdir -p "$CACHE_DIR/thumbs" "$CACHE_DIR/tel-cache" "$CACHE_DIR/stitch-tmp" 2>/dev/null || true
 
-# ffmpeg 探测: 缩略图与部分导出功能依赖, 缺了只是没有缩略图
-FFMPEG="$(command -v ffmpeg 2>/dev/null || echo /opt/mu300/ffmpeg/ffmpeg)"
-FFPROBE="$(command -v ffprobe 2>/dev/null || echo /opt/mu300/ffmpeg/ffprobe)"
+# ffmpeg 探测: 缩略图与部分导出功能依赖。F50 是 aarch64/OpenWrt, 推荐 apk add ffmpeg,
+# 生成的配置固定写 /usr/bin, 不再优先使用来源不明的 arm64 静态包。
+if [ -x /usr/bin/ffmpeg ] && [ -x /usr/bin/ffprobe ]; then
+    FFMPEG=/usr/bin/ffmpeg
+    FFPROBE=/usr/bin/ffprobe
+else
+    FFMPEG="$(command -v ffmpeg 2>/dev/null || echo /usr/bin/ffmpeg)"
+    FFPROBE="$(command -v ffprobe 2>/dev/null || echo /usr/bin/ffprobe)"
+fi
 if [ -x "$FFMPEG" ]; then say "ffmpeg: $FFMPEG"
-else echo "  [提示] 未找到 ffmpeg, 列表缩略图会缺失 (装一个即可: opkg/apt install ffmpeg)"; fi
+else echo "  [提示] 未找到 ffmpeg, 列表缩略图会缺失 (F50 执行 apk add ffmpeg 即可)"; fi
 
 # ---------------- 1. 目录与文件 ----------------
 say "安装到 $TSF_DIR ..."
@@ -101,7 +190,8 @@ cp "$SRC_DIR/scripts/tsf-maintenance.sh" "$TSF_DIR/tsf-maintenance.sh"
 cp "$SRC_DIR/scripts/mkexfat.py"     "$TSF_DIR/mkexfat.py"
 chmod +x "$TSF_DIR"/*.sh "$TSF_DIR"/*.py
 
-mkdir -p "$ARCHIVE"/SentryClips "$ARCHIVE"/SavedClips "$ARCHIVE"/RecentClips \
+mkdir -p "$VIDEO_ROOT"/img "$TRANSCODE_DIR" \
+         "$ARCHIVE"/SentryClips "$ARCHIVE"/SavedClips "$ARCHIVE"/RecentClips "$ARCHIVE"/DriveClips \
          "$ARCHIVE"/.skins "$ARCHIVE"/boombox-queue "$ARCHIVE"/boombox-done "$ARCHIVE"/files
 
 # ---------------- 2. 镜像 ----------------
@@ -139,34 +229,112 @@ ls -lh "$IMG"
 
 # ---------------- 3. 配置 ----------------
 say "写入配置 $CONF ..."
-cat > "$CONF" <<EOF
+
+# ---- 3.1 升级场景: 备份旧 conf + 迁移旧值 ----
+# 如果旧 conf 存在, 先备份一份用于回滚 (install-f50.sh 和其他升级路径也这么做)
+CONF_BAK=""
+if [ -f "$CONF" ]; then
+    CONF_BAK="${CONF}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp "$CONF" "$CONF_BAK"
+    say "旧配置已备份 -> $CONF_BAK  (可直接 cp 回去回滚)"
+    # 解析旧 conf 的 TSF_* 值到当前 shell
+    set -a
+    . "$CONF" 2>/dev/null || true
+    set +a
+fi
+
+# 旧版迁移: TSF_TRANSCODE_DIR 旧形态是 /.transcode, 2.8.48 起固定 transcode_cache
+if [ -n "$TSF_TRANSCODE_DIR" ]; then
+    case "$TSF_TRANSCODE_DIR" in
+        */.transcode)
+            NEW_TC="${TSF_TRANSCODE_DIR%/.transcode}/transcode_cache"
+            say "迁移 TSF_TRANSCODE_DIR: $TSF_TRANSCODE_DIR -> $NEW_TC"
+            TSF_TRANSCODE_DIR="$NEW_TC"
+            ;;
+    esac
+fi
+
+# 旧版迁移: 如果用户没传 --video-root 且旧 conf 也没有 TSF_VIDEO_ROOT,
+# 尝试从旧分散键 TSF_ARCHIVE 反推一个合理的 VIDEO_ROOT
+if [ -z "$VIDEO_ROOT" ] && [ -z "$TSF_VIDEO_ROOT" ] && [ -n "$TSF_ARCHIVE" ]; then
+    VIDEO_ROOT=$(dirname "$TSF_ARCHIVE")
+    say "从旧 TSF_ARCHIVE 推导 VIDEO_ROOT = $VIDEO_ROOT"
+fi
+[ -z "$VIDEO_ROOT" ] && VIDEO_ROOT="$TSF_VIDEO_ROOT"
+
+# ---- 3.2 合并策略 ----
+# 视频路径 (VIDEO_ROOT / IMG / ARCHIVE / TRANSCODE_DIR):
+#   - 如果 install 命令行显式传了 --video-root → 用新派生值
+#   - 否则用旧 conf 里的值 (保留用户已有存储位置)
+# 其他参数 (PORT / IDLE / GADGET / FFMPEG 等):
+#   - 旧 conf 里已有 → 继承 (用户改过的值不被覆盖)
+#   - 没有 → 用 install 默认值
+[ -z "$VIDEO_ROOT" ]        && VIDEO_ROOT="${TSF_VIDEO_ROOT:-}"
+[ -z "$IMG" ]               && IMG="${TSF_IMG:-}"
+[ -z "$ARCHIVE" ]           && ARCHIVE="${TSF_ARCHIVE:-}"
+[ -z "$TRANSCODE_DIR" ]     && TRANSCODE_DIR="${TSF_TRANSCODE_DIR:-}"
+# 如果只拿到了部分旧键, 补全:
+[ -z "$VIDEO_ROOT" ] && [ -n "$ARCHIVE" ] && VIDEO_ROOT=$(dirname "$ARCHIVE")
+[ -z "$IMG" ]        && [ -n "$VIDEO_ROOT" ] && IMG="$VIDEO_ROOT/img/teslacam.img"
+[ -z "$ARCHIVE" ]    && [ -n "$VIDEO_ROOT" ] && ARCHIVE="$VIDEO_ROOT/archive"
+[ -z "$TRANSCODE_DIR" ] && [ -n "$ARCHIVE" ] && TRANSCODE_DIR="$ARCHIVE/transcode_cache"
+
+[ -z "$TSF_VIDEO_ROOT" ]    && TSF_VIDEO_ROOT="$VIDEO_ROOT"
+[ -z "$TSF_IMG" ]           && TSF_IMG="$IMG"
+[ -z "$TSF_ARCHIVE" ]       && TSF_ARCHIVE="$ARCHIVE"
+[ -z "$TSF_TRANSCODE_DIR" ] && TSF_TRANSCODE_DIR="$TRANSCODE_DIR"
+
+# 其他参数: 旧 conf 有值就继承, 没有就用 install 默认
+[ -z "$TSF_PORT" ]          && TSF_PORT="$PORT"
+[ -z "$TSF_DIR" ]           && TSF_DIR="$TSF_DIR"
+[ -z "$TSF_IDLE" ]          && TSF_IDLE=600
+[ -z "$TSF_USB_TIMEOUT" ]   && TSF_USB_TIMEOUT=300
+[ -z "$TSF_LOOP" ]          && TSF_LOOP=/dev/loop3
+[ -z "$TSF_MNT" ]           && TSF_MNT=/tmp/teslamnt
+[ -z "$TSF_LOSETUP" ]       && TSF_LOSETUP=
+[ -z "$TSF_GADGET" ]        && TSF_GADGET="$GADGET"
+[ -z "$TSF_CACHE" ]         && TSF_CACHE="$CACHE_DIR"
+[ -z "$TSF_FFMPEG" ]        && TSF_FFMPEG="$FFMPEG"
+[ -z "$TSF_FFPROBE" ]       && TSF_FFPROBE="$FFPROBE"
+
+# ---- 3.3 原子写入 ----
+TMP_CONF="${CONF}.tmp.$$"
+cat > "$TMP_CONF" <<EOF
 # Tesla Sentry F50 配置 (由 install.sh 生成)
+# $(date -Iseconds)
+$( [ -n "$CONF_BAK" ] && echo "# 升级自: $CONF_BAK" || true )
 TSF_DIR=$TSF_DIR
+TSF_VIDEO_ROOT=$VIDEO_ROOT
 TSF_IMG=$IMG
 TSF_ARCHIVE=$ARCHIVE
-TSF_MNT=/tmp/teslamnt
-TSF_LOOP=/dev/loop3
-TSF_PORT=$PORT
-TSF_IDLE=600
-TSF_USB_TIMEOUT=300
-TSF_LOSETUP=
-TSF_GADGET=$GADGET
-TSF_CACHE=$CACHE_DIR
-TSF_FFMPEG=$FFMPEG
-TSF_FFPROBE=$FFPROBE
-TSF_USB_LOCK=/tmp/tsf-usb.lock
+TSF_MNT=${TSF_MNT:-/tmp/teslamnt}
+TSF_LOOP=${TSF_LOOP:-/dev/loop3}
+TSF_PORT=${TSF_PORT:-8080}
+TSF_IDLE=${TSF_IDLE:-600}
+TSF_USB_TIMEOUT=${TSF_USB_TIMEOUT:-300}
+TSF_LOSETUP=${TSF_LOSETUP:-}
+TSF_GADGET=${TSF_GADGET:-$GADGET}
+TSF_CACHE=${TSF_CACHE:-$CACHE_DIR}
+TSF_TRANSCODE_DIR=${TSF_TRANSCODE_DIR:-$TRANSCODE_DIR}
+TSF_FFMPEG=${TSF_FFMPEG:-$FFMPEG}
+TSF_FFPROBE=${TSF_FFPROBE:-$FFPROBE}
+TSF_USB_LOCK=${TSF_USB_LOCK:-/tmp/tsf-usb.lock}
 
 # ---- 归档清理 / 在线同步参数 (改完重启服务生效; 0 = 关闭对应策略) ----
 # 这些参数以前没写进 conf, OpenWrt 启动脚本又只导出固定变量,
 # 导致在 F50 上照 README 改清理窗口/保留天数完全不生效。
-TSF_RECENT_ROLL_MIN=60
-TSF_RECENT_KEEP_MIN=60
-TSF_BOX_KEEP_DAYS=14
-TSF_BOX_MAX_GB=12
-TSF_FREE_MIN_MB=4096
-TSF_FREE_TARGET_MB=10240
-TSF_LIVE_INTERVAL=15
+TSF_RECENT_ROLL_MIN=${TSF_RECENT_ROLL_MIN:-60}
+TSF_RECENT_KEEP_MIN=${TSF_RECENT_KEEP_MIN:-60}
+TSF_RECENT_MAX_GB=${TSF_RECENT_MAX_GB:-12}
+TSF_BOX_KEEP_DAYS=${TSF_BOX_KEEP_DAYS:-14}
+TSF_BOX_MAX_GB=${TSF_BOX_MAX_GB:-12}
+TSF_FREE_MIN_MB=${TSF_FREE_MIN_MB:-4096}
+TSF_FREE_TARGET_MB=${TSF_FREE_TARGET_MB:-10240}
+TSF_LIVE_INTERVAL=${TSF_LIVE_INTERVAL:-15}
 EOF
+mv "$TMP_CONF" "$CONF"
+chmod 644 "$CONF"
+[ -n "$CONF_BAK" ] && say "升级完成. 如遇问题可直接回滚: cp $CONF_BAK $CONF"
 
 # ---------------- 3.5 访问认证 ----------------
 AUTH_CONF="$TSF_DIR/auth.conf"

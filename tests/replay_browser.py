@@ -216,7 +216,7 @@ def check_loading_controls(browser, base):
             page.locator("#grid .card").first.wait_for()
             page.route("**/api/timeline?*", hold_timeline)
             if category == "live":
-                page.locator("#tab-live").click()
+                page.locator("#live-btn").click()
             else:
                 page.locator("#grid .card").first.click()
             expect(page.locator("#vgrid")).to_have_text("正在加载录像…")
@@ -578,7 +578,8 @@ def main(root, ffmpeg, chrome, viewer_path, minute_clips=False):
                 page.locator("#grid .card").last.click()
                 page.wait_for_function("curClips.length === 2 && curClipIx === 1 && libraryCat === 'DriveClips'")
                 page.locator(".pback").click()
-            page.locator("#tab-live").click()
+            page.locator("#tabs .tab").nth(2).click()
+            page.locator("#live-btn").click()
             page.wait_for_function("liveMode && curClipIx === 1 && activeVideos()[0]?.readyState >= 2")
             seek(.5)
             page.locator("#ppbtn").click()

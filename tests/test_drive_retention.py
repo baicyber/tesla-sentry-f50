@@ -201,6 +201,57 @@ class DriveRetentionTest(unittest.TestCase):
         self.viewer.DriveArchive().review()
         self.assertFalse((self.retained / name).exists())
 
+    def test_unlimited_archive_keeps_one_hour_roll_after_drive_review_failure(self):
+        """归档总上限为 0 时「最近1小时监控」仍按窗口清理; 行车记录检查失败也不能拖累它。"""
+        old = self.clip("08-00-00")
+        edge = self.clip("09-30-00")
+        newest = self.clip("10-31-00")
+        drive = self.viewer.DriveArchive()
+        with patch.object(self.viewer, "refresh_storage_settings"), \
+             patch.object(self.viewer, "ARCHIVE_TOTAL_GB", 0), \
+             patch.object(self.viewer, "roll_archive_total", return_value=0), \
+             patch.object(drive, "review", side_effect=OSError("boom")):
+            self.viewer.disk_guard_cycle(drive)
+        self.assertFalse((self.recent / old).exists())
+        self.assertFalse((self.recent / edge).exists())
+        self.assertTrue((self.recent / newest).is_dir())
+
+    def test_recent_size_cap_evicts_oldest_even_when_archive_unlimited(self):
+        """归档总量不限(0)时, 「最近1小时监控」体积上限仍独立淘汰最旧片段,
+        但保留最近必留窗口内的片段 (6 路 1 小时约 12GiB 的兜底)。"""
+        old = self.clip("08-00-00")
+        edge = self.clip("09-00-00")
+        newest = self.clip("10-00-00")
+        self.viewer.RECENT_KEEP_MIN = 60
+        # 每个事件约 256B, 预算 300B 只够容纳 1 个
+        self.viewer.RECENT_MAX_GB = 300 / (1 << 30)
+        fake_now = self.viewer.time.time() + 3600   # 让目录 mtime 不再被视为"正在写入"
+        with patch.object(self.viewer, "ARCHIVE_TOTAL_GB", 0), \
+             patch.object(self.viewer.time, "time", return_value=fake_now):
+            removed = self.viewer.roll_recent_size()
+        self.assertEqual(removed, 1)
+        self.assertFalse((self.recent / old).exists())          # 最旧且在必留窗口外 -> 删除
+        self.assertTrue((self.recent / edge).is_dir())          # 必留窗口内 -> 保留
+        self.assertTrue((self.recent / newest).is_dir())
+
+    def test_prune_orphan_transcodes_removes_cache_without_source(self):
+        """归档视频被删后, 对应的转码缓存自动清除; 有源文件的缓存保留。"""
+        transcode = Path(self.viewer.RES_DIR)
+        transcode.mkdir(parents=True, exist_ok=True)
+        # 有源文件的缓存
+        src = self.recent / "2026-11-20_10-00-00" / "clip-front.mp4"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(b"v" * 100)
+        valid_name = os.path.basename(self.viewer._variant_path(str(src), "480p"))
+        (transcode / valid_name).write_bytes(b"cached")
+        # 孤儿缓存 (源文件不存在)
+        orphan = "a" * 32 + ".mp4"
+        (transcode / orphan).write_bytes(b"orphan")
+        removed = self.viewer.prune_orphan_transcodes(force=True)
+        self.assertEqual(removed, 1)
+        self.assertFalse((transcode / orphan).exists())
+        self.assertTrue((transcode / valid_name).exists())
+
 
 if __name__ == "__main__":
     unittest.main()

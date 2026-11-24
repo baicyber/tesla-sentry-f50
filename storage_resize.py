@@ -109,13 +109,41 @@ def attach(lun, image):
 
 
 def detach(binding, lun):
-    """断开车机导出: 先摘镜像, 再松控制器。"""
-    write_retry(lun, '\n')
-    if read_attr(lun):
-        raise ResizeError('未能解除录像镜像绑定')
+    """断开车机导出。必须先解绑控制器, 再清空 LUN。
+
+    车机还在读写 LUN 时直接写空 lun.0/file 会被内核拒绝 (EBUSY, 表现为
+    `[Errno 16] Resource busy`), 这正是以前容量调整总是失败的原因。先摘 UDC
+    让主机侧看到拔出, LUN 就不会再被占用; 清空后再由调用方重新绑定控制器。
+    """
     write_retry(binding, '\n')
     if read_attr(binding):
         raise ResizeError('未能断开车机导出')
+    try:
+        write_retry(lun, '\n')
+    except OSError as exc:
+        # 个别固件在拔掉 UDC 后还会短暂持有 LUN, 等一拍再试一次。
+        if exc.errno != errno.EBUSY:
+            raise
+        time.sleep(1.0)
+        write_retry(lun, '\n')
+    if read_attr(lun):
+        raise ResizeError('未能解除录像镜像绑定')
+
+
+def replace_retry(source, destination, attempts=10, delay=0.5):
+    """镜像可能还被 loop 设备/主机的旧句柄短暂占用, rename 会报 EBUSY。
+    先等一会儿再换, 不要把这个瞬时占用直接甩给用户。"""
+    last = None
+    for index in range(attempts):
+        try:
+            os.replace(source, destination)
+            return
+        except OSError as exc:
+            last = exc
+            if exc.errno != errno.EBUSY or index + 1 >= attempts:
+                raise
+            time.sleep(delay)
+    raise last
 
 
 def resize(image, size_gib, gadget, udc, mkexfat, progress):
@@ -171,7 +199,7 @@ def resize(image, size_gib, gadget, udc, mkexfat, progress):
         # A hard link retains the old inode without copying its video data.
         os.link(image, backup)
         sync_directory(image.parent)
-        os.replace(temporary, image)
+        replace_retry(temporary, image)
         published = True
         sync_directory(image.parent)
         progress('恢复车机导出', 98)
@@ -193,7 +221,7 @@ def resize(image, size_gib, gadget, udc, mkexfat, progress):
                 if published and backup.exists():
                     write_retry(binding, '\n')
                     write_retry(lun, '\n')
-                    os.replace(backup, image)
+                    replace_retry(backup, image)
                     sync_directory(image.parent)
                     disconnected = True
                 elif backup.exists():

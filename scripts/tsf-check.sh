@@ -115,6 +115,8 @@ fi
 
 if command -v ffmpeg >/dev/null 2>&1; then
     ok "ffmpeg" "$(ffmpeg -version 2>/dev/null | head -1 | cut -c1-40)"
+elif [ -x /usr/bin/ffmpeg ]; then
+    ok "ffmpeg" "/usr/bin/ffmpeg"
 elif [ -x /opt/mu300/ffmpeg/ffmpeg ]; then
     ok "ffmpeg" "/opt/mu300/ffmpeg/ffmpeg"
 else
