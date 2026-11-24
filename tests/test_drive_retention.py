@@ -252,6 +252,93 @@ class DriveRetentionTest(unittest.TestCase):
         self.assertFalse((transcode / orphan).exists())
         self.assertTrue((transcode / valid_name).exists())
 
+    def test_cleanup_transcode_keeps_dir_removes_all_files(self):
+        """cleanup_transcode 清空转码缓存下全部文件与子目录, 但保留 TRANSCODE_DIR 本身。"""
+        transcode = Path(self.viewer.TRANSCODE_DIR)
+        transcode.mkdir(parents=True, exist_ok=True)
+        # 顶层文件
+        (transcode / "a.mp4").write_bytes(b"x" * 100)
+        (transcode / "b.mp4").write_bytes(b"y" * 200)
+        # 子目录 + 文件
+        sub = transcode / "push-20261120"
+        sub.mkdir()
+        (sub / "wm-1.ass").write_bytes(b"sub" * 50)
+        result = self.viewer.cleanup_transcode()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["removed_files"], 3)
+        self.assertEqual(result["freed_bytes"], 100 + 200 + 50 * 3)  # b"sub" * 50
+        # 目录本身保留
+        self.assertTrue(transcode.is_dir())
+        # 所有文件都删干净了 (包括子目录里的)
+        leftover = [p for p in transcode.rglob("*") if p.is_file()]
+        self.assertEqual(leftover, [])
+        # 再清一次也不该报错
+        result2 = self.viewer.cleanup_transcode()
+        self.assertTrue(result2["ok"])
+        self.assertEqual(result2["removed_files"], 0)
+
+    def test_cleanup_transcode_handles_missing_dir_gracefully(self):
+        """TRANSCODE_DIR 不存在时返回 ok=True 不崩溃。"""
+        missing = self.root / "never-existed-transcode"
+        with patch.object(self.viewer, "TRANSCODE_DIR", str(missing)):
+            result = self.viewer.cleanup_transcode()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["removed_files"], 0)
+
+    def test_cleanup_archive_removes_only_cats_keeps_non_video_dirs(self):
+        """cleanup_archive 只清 CATS (四个录像分类), 保留 files/ transcode_cache/ .skins/ 等非录像目录。"""
+        archive = Path(self.viewer.ARCHIVE)
+        # CATS 里放文件
+        self.clip("08-00-00", retained=True)   # DriveClips
+        self.clip("09-00-00")                  # RecentClips
+        saved_cat = archive / "SavedClips"
+        saved_cat.mkdir(parents=True, exist_ok=True)
+        (saved_cat / "keep.mp4").write_bytes(b"saved" * 32)
+        sentry_cat = archive / "SentryClips"
+        sentry_cat.mkdir(parents=True, exist_ok=True)
+        (sentry_cat / "sentry.mp4").write_bytes(b"sentry" * 32)
+        # 非录像目录放文件 (应当保留)
+        (archive / "files").mkdir()
+        index = archive / "files" / "index.json"
+        index.write_bytes(b"index data")
+        (archive / ".skins").mkdir()
+        skin = archive / ".skins" / "dark.css"
+        skin.write_bytes(b"body{}")
+        (archive / "boombox-queue").mkdir()
+        queue = archive / "boombox-queue" / "q1.txt"
+        queue.write_bytes(b"queue")
+        # transcode_cache 也在 ARCHIVE 下, cleanup_archive 不碰它
+        transcode = archive / "transcode_cache"
+        transcode.mkdir()
+        cached = transcode / "abc123.mp4"
+        cached.write_bytes(b"cache")
+        result = self.viewer.cleanup_archive()
+        self.assertTrue(result["ok"])
+        # 2 个 clip 事件, 每个 4 路 → 8 个文件; 加 SavedClips/SentryClips 各 1 个 → 10
+        self.assertEqual(result["removed_files"], 10)
+        expected_bytes = 8 * 64 + len(b"saved" * 32) + len(b"sentry" * 32)
+        self.assertEqual(result["freed_bytes"], expected_bytes)
+        # 非录像文件全部保留
+        self.assertTrue(index.exists())
+        self.assertTrue(skin.exists())
+        self.assertTrue(queue.exists())
+        self.assertTrue(cached.exists())
+        self.assertEqual(index.read_bytes(), b"index data")
+        self.assertEqual(cached.read_bytes(), b"cache")
+        # CATS 目录仍存在 (只是空了)
+        for cat in self.viewer.CATS:
+            self.assertTrue((archive / cat).is_dir())
+            files_in_cat = [p for p in (archive / cat).rglob("*") if p.is_file()]
+            self.assertEqual(files_in_cat, [])
+
+    def test_cleanup_archive_handles_missing_dir_gracefully(self):
+        """ARCHIVE 目录不存在时返回 ok=True 不崩溃。"""
+        missing = self.root / "never-existed-archive"
+        with patch.object(self.viewer, "ARCHIVE", str(missing)):
+            result = self.viewer.cleanup_archive()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["removed_files"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
