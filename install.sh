@@ -46,16 +46,15 @@ _run_f50_installer() {
         "$py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
             || die "需要 Python 3.11 或更新版本"
     fi
-    local extra_args=()
     case "$sub" in
         f50-check)   : ;;                           # 仅预检
-        f50-apply)   extra_args+=(--apply) ;;
-        f50-install) extra_args+=(--apply --start) ;;
+        f50-apply)   set -- --apply "$@" ;;
+        f50-install) set -- --apply --start "$@" ;;
         f50)         : ;;                           # 用户自己传参数, 不追加
         *) die "未知子命令: $sub" ;;
     esac
     say "调用 scripts/install-f50.py (子命令: $sub)"
-    exec "$py" -B "$src/scripts/install-f50.py" "${extra_args[@]}" "$@"
+    exec "$py" -B "$src/scripts/install-f50.py" "$@"
 }
 
 case "${1:-}" in
