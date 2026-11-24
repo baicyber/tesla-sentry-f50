@@ -88,7 +88,7 @@ F50 是 aarch64 / OpenWrt（musl），请直接用系统包安装，不要再用
 
 ```sh
 apk add ffmpeg
-./install.sh f50 --apply --install-deps --ffmpeg /usr/bin/ffmpeg
+./install.sh apply --install-deps --ffmpeg /usr/bin/ffmpeg
 ```
 
 配置里的 `TSF_FFMPEG` / `TSF_FFPROBE` 应分别指向 `/usr/bin/ffmpeg`、`/usr/bin/ffprobe`。

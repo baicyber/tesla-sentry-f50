@@ -36,10 +36,10 @@ ffmpeg / ffprobe 用于缩略图、清晰度转码和水印导出，推荐 `/usr
 
 ```sh
 sudo ./install.sh                    # 预检、安装并启动
-sudo ./install.sh f50-check          # 仅预检
-sudo ./install.sh f50-apply          # 安装但不启动
-sudo ./install.sh f50-install        # 安装并启动
-sudo ./install.sh f50 --help         # 查看容量、端口与依赖参数
+sudo ./install.sh check              # 仅预检
+sudo ./install.sh apply              # 安装但不启动
+sudo ./install.sh install            # 安装并启动
+sudo ./install.sh --help             # 查看容量、端口与依赖参数
 ```
 
 默认将数据放在 `/mnt/sdcard/tesla-sentry`：
