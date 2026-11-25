@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.013"
+APP_VERSION = "2026.11.25.014"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2385,6 +2385,9 @@ select.ninput { cursor:pointer; }
 .stfill { height:100%; width:0; background:linear-gradient(90deg,#3b82f6,#60a5fa); border-radius:5px; transition:width .4s; }
 .stpct { font-size:13px; color:var(--muted); margin-top:8px; }
 .sthint { font-size:11.5px; color:var(--muted2); margin-top:4px; line-height:1.5; }
+.stcancel { margin-top:14px; padding:8px 20px; border:1px solid var(--line2); border-radius:8px; background:var(--panel2);
+  color:var(--text); font-size:13px; cursor:pointer; }
+.stcancel:hover { border-color:#e8443f; color:#e8443f; }
 /* 实时预览: 与其它三个分类页签同级, 内容直接排在页签下方 (不再是全屏浮层 + 返回按钮) */
 .livep { display:none; max-width:1180px; margin:0 auto; padding:12px 16px 24px; }
 .livep.open { display:block; }
@@ -3696,6 +3699,7 @@ body.settings-open { overflow:hidden; }
     <div class="stbar"><div class="stfill" id="stfill"></div></div>
     <div class="stpct" id="stpct">0%</div>
     <div class="sthint" id="sthint">设备正在拼接各路画面, 请勿关闭页面</div>
+    <button class="stcancel" id="stcancel" onclick="cancelStitch()">取消合成</button>
   </div>
 </div>
 
@@ -6334,6 +6338,7 @@ function doExport() {
   startServerExport(sel, wm);
 }
 /* 设备端合成导出: 输出标准 H.264 mp4 (带 faststart), 微信/相册都能直接发 */
+let stitchToken = 0, stitchCtx = null;
 function startServerExport(sel, wm) {
   const parts = ((curVids()[0] || {}).url || '').replace(/^\/media\//, '').split('/');
   const cat = parts[0] || '', name = parts[1] || '';
@@ -6349,29 +6354,59 @@ function startServerExport(sel, wm) {
   fill.style.width = '0%'; pct.textContent = '0%';
   hint.textContent = '正在设备上合成 mp4 (约 1~3 分钟, 请保持页面打开)…';
   st.classList.add('open');
+  const my = ++stitchToken;
+  stitchCtx = {kind: 'export', token: my, id: null};
   fetch('/api/export/burn', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cat: cat, name: name, cams: sel, wm: !!wm, files: files,
                            q: ({ 'orig': 'orig', '720p': '720p', '480p': '480p', '360p': '360p' })[expQ] || '720p' })
   }).then(r => r.json()).then(d => {
+    if (my !== stitchToken) { if (d.ok && d.id) cancelServerJob(d.id); return; }
     if (!d.ok) { stitchFail(d.error || '导出失败'); return; }
-    pollExport(d.id);
-  }).catch(e => stitchFail('导出失败: ' + e));
+    if (stitchCtx) stitchCtx.id = d.id;
+    pollExport(d.id, my);
+  }).catch(e => { if (my === stitchToken) stitchFail('导出失败: ' + e); });
 }
-function pollExport(id) {
+function cancelServerJob(id) {
+  fetch('/api/stitch/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: id }) }).catch(() => {});
+}
+function cancelStitch() {
+  const ctx = stitchCtx;
+  stitchCtx = null;
+  stitchToken++;
+  if (ctx && ctx.id) cancelServerJob(ctx.id);
+  if (ctx && ctx.abort) { try { ctx.abort.abort(); } catch (e) {} }
+  if (ctx && ctx.rec) {
+    try { ctx.rec.onstop = null; if (ctx.rec.state !== 'inactive') ctx.rec.stop(); } catch (e) {}
+  }
+  if (ctx && ctx.cleanup) { try { ctx.cleanup(); } catch (e) {} }
+  const st = document.getElementById('stitch');
+  if (st) st.classList.remove('open');
+  const fill = document.getElementById('stfill'), pct = document.getElementById('stpct'),
+        hint = document.getElementById('sthint');
+  if (fill) fill.style.width = '0%';
+  if (pct) pct.textContent = '';
+  if (hint) hint.textContent = '已取消，临时缓存与生成文件已清理';
+  toast('已取消合成');
+}
+function pollExport(id, my) {
+  if (my !== stitchToken) return;
   fetch('/api/stitch/status?id=' + encodeURIComponent(id)).then(r => r.json()).then(d => {
+    if (my !== stitchToken) return;
     if (d.state === 'error') { stitchFail(d.err || '导出失败'); return; }
     const pct = d.pct || 0;
     document.getElementById('stfill').style.width = pct + '%';
     document.getElementById('stpct').textContent = pct + '%';
     if (d.state === 'done') {
+      stitchCtx = null;
       document.getElementById('sthint').textContent = '合成完成, 开始下载…';
       location.href = '/api/export/burn/dl?id=' + encodeURIComponent(id);
       setTimeout(() => document.getElementById('stitch').classList.remove('open'), 2500);
       return;
     }
-    setTimeout(() => pollExport(id), 1000);
-  }).catch(() => setTimeout(() => pollExport(id), 1500));
+    setTimeout(() => pollExport(id, my), 1000);
+  }).catch(() => { if (my === stitchToken) setTimeout(() => pollExport(id, my), 1500); });
 }
 function doPushFeishu() {
   if (!cur) return;
@@ -6388,19 +6423,24 @@ function doPushFeishu() {
 function uploadPushVideo(blob, push) {
   const fill = document.getElementById('stfill'), pct = document.getElementById('stpct'),
         hint = document.getElementById('sthint');
+  const my = stitchToken;
+  const ac = new AbortController();
+  if (stitchCtx) stitchCtx.abort = ac;
   fill.style.width = '60%'; pct.textContent = '';
   hint.textContent = '已上传到设备, 正在转码并推送飞书 (约1-3分钟, 请保持页面打开)…';
   fetch('/api/push/upload?cat=' + encodeURIComponent(push.cat) + '&name=' + encodeURIComponent(push.name) +
         '&q=' + encodeURIComponent(push.q),
-        { method: 'POST', body: blob, headers: { 'Content-Type': blob.type || 'video/webm' } })
+        { method: 'POST', body: blob, headers: { 'Content-Type': blob.type || 'video/webm' }, signal: ac.signal })
     .then(r => r.json()).then(d => {
+      if (my !== stitchToken) return;
       if (d.ok) {
+        stitchCtx = null;
         fill.style.width = '100%'; pct.textContent = '100%';
         hint.textContent = '✅ ' + d.msg;
         setTimeout(() => document.getElementById('stitch').classList.remove('open'), 6000);
       } else stitchFail(d.msg || d.error || '推送失败');
     })
-    .catch(e => stitchFail('推送失败: ' + e));
+    .catch(e => { if (my === stitchToken && e && e.name !== 'AbortError') stitchFail('推送失败: ' + e); });
 }
 /* 浏览器本机合成: 设备端 ffmpeg 多路 1080p 会触发内核重启, 改由电脑实时录制合成 */
 let recBusy = false;
@@ -6417,6 +6457,8 @@ function startLocalStitch(sel, st, wm, push) {
   hint.textContent = '正在本机合成 ' + vids.length + ' 路画面 (实时录制, 约 1 分钟), 请保持页面前台';
   st.classList.add('open');
   recBusy = true;
+  const my = ++stitchToken;
+  stitchCtx = {kind: 'local', token: my};
   const n = vids.length;
   let cols, CW, CH;
   if (n === 1) { cols = 1; CW = 1280; CH = 960; }        // 单路保持 4:3 原比例
@@ -6437,12 +6479,14 @@ function startLocalStitch(sel, st, wm, push) {
     els.forEach(e => { try { e.pause(); e.removeAttribute('src'); e.load(); } catch (err) {} });
     recBusy = false;
   };
+  if (stitchCtx) stitchCtx.cleanup = cleanup;
   Promise.all(els.map(el => new Promise(res => {
     if (el.readyState >= 2) return res();
     el.addEventListener('loadeddata', res, { once: true });
     el.addEventListener('error', () => { toast('有画面加载失败, 请重试'); res(); }, { once: true });
     setTimeout(res, 30000);
   }))).then(() => {
+    if (my !== stitchToken) { cleanup(); return; }
     let mime = '';
     // 优先录 mp4 (微信/相册直接可发), 浏览器不支持再退 webm
     for (const m of ['video/mp4;codecs=avc1.42E01E', 'video/mp4',
@@ -6454,12 +6498,15 @@ function startLocalStitch(sel, st, wm, push) {
     const dur = Math.max(1, ...els.map(e => isFinite(e.duration) ? e.duration : 0));
     const chunks = [];
     const rec = new MediaRecorder(canvas.captureStream(30), { mimeType: mime, videoBitsPerSecond: 5000000 });
+    if (stitchCtx) stitchCtx.rec = rec;
     rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-    rec.onerror = () => { cleanup(); st.classList.remove('open'); toast('录制失败, 请重试'); };
+    rec.onerror = () => { if (my !== stitchToken) return; cleanup(); st.classList.remove('open'); toast('录制失败, 请重试'); };
     rec.onstop = () => {
       cleanup();
+      if (my !== stitchToken) return;
       const blob = new Blob(chunks, { type: mime.split(';')[0] });
       if (push) { uploadPushVideo(blob, push); return; }
+      stitchCtx = null;
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = (cur ? cur.name : 'teslacam') + '_' + sel.length + '路.' + ext;
@@ -6473,6 +6520,7 @@ function startLocalStitch(sel, st, wm, push) {
     rec.start(1000);
     const t0 = performance.now();
     (function draw() {
+      if (my !== stitchToken) { cleanup(); return; }
       const t = (performance.now() - t0) / 1000;
       els.forEach((e, i) => {
         try { ctx.drawImage(e, (i % cols) * CW, Math.floor(i / cols) * CH, CW, CH); } catch (err) {}
@@ -6502,6 +6550,7 @@ function pollStitch(id) {
   }).catch(() => setTimeout(() => pollStitch(id), 1500));
 }
 function stitchFail(msg) {
+  stitchCtx = null;
   document.getElementById('sthint').textContent = t('合成失败') + ': ' + msg;
   document.getElementById('stpct').textContent = '';
   setTimeout(() => document.getElementById('stitch').classList.remove('open'), 5000);
@@ -14558,6 +14607,15 @@ def _stitch_worker(job_id, paths, out_path, total):
             "-progress", "pipe:1", "-nostats", out_path]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with STITCH_LOCK:
+            job = STITCH_JOBS.get(job_id)
+            if job is None or job.get("cancel"):
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                return
+            job["proc"] = proc
         # 万一仍然吃爆内存, 让内核优先杀 ffmpeg, 保住 init/viewer 不被 OOM 带走
         try:
             with open("/proc/%d/oom_score_adj" % proc.pid, "w") as f:
@@ -14577,6 +14635,15 @@ def _stitch_worker(job_id, paths, out_path, total):
                             STITCH_JOBS[job_id]["pct"] = pct
                 except ValueError:
                     pass
+            with STITCH_LOCK:
+                job = STITCH_JOBS.get(job_id)
+                canceling = bool(job and job.get("cancel"))
+            if canceling:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                break
             if time.time() > deadline:
                 timed_out = True
                 try:
@@ -14589,6 +14656,14 @@ def _stitch_worker(job_id, paths, out_path, total):
         with STITCH_LOCK:
             job = STITCH_JOBS.get(job_id)
             if not job:
+                return
+            if job.get("proc") is proc:
+                job["proc"] = None
+            if job.get("cancel"):
+                try:
+                    os.unlink(out_path)
+                except OSError:
+                    pass
                 return
             if timed_out:
                 job["state"] = "error"
@@ -14606,7 +14681,7 @@ def _stitch_worker(job_id, paths, out_path, total):
     except Exception as e:
         with STITCH_LOCK:
             job = STITCH_JOBS.get(job_id)
-            if job:
+            if job and not job.get("cancel"):
                 job["state"] = "error"
                 job["err"] = str(e)[:300]
 
@@ -14679,25 +14754,43 @@ def start_stitch(cat, name, cams):
 EXPORT_Q = {"720p": 720, "480p": 480, "360p": 360, "orig": 0}
 
 
-def _ffrun(cmd, timeout=900):
+def _ffrun(cmd, timeout=900, job_id=None):
     try:
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except Exception as ex:
         return -1, str(ex)
+    if job_id:
+        # 把子进程登记到任务上, 取消时可以直接 kill
+        with STITCH_LOCK:
+            job = STITCH_JOBS.get(job_id)
+            if job is None or job.get("cancel"):
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+                return -1, "已取消"
+            job["proc"] = p
     try:
-        with open("/proc/%d/oom_score_adj" % p.pid, "w") as f:
-            f.write("800")            # 内存吃紧时先杀 ffmpeg, 保住主服务
-    except OSError:
-        pass
-    try:
-        out, err = p.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
         try:
-            p.kill()
+            with open("/proc/%d/oom_score_adj" % p.pid, "w") as f:
+                f.write("800")            # 内存吃紧时先杀 ffmpeg, 保住主服务
         except OSError:
             pass
-        return -1, "转码超时"
-    return p.returncode, (err or b"").decode("utf-8", "ignore")[-300:]
+        try:
+            out, err = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                p.kill()
+            except OSError:
+                pass
+            return -1, "转码超时"
+        return p.returncode, (err or b"").decode("utf-8", "ignore")[-300:]
+    finally:
+        if job_id:
+            with STITCH_LOCK:
+                job = STITCH_JOBS.get(job_id)
+                if job and job.get("proc") is p:
+                    job["proc"] = None
 
 
 def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
@@ -14711,14 +14804,21 @@ def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
             if job:
                 job["pct"] = max(0, min(99, int(v)))
 
+    def cancelled():
+        with STITCH_LOCK:
+            job = STITCH_JOBS.get(job_id)
+            return bool(job and job.get("cancel"))
+
     def fail(msg):
         with STITCH_LOCK:
             job = STITCH_JOBS.get(job_id)
-            if job:
+            if job and not job.get("cancel"):
                 job["state"] = "error"
                 job["err"] = (msg or "ffmpeg 失败")[:300]
 
     try:
+        if cancelled():
+            return
         # 画面尺寸: 单路保持源比例; 多路也按源画面比例取格子, 不留黑边
         # (以前多路固定 1280x720 再把 4:3 的源 pad 进 16:9 格子, 每格左右各 12.5% 黑边)
         sw, sh = probe_size(paths[0]) or (1280, 960)
@@ -14765,7 +14865,9 @@ def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
                 extra = ["-crf", "24"] if enc[1] == "libx264" else ["-b:v", "1000k"]
                 code, err = _ffrun([FFMPEG_BIN, "-nostdin", "-hide_banner", "-loglevel", "error",
                                     "-threads", "2", "-i", fp, "-vf", vf, "-an"]
-                                   + enc + extra + ["-threads", "2", "-y", sp], timeout=600)
+                                   + enc + extra + ["-threads", "2", "-y", sp], timeout=600, job_id=job_id)
+                if cancelled():
+                    return
                 if code != 0 or not os.path.isfile(sp):
                     fail(err or ("第 %d 路降采样失败" % (i + 1)))
                     return
@@ -14827,6 +14929,15 @@ def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
             if fcnf:
                 env["FONTCONFIG_FILE"] = fcnf
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        with STITCH_LOCK:
+            job = STITCH_JOBS.get(job_id)
+            if job is None or job.get("cancel"):
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+                return
+            job["proc"] = p
         try:
             with open("/proc/%d/oom_score_adj" % p.pid, "w") as f:
                 f.write("800")
@@ -14841,6 +14952,12 @@ def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
                     setpct(70 + min(29, done / float(total) * 29))
                 except ValueError:
                     pass
+            if cancelled():
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+                break
             if time.time() > deadline:
                 try:
                     p.kill()
@@ -14849,6 +14966,12 @@ def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
                 break
         err = p.stderr.read().decode("utf-8", "ignore")
         code = p.wait()
+        with STITCH_LOCK:
+            job = STITCH_JOBS.get(job_id)
+            if job and job.get("proc") is p:
+                job["proc"] = None
+        if cancelled():
+            return
         if code == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
             with STITCH_LOCK:
                 job = STITCH_JOBS.get(job_id)
@@ -14869,6 +14992,11 @@ def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
             os.rmdir(tmpdir)
         except OSError:
             pass
+        if cancelled():
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
 
 
 def start_export(cat, name, cams, wm=True, q="720p", files=None):
@@ -16034,6 +16162,9 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 self._json({"state": "error", "err": "任务不存在或已过期"}, 404)
                 return
+            if job.get("cancel"):
+                self._json({"state": "error", "pct": job.get("pct", 0), "err": "已取消", "size": 0})
+                return
             self._json({"state": job["state"], "pct": job.get("pct", 0),
                         "err": job.get("err", ""), "size": job.get("size", 0)})
         elif path == "/api/stitch/dl":
@@ -17018,6 +17149,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": err}, 400)
                 return
             self._json({"ok": True, "id": jid})
+            return
+        if path == "/api/stitch/cancel":
+            body = self._read_json()
+            if body == "TOOBIG" or not isinstance(body, dict):
+                self._json({"ok": False, "msg": "参数错误"}, 400)
+                return
+            jid = str(body.get("id") or "").strip()
+            proc = None
+            with STITCH_LOCK:
+                job = STITCH_JOBS.get(jid)
+                if job:
+                    job["cancel"] = True
+                    job["state"] = "cancelled"
+                    job["err"] = "已取消"
+                    proc = job.get("proc")
+            if proc is not None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            # 清掉该任务的临时目录与已生成的成片
+            for fp in (os.path.join(STITCH_DIR, "ex-" + jid.replace("/", "_")),
+                       os.path.join(STITCH_DIR, jid + ".mp4")):
+                try:
+                    if os.path.isdir(fp):
+                        shutil.rmtree(fp, ignore_errors=True)
+                    elif os.path.isfile(fp):
+                        os.unlink(fp)
+                except OSError:
+                    pass
+            self._json({"ok": True})
             return
         if path == "/api/upload/skin":
             fn, data, _f = self._read_upload()
