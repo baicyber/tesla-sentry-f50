@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.015"
+APP_VERSION = "2026.11.25.021"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2662,7 +2662,12 @@ body.watching { overflow:hidden; }
 .watch-live .live-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .watch-live .live-row #lv-status { margin-right:auto; }
 .watch-live .live-iv-lab { font-size:12px; color:var(--muted); }
-.watch-live .live-hint { display:block; width:100%; margin-top:6px; font-size:12px; line-height:1.6; color:var(--muted); }
+/* 白底控件, 与播放控件保持一致 */
+.watch-live .live-row button,.watch-live .live-row select { background:var(--panel); border:1px solid var(--line); }
+.watch-live .live-info { position:relative; flex:none; width:18px; height:18px; min-height:18px; padding:0; border-radius:50%; border:1px solid var(--line2); background:var(--panel); color:var(--muted); font:12px/1 ui-monospace,Consolas,monospace; display:inline-flex; align-items:center; justify-content:center; cursor:help; }
+.watch-live .live-info:hover { color:var(--text); border-color:var(--accent); }
+.watch-live .live-info::after { content:attr(data-tip); position:absolute; left:0; top:calc(100% + 8px); z-index:15; width:min(320px,calc(100vw - 48px)); padding:8px 10px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); color:var(--text); font-size:12px; line-height:1.6; font-family:inherit; white-space:normal; text-align:left; box-shadow:0 6px 18px rgba(0,0,0,.28); opacity:0; visibility:hidden; transition:opacity .15s; pointer-events:none; }
+.watch-live .live-info:hover::after,.watch-live .live-info:focus-visible::after,.watch-live .live-info.open::after { opacity:1; visibility:visible; }
 .watch-live :disabled { opacity:.5; cursor:default; }
 /* 亮度竖向滑块 */
 .viewtools .bpop { display:none; position:absolute; bottom:calc(100% + 8px); right:0; z-index:12; flex-direction:column; align-items:center; gap:6px; padding:8px 4px 6px; border:1px solid var(--line2); border-radius:8px; background:var(--panel); box-shadow:0 6px 18px rgba(0,0,0,.28); }
@@ -2672,7 +2677,7 @@ body.watching { overflow:hidden; }
 .bslider input[type=range] { width:118px; margin:0; transform:rotate(-90deg); accent-color:var(--accent); touch-action:none; }
 .viewtools .bpop .breset { min-height:26px; font-size:11px; padding:0 8px; border:1px solid var(--line2); background:var(--panel2); color:var(--muted); border-radius:5px; }
 /* 速度下拉 */
-.viewtools #spdsel { height:36px; min-height:36px; padding:0 4px; border:1px solid var(--line2); border-radius:6px; background:var(--panel2); color:var(--text); font-size:12px; cursor:pointer; }
+.viewtools #spdsel { height:36px; min-height:36px; padding:0 4px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--text); font-size:12px; cursor:pointer; }
 /* 地址格式实时预览 */
 .addr-preview { margin-top:8px; padding:8px 10px; border:1px dashed var(--line2); border-radius:6px; background:var(--panel2); font-size:12px; line-height:1.6; color:var(--muted); word-break:break-all; }
 .addr-preview b { color:var(--text); font-weight:600; }
@@ -3029,12 +3034,11 @@ body.settings-open { overflow:hidden; }
   .storage-usage { gap:16px 6px; font-size:12px; }
 }
 @media (max-width:600px) {
-  /* 设置页移动端: 更新源一行控件改为全宽堆叠, 避免切换按钮被挤偏/变小 */
+  /* 设置页移动端: 更新源一行控件改为全宽堆叠, 避免下拉框被挤偏/变小 */
   #tab-update .updrow { align-items:center; row-gap:8px; }
   #tab-update .updrow #upd-repo { flex:1 1 100% !important; }
   #tab-update .updrow #upd-custom { flex:1 1 100% !important; }
   #tab-update .updrow #upd-branch { flex:1 1 100% !important; }
-  #tab-update .updrow > button { flex:1 1 100%; }
   /* 更新卡片: 检查更新与立即升级同一行各占一半, 自动更新独占一行 */
   #tab-update .updvercard .updbtns { row-gap:8px; }
   #tab-update .updbtns #upd-check { flex:1 1 42%; min-width:0; }
@@ -3096,7 +3100,13 @@ body.settings-open { overflow:hidden; }
 .player-actions .ic { width:17px; height:17px; }
 @media (min-width:1000px) { .app-header { gap:12px; } .app-header h1 { flex-basis:170px; } .app-header .tabs { gap:4px; } }
 @media (max-width:1199px) and (min-width:1000px) { .system-status { gap:6px; font-size:11px; } .app-header h1 { flex-basis:140px; font-size:16px; } }
-@media (max-width:999px) { .system-status { order:0; } }
+@media (max-width:999px) {
+  .system-status { order:0; }
+  /* 右上角温度等信息挤不下时: 设置/夜间切换留在第一行, 系统状态单独占第二行 */
+  .app-header { height:auto; min-height:104px; }
+  .app-header.hdr-stack .system-status { order:5; flex:1 0 100%; height:28px; justify-content:flex-end; gap:12px; }
+  .app-header.hdr-stack .tabs { order:6; }
+}
 @media (max-width:600px) {
   :root { --app-header:132px; }
   .app-header { --app-header:132px; height:132px; }
@@ -3277,10 +3287,9 @@ body.settings-open { overflow:hidden; }
         <div class="viewtools"><div class="qsel" id="bsel"><button class="qbtn" id="bbtn" title="画面亮度" aria-label="画面亮度" aria-expanded="false" onclick="toggleBright(event)"><svg class="ic"><use href="#i-sun"/></svg></button><div class="bpop" id="bpop" onclick="event.stopPropagation()"><output id="bval">1.0×</output><div class="bslider"><input type="range" id="brange" min="1" max="4" step="0.1" value="1" aria-label="画面亮度" oninput="onBrightInput(this.value)" onchange="flashBright()"></div><button type="button" class="breset" onclick="setBright(1)">复位</button></div></div><button id="shotbtn" title="截屏下载" aria-label="截屏下载" onclick="captureFrame()"><svg class="ic"><use href="#i-camera"/></svg></button><div class="qsel" id="qsel"></div><select id="spdsel" aria-label="播放速度" title="播放速度" onchange="setSpeed(Number(this.value))"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
       </div>
       <div id="livep" class="watch-live" hidden>
-        <div class="live-row"><span id="lv-status"></span><button id="lv-back" onclick="backToLatest()">回到最新</button>
+        <div class="live-row"><span id="lv-status"></span><button type="button" class="live-info" aria-label="间隔说明" onclick="this.classList.toggle('open')" data-tip="「间隔」是自动检查新片段的频率：间隔越短，新片段出现得越快，也更耗流量；选「仅手动」后只有点「立即更新」才会刷新。">i</button><button id="lv-back" onclick="backToLatest()">回到最新</button>
         <span class="live-iv-lab">间隔</span><select id="lv-iv" aria-label="检查间隔" onchange="liveRestart()"><option value="3">3 秒</option><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">1 分钟</option><option value="0">仅手动</option></select>
         <button onclick="liveTick()">立即更新</button></div>
-        <div class="live-hint">「间隔」是自动检查新片段的频率：间隔越短，新片段出现得越快，也更耗流量；选「仅手动」后只有点「立即更新」才会刷新。</div>
       </div>
     </section>
     <div class="infocard" id="infocard">
@@ -3528,6 +3537,8 @@ body.settings-open { overflow:hidden; }
     <section class="storage-danger" style="margin-top:18px"><h3>转码诊断</h3>
     <div class="hint">转码失败或没有缩略图时点一下，会现场测试目录写入、ffmpeg 编码器/解码器、温度热区，并真的抽一帧、编 2 秒视频；结果可直接复制反馈。</div>
     <button class="mini" id="storage-diag" onclick="storageDiag()">运行诊断</button>
+    <button class="mini primary" id="storage-diag-fix" onclick="storageDiagFix()" hidden style="margin-left:8px">一键修复</button>
+    <div class="hint" id="storage-diag-msg" role="status" aria-live="polite"></div>
     <div class="diag-tabs" id="storage-diag-tabs" hidden>
       <button class="mini active" data-diag-tab="brief" onclick="storageDiagShow('brief')">简要解析</button>
       <button class="mini" data-diag-tab="full" onclick="storageDiagShow('full')">详细内容</button>
@@ -3626,9 +3637,8 @@ body.settings-open { overflow:hidden; }
     <div class="updrow" style="flex-wrap:wrap;gap:8px;align-items:center">
       <span class="updk">更新源</span>
       <select class="ninput" id="upd-repo" style="flex:1 1 180px;min-width:0" onchange="otaRepoUI()"></select>
-      <input class="ninput" id="upd-custom" placeholder="自定义仓库 owner/repo 或 https://github.com/owner/repo" style="display:none;flex:1 1 220px;min-width:0" spellcheck="false" autocapitalize="none">
-      <select class="ninput" id="upd-branch" style="flex:0 0 110px;min-width:0"></select>
-      <button class="mini" onclick="otaSaveTarget()">切换</button>
+      <input class="ninput" id="upd-custom" placeholder="自定义仓库 owner/repo 或 https://github.com/owner/repo" style="display:none;flex:1 1 220px;min-width:0" spellcheck="false" autocapitalize="none" onchange="otaSaveTarget()" onkeydown="if(event.key==='Enter'){event.preventDefault();otaSaveTarget();}">
+      <select class="ninput" id="upd-branch" style="flex:0 0 110px;min-width:0" onchange="otaSaveTarget()"></select>
     </div>
     <div class="updvercard">
       <div class="updverline">
@@ -7589,6 +7599,17 @@ async function storageClearUsage(target) {
   }
 }
 let storageDiagResult = null, storageDiagTab = 'brief';
+function diagFixable(r) {
+  if (!r) return false;
+  if (Object.values(r.dirs || {}).some(d => !d.writable)) return true;
+  const ff = r.ffmpeg || {};
+  if (!ff.exists || !ff.exec) return true;
+  return !ff.hevc || !(ff.x264 || ff.v4l2) || !ff.scale || !ff.mp4;
+}
+function diagFixBtn(show) {
+  const btn = document.getElementById('storage-diag-fix');
+  if (btn) { btn.hidden = !show; btn.textContent = '一键修复'; btn.disabled = false; }
+}
 function storageDiagBrief(r) {
   const dirs = r.dirs || {}, bad = Object.entries(dirs).filter(([, d]) => !d.writable).map(([k]) => k);
   const total = Object.keys(dirs).length;
@@ -7651,19 +7672,42 @@ async function storageDiag() {
   const out = document.getElementById('storage-diag-out');
   const btn = document.getElementById('storage-diag');
   const tabs = document.getElementById('storage-diag-tabs');
+  const msg = document.getElementById('storage-diag-msg');
   if (!out) return;
   out.style.display = 'block';
   out.textContent = '诊断中，请稍候（需要几秒）…';
   if (tabs) tabs.hidden = true;
   if (btn) btn.disabled = true;
+  diagFixBtn(false);
+  if (msg) msg.textContent = '';
   try {
     storageDiagResult = await (await fetch('/api/admin/diag', {method:'POST'})).json();
     if (tabs) tabs.hidden = false;
     storageDiagShow('brief');
+    diagFixBtn(diagFixable(storageDiagResult));
   } catch (e) {
     out.textContent = '诊断失败: ' + e;
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+async function storageDiagFix() {
+  const btn = document.getElementById('storage-diag-fix');
+  const out = document.getElementById('storage-diag-out');
+  const tabs = document.getElementById('storage-diag-tabs');
+  const msg = document.getElementById('storage-diag-msg');
+  if (btn) { btn.disabled = true; btn.textContent = '正在修复…'; }
+  if (msg) msg.textContent = '正在按诊断结果自动修复…（补装完整 ffmpeg 可能需要几分钟，请勿关闭页面）';
+  try {
+    const j = await (await fetch('/api/admin/diag/fix', {method:'POST'})).json();
+    if (j.diag) storageDiagResult = j.diag;
+    if (out) { out.style.display = 'block'; storageDiagShow(storageDiagTab); }
+    if (tabs) tabs.hidden = false;
+    if (msg) msg.textContent = '一键修复：' + (j.msg || (j.ok ? '完成' : '未完成'));
+    diagFixBtn(diagFixable(storageDiagResult));
+  } catch (e) {
+    if (msg) msg.textContent = '修复失败：' + e.message;
+    diagFixBtn(true);
   }
 }
 async function storageRestartService() {
@@ -7956,7 +8000,8 @@ function otaRepoUI() {
   inp.style.display = custom ? '' : 'none';
   if (custom) { inp.focus(); return; }
   inp.value = '';
-  otaReloadBranches();
+  // 选中内置源后自动切换并立即检查更新, 不再需要「切换」按钮
+  otaReloadBranches().then(otaSaveTarget);
 }
 function otaRepoValue() {
   const sel = document.getElementById('upd-repo');
@@ -8733,6 +8778,32 @@ injectSkin();
 applyLang();
 renderBright();
 refreshBrand();
+/* 移动端顶栏自适应: 一行放不下温度/CPU/内存/网速时改为两行 (设置与主题仍在第一行) */
+(function headerFit() {
+  const hdr = document.querySelector('.app-header');
+  if (!hdr) return;
+  const root = document.documentElement;
+  let raf = 0;
+  function apply() {
+    raf = 0;
+    const narrow = window.matchMedia('(max-width:999px)').matches;
+    const shortLandscape = window.matchMedia('(orientation:landscape) and (max-height:550px)').matches;
+    if (!narrow || shortLandscape) {
+      hdr.classList.remove('hdr-stack');
+      root.style.removeProperty('--app-header');
+      return;
+    }
+    hdr.classList.remove('hdr-stack');
+    // 未分行布局超过两行基准高度(标题行 + 页签行)说明状态区被挤到了新的一行
+    if (hdr.offsetHeight > 110) hdr.classList.add('hdr-stack');
+    root.style.setProperty('--app-header', hdr.offsetHeight + 'px');
+  }
+  function queue() { if (!raf) raf = requestAnimationFrame(apply); }
+  window.addEventListener('resize', queue, { passive: true });
+  window.addEventListener('orientationchange', queue);
+  queue();
+  setTimeout(apply, 300);
+})();
 load();
 // 字体状态预热: 这时还没开播放器, 连接池是空的, 一定能拿到
 loadFontInfo().then(paintFont);
@@ -8876,6 +8947,83 @@ def _event_coords(meta):
     except (TypeError, ValueError):
         return None
     return (lat, lon) if -90 <= lat <= 90 and -180 <= lon <= 180 else None
+
+
+def _clip_gps(fp, which="s"):
+    """读取行驶片段首帧(s)/末帧(e) SEI 里的 GPS, 按文件指纹缓存, 供驾驶记录显示起终点地址。"""
+    try:
+        st = os.stat(fp)
+    except OSError:
+        return None
+    key = hashlib.md5(("%s|%d|%d" % (fp, st.st_mtime_ns, st.st_size)).encode()).hexdigest()
+    cache = os.path.join(TEL_DIR, "gps-" + key + ".json")
+    data = None
+    if os.path.isfile(cache):
+        try:
+            with open(cache, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = None
+    if not isinstance(data, dict):
+        data = {}
+        parsed = _mp4_video_samples(fp)
+        if parsed:
+            offs, len_size = parsed
+            with open(fp, "rb") as f:
+                for tag, idx in (("s", 0), ("e", len(offs) - 1)):
+                    if not offs:
+                        break
+                    off, size = offs[idx]
+                    if off + size > st.st_size:
+                        continue
+                    f.seek(off)
+                    blob = f.read(size)
+                    pos = 0
+                    while pos + len_size <= len(blob):
+                        n = int.from_bytes(blob[pos:pos + len_size], "big")
+                        if n <= 0 or pos + len_size + n > len(blob):
+                            break
+                        nal = blob[pos + len_size:pos + len_size + n]
+                        pos += len_size + n
+                        msg = _tesla_sei(nal)
+                        if not msg:
+                            continue
+                        try:
+                            lat, lon = float(msg.get(11)), float(msg.get(12))
+                        except (TypeError, ValueError):
+                            break
+                        if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat or lon):
+                            data[tag] = [round(lat, 6), round(lon, 6)]
+                        break
+        try:
+            os.makedirs(TEL_DIR, exist_ok=True)
+            tmp = cache + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.replace(tmp, cache)
+        except OSError:
+            pass
+    pos = data.get(which)
+    if isinstance(pos, list) and len(pos) == 2:
+        return (float(pos[0]), float(pos[1]))
+    return None
+
+
+def trip_metas(members, amap_key="", addr_format=""):
+    """驾驶记录: 用首/末片段的 GPS 反推起点与终点地址, 并按「地址显示格式」拼接。"""
+    if not members or not amap_key:
+        return {}, {}
+    start_meta = dict(members[0]["meta"])
+    end_meta = dict(members[-1]["meta"])
+    for meta, member, which in ((start_meta, members[0], "s"), (end_meta, members[-1], "e")):
+        if _event_coords(meta):
+            continue
+        vids = member.get("videos") or []
+        gps = _clip_gps(safe_archive_path(vids[0]["url"]), which) if vids else None
+        if gps:
+            meta["est_lat"], meta["est_lon"] = gps
+    return (normalize_event_meta(start_meta, amap_key, addr_format),
+            normalize_event_meta(end_meta, amap_key, addr_format))
 
 
 def _geo_load_locked():
@@ -9042,6 +9190,40 @@ def _geocode_worker():
             _geo_save_locked()
 
 
+_ADDR_RE_PROV = re.compile(r"^(.+?(?:省|自治区|特别行政区)|北京市|上海市|天津市|重庆市)")
+
+
+def _parse_addr_parts(addr):
+    """从高德返回的完整地址反推省/市/区/街道/门牌。
+    旧版缓存只存了 address 没有 parts, 用它兜底, 保证自定义显示格式能立即生效。"""
+    s = str(addr or "").strip()
+    if not s:
+        return {}
+    prov = city = dist = ""
+    m = _ADDR_RE_PROV.match(s)
+    if m:
+        prov = m.group(1)
+        s = s[len(prov):]
+    m = re.match(r"^(.+?(?:市|自治州|地区|盟))", s)
+    if m:
+        city = m.group(1)
+        s = s[len(city):]
+    elif prov in ("北京市", "上海市", "天津市", "重庆市"):
+        city = prov
+    m = re.match(r"^(.+?(?:区|县|旗|市))", s)
+    if m:
+        dist = m.group(1)
+        s = s[len(dist):]
+    street = num = ""
+    m = re.match(r"^(.+?)(\d+号.*)$", s)
+    if m:
+        street, num = m.group(1).strip(), m.group(2).strip()
+    else:
+        street = s.strip()
+    return {"province": prov, "city": city, "district": dist, "township": "",
+            "street": street, "number": num}
+
+
 def _geocode_attach(meta, amap_key=""):
     global _GEO_WORKER
     if not amap_key:
@@ -9059,6 +9241,13 @@ def _geocode_attach(meta, amap_key=""):
         if address:
             meta["full_address"] = address
             parts = item.get("parts")
+            if not isinstance(parts, dict) or not parts:
+                # 老缓存没有结构化字段: 从完整地址反推并写回缓存, 之后不用再算
+                parts = _parse_addr_parts(address)
+                if parts:
+                    item["parts"] = parts
+                    _GEO_CACHE[cache_key] = item
+                    _geo_save_locked()
             if isinstance(parts, dict) and parts:
                 meta["addr_parts"] = parts
             return
@@ -9101,6 +9290,9 @@ def format_place(meta, fmt=""):
     city = str(meta.get("city") or parts.get("city") or "").strip()
     street = str(meta.get("street") or parts.get("street") or "").strip()
     full = str(meta.get("full_address") or "").strip()
+    if not parts and full:
+        # 没有结构化字段时从完整地址反推, 保证自定义格式始终能拼出内容
+        parts = _parse_addr_parts(full)
     coord = ""
     try:
         if meta.get("est_lat") not in (None, "") and meta.get("est_lon") not in (None, ""):
@@ -9187,8 +9379,10 @@ def list_events(category=None, event=None, durations=False, trips=False):
             summaries = []
             for group in drive_groups(events):
                 members = group["events"]
-                summaries.append({"name": members[0]["name"], "meta": members[0]["meta"],
-                                  "start_meta": members[0]["meta"], "end_meta": members[-1]["meta"],
+                # 驾驶记录没有 event.json: 从首/末片段的 SEI 里取 GPS 再反推地址
+                start_meta, end_meta = trip_metas(members, amap_key, addr_format)
+                summaries.append({"name": members[0]["name"], "meta": start_meta,
+                                  "start_meta": start_meta, "end_meta": end_meta,
                                   "videos": [video for member in members for video in member["videos"]],
                                   "size": sum(member["size"] for member in members),
                                   "clips": [member["name"] for member in members],
@@ -11528,6 +11722,51 @@ def transcode_diag():
             shutil.rmtree(tmp, ignore_errors=True)
     rep["ok"] = bool(rep.get("thumb", {}).get("file") and rep.get("encode", {}).get("file"))
     return rep
+
+
+def transcode_diag_fix():
+    """按诊断结果一键修复: 目录不可写就重建并加权限, ffmpeg 能力缺失就补装完整版, 最后复诊。"""
+    diag = transcode_diag()
+    ff = diag.get("ffmpeg") or {}
+    ff_broken = ((not ff.get("exists")) or (not ff.get("exec")) or (not ff.get("hevc"))
+                 or not (ff.get("x264") or ff.get("v4l2"))
+                 or not ff.get("scale") or not ff.get("mp4"))
+    actions, touched = [], False
+    for key, info in (diag.get("dirs") or {}).items():
+        if info.get("writable"):
+            continue
+        path = info.get("path") or ""
+        try:
+            os.makedirs(path, exist_ok=True)
+            try:
+                os.chmod(path, 0o755)
+            except OSError:
+                pass
+            probe = os.path.join(path, ".diag-write")
+            with open(probe, "w") as f:
+                f.write("ok")
+            os.remove(probe)
+            actions.append("目录 %s 权限已修复" % key)
+            touched = True
+        except Exception as ex:
+            actions.append("目录 %s 仍不可写：%s" % (key, str(ex)[:80]))
+    if ff_broken:
+        try:
+            ok, msg = ffmpeg_fix()
+        except Exception as ex:
+            ok, msg = False, "ffmpeg 修复失败：%s" % str(ex)[:120]
+        actions.append(msg)
+        touched = touched or ok
+    if touched:
+        diag = transcode_diag()
+    ok = bool(diag.get("ok"))
+    if ok:
+        msg = "修复完成，抽帧与转码已恢复正常。"
+    elif actions:
+        msg = "；".join(actions)
+    else:
+        msg = "未发现可自动修复的问题，请查看下方诊断结果。"
+    return {"ok": ok, "msg": msg, "actions": actions, "diag": diag}
 
 
 def storage_apply(body):
@@ -16243,10 +16482,16 @@ class Handler(BaseHTTPRequestHandler):
             if cat == "DriveClips":
                 selected = next((group for group in drive_groups(events)
                                  if any(member["name"] == event for member in group["events"])), None)
-                events = ([dict(member, trip=selected["events"][0]["name"],
-                                start_meta=selected["events"][0]["meta"],
-                                end_meta=selected["events"][-1]["meta"]) for member in selected["events"]]
-                          if selected else [])
+                if selected:
+                    saved_tl = load_settings()
+                    trip_start, trip_end = trip_metas(
+                        selected["events"], str(saved_tl.get("amap_key") or ""),
+                        str(saved_tl.get("addr_format") or ""))
+                    events = [dict(member, trip=selected["events"][0]["name"],
+                                   start_meta=trip_start, end_meta=trip_end)
+                              for member in selected["events"]]
+                else:
+                    events = []
             if query.get("gaps", ["1"])[0] != "0":
                 if not TIMELINE_GAP_LOCK.acquire(blocking=False):
                     self._json({"pending": True}, 202)
@@ -17052,6 +17297,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/diag":
             self._json(transcode_diag())
+            return
+        if path == "/api/admin/diag/fix":
+            try:
+                self._json(transcode_diag_fix())
+            except Exception as ex:
+                self._json({"ok": False, "msg": "修复失败: %s" % str(ex)[:160]}, 500)
             return
         if path == "/api/admin/restart":
             ok = restart_service()
