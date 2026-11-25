@@ -499,7 +499,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.027"
+APP_VERSION = "2026.11.25.029"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2681,7 +2681,11 @@ body.watching { overflow:hidden; }
 .clockline > span { color:var(--muted); font-size:12px; white-space:nowrap; }
 #track-start { text-align:left; }
 #track-end { text-align:right; }
-#trigger-marker { position:absolute; top:15px; left:0; transform:translate(-50%,-100%); display:block; margin:0; padding:1px 4px; background:var(--panel); color:var(--text); border:0; border-radius:3px; font-size:10px; line-height:12px; min-height:0; cursor:pointer; white-space:nowrap; z-index:3; }
+#trigger-marker { position:absolute; top:15px; left:0; transform:translate(-50%,-100%); display:inline-flex; align-items:center; gap:4px; margin:0; padding:1px 7px 1px 6px; background:linear-gradient(180deg,#ff5b4d,#e5382c); color:#fff; border:0; border-radius:999px; font-size:11px; font-weight:600; line-height:14px; letter-spacing:.2px; box-shadow:0 1px 4px rgba(229,56,44,.45); cursor:pointer; white-space:nowrap; z-index:3; }
+#trigger-marker[hidden] { display:none; }
+#trigger-marker::before { content:''; width:5px; height:5px; border-radius:50%; background:#fff; box-shadow:0 0 0 2px rgba(255,255,255,.35); }
+#trigger-marker::after { content:''; position:absolute; left:50%; top:100%; transform:translateX(-50%); margin-top:-1px; border:4px solid transparent; border-top-color:#e5382c; }
+#trigger-marker:hover { filter:brightness(1.08); }
 .timeline-row { display:flex; align-items:flex-start; gap:14px; }
 .playback-help { display:flex; flex-direction:column; justify-content:center; gap:2px; min-height:36px;
   color:var(--muted); font-size:11px; line-height:1.5; white-space:nowrap; }
@@ -2690,7 +2694,7 @@ body.watching { overflow:hidden; }
 #track-bands i { position:absolute; inset-block:0; }
 #track-bands .gap { min-width:1px; background:#fff; }
 #track-bands .trigger { height:9px; top:-2px; width:9px; border-radius:50%; background:#e65050; transform:translateX(-50%); }
-#track-bands .event-dot { height:8px; top:-1px; width:8px; border-radius:50%; transform:translateX(-50%); box-shadow:0 0 0 1px var(--bg); }
+#track-bands .event-dot { height:9px; top:-2px; width:9px; border-radius:50%; transform:translateX(-50%); box-shadow:0 0 0 1.5px var(--bg), 0 0 6px rgba(255,69,58,.55); }
 #track-bands .event-dot.sentry { background:#ff453a; }
 #track-bands .event-dot.saved { background:#ffd60a; }
 #seek { position:absolute; left:0; top:0; width:100%; height:34px; margin:0; cursor:pointer; appearance:none; -webkit-appearance:none; background:transparent; }
@@ -7254,13 +7258,19 @@ function playLoad() {
   }).catch(() => {});
   playSpaceHint();
 }
-/* 地址显示格式实时预览: 用示例地址演示拼接结果 */
+/* 地址显示格式实时预览: 优先用真实录像解析出的地址, 没有样本时用内置示例 */
 const ADDR_DEMO = {province:'浙江省', city:'杭州市', district:'西湖区', township:'西湖街道', street:'文三路', number:'188号', full:'浙江省杭州市西湖区文三路188号', coord:'30.27415,120.15515'};
+let addrSample = null;
+function addrLoadSample() {
+  fetch('/api/addr/preview', {cache:'no-store'}).then(r => r.json()).then(j => {
+    if (j && j.sample) { addrSample = j.sample; addrPreview(); }
+  }).catch(() => {});
+}
 function addrPreview() {
   const fmtEl = byId('addr-format'), box = byId('addr-preview');
   if (!box) return;
   const fmt = (fmtEl ? fmtEl.value : '').trim();
-  const d = ADDR_DEMO;
+  const d = addrSample || ADDR_DEMO;
   const fallback = d.full || [d.city, d.street].filter(Boolean).join(' · ') || d.coord;
   let out = fallback;
   if (fmt) {
@@ -7273,7 +7283,7 @@ function addrPreview() {
     if (!out) out = fallback;
   }
   box.textContent = '';
-  box.appendChild(document.createTextNode(fmt ? '实时预览：' : '未设置格式，列表显示默认样式：'));
+  box.appendChild(document.createTextNode(fmt ? (addrSample ? '实时预览（真实录像地址）：' : '实时预览：') : '未设置格式，列表显示默认样式：'));
   const b = document.createElement('b');
   b.textContent = out;
   box.appendChild(b);
@@ -7284,6 +7294,7 @@ function geocodeLoad() {
     input.dataset.has = j.has_amap_key ? '1' : '0';
     if (fmt && document.activeElement !== fmt) fmt.value = j.addr_format || '';
     addrPreview();
+    addrLoadSample();
     if (!input.value) msg.textContent = j.has_amap_key
       ? '已配置高德 Key；录像地址在后台解析并缓存，刷新列表后会自动补全。'
       : '尚未配置高德 Key，当前沿用原来的城市、街道或经纬度显示。';
@@ -7303,6 +7314,7 @@ function geocodeSave() {
       if (!j.ok) throw Error(j.msg || '保存失败');
       if (key) { input.value = ''; input.dataset.has = '1'; }
       msg.textContent = (key ? '已保存高德 Key，后台将开始解析录像地址。' : '已保存地址显示格式。') + ' 事件列表已刷新。';
+      addrLoadSample();
       refreshLive();
       // 强制按新的显示格式重拉事件列表, 事件右侧的位置文字立即生效
       lastSig = '';
@@ -9446,10 +9458,95 @@ def format_place(meta, fmt=""):
     out = fmt.replace("{详细地址}", full).replace("{地址}", full)
     out = out.replace("{坐标}", coord).replace("{经纬度}", coord)
     for token, field in ADDR_TOKENS:
-        out = out.replace(token, str(parts.get(field) or "").strip())
+        val = str(parts.get(field) or "").strip()
+        if field == "street":
+            # 旧缓存里 street 可能是整段「中韩街道劲松六路青岛高新职业学校」, 统一只取道路名
+            val = _clean_street(val)
+        out = out.replace(token, val)
     out = re.sub(r"\s+", " ", out).strip()
     out = re.sub(r"^[·,，\-\s]+|[·,，\-\s]+$", "", out)
     return out or default
+
+
+def addr_preview_sample():
+    """挑一条真实录像的解析结果作为地址格式预览样本。
+
+    优先读事件目录里现存的 event.json (确保样本来自仍在的视频), 找不到再退回
+    逆地理缓存; 都没有时返回 None (前端回退内置示例)。
+    """
+    best = None
+
+    def _consider(parts, addr, coord):
+        nonlocal best
+        if not addr:
+            return
+        score = sum(1 for k in ("province", "city", "district", "township", "street", "number")
+                    if str((parts or {}).get(k) or "").strip())
+        if best is None or score > best[0]:
+            best = (score, parts or {}, addr, coord)
+
+    saved = load_settings()
+    amap_key = str(saved.get("amap_key") or "")
+    if amap_key:
+        for cat in CATS:
+            base = os.path.join(ARCHIVE, cat)
+            if not os.path.isdir(base):
+                continue
+            try:
+                names = sorted(os.listdir(base), reverse=True)[:200]
+            except OSError:
+                continue
+            for name in names:
+                if best and best[0] >= 6:
+                    break
+                ej = os.path.join(base, name, "event.json")
+                if not os.path.isfile(ej):
+                    continue
+                try:
+                    with open(ej, "r", encoding="utf-8", errors="ignore") as jf:
+                        meta = json.load(jf)
+                except Exception:
+                    continue
+                if not isinstance(meta, dict):
+                    continue
+                try:
+                    _geocode_attach(meta, amap_key)
+                except Exception:
+                    continue
+                coord = ""
+                c = _event_coords(meta)
+                if c:
+                    coord = "%.5f,%.5f" % (c[0], c[1])
+                _consider(meta.get("addr_parts"), str(meta.get("full_address") or "").strip(), coord)
+            if best and best[0] >= 6:
+                break
+    if best is None:
+        try:
+            with _GEO_LOCK:
+                _geo_load_locked()
+                items = list(_GEO_CACHE.items())
+        except Exception:
+            items = []
+        for coord, item in items:
+            if not isinstance(item, dict):
+                continue
+            addr = str(item.get("address") or "").strip()
+            if not addr:
+                continue
+            parts = item.get("parts")
+            if not isinstance(parts, dict) or not parts:
+                parts = _parse_addr_parts(addr)
+            _consider(parts, addr, str(coord or ""))
+    if best is None:
+        return None
+    _, parts, addr, coord = best
+    return {"province": str(parts.get("province") or "").strip(),
+            "city": str(parts.get("city") or "").strip(),
+            "district": str(parts.get("district") or "").strip(),
+            "township": str(parts.get("township") or "").strip(),
+            "street": _clean_street(parts.get("street") or ""),
+            "number": str(parts.get("number") or "").strip(),
+            "full": addr, "coord": coord}
 
 
 def normalize_event_meta(meta, amap_key="", addr_format=""):
@@ -16949,6 +17046,8 @@ class Handler(BaseHTTPRequestHandler):
                         "addr_format": saved.get("addr_format", ""),
                         "retention": retention_values(),
                         "auto_checked": AUTO_UPD["last_check"], "auto_msg": AUTO_UPD["last_result"]})
+        elif path == "/api/addr/preview":
+            self._json({"ok": True, "sample": addr_preview_sample()})
         elif path == "/api/font":
             fp = _wm_font()
             self._json({"ok": bool(fp), "path": fp, "name": os.path.basename(fp) if fp else "",
