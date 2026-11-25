@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.009"
+APP_VERSION = "2026.11.25.010"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2556,6 +2556,11 @@ body.watching { overflow:hidden; }
 .player .vgrid.loading.load-error { align-items:center; justify-content:center; }
 .player .vcell { aspect-ratio:auto; min-width:0; min-height:0; }
 .player .vcell video { object-fit:contain; }
+.player .player-flash { position:absolute; left:50%; top:50%; z-index:7; transform:translate(-50%,-50%) scale(.94);
+  padding:10px 22px; border-radius:10px; background:rgba(0,0,0,.62); color:#fff;
+  font-size:18px; font-weight:600; letter-spacing:.5px; white-space:nowrap; pointer-events:none;
+  opacity:0; transition:opacity .16s ease, transform .16s ease; }
+.player .player-flash.show { opacity:1; transform:translate(-50%,-50%) scale(1); }
 .player .vgrid.one .vcell { cursor:default; }
 .player .clabel { z-index:2; left:10px; top:10px; right:auto; bottom:auto; letter-spacing:.05em; }
 /* Keep the last frame visible during brief decoder and network waits. */
@@ -2578,7 +2583,7 @@ body.watching { overflow:hidden; }
 #track-end { text-align:right; }
 #trigger-marker { position:absolute; top:29px; transform:translateX(-50%); display:block; margin:0; padding:2px 4px; background:var(--panel); color:var(--text); border:0; border-radius:3px; font-size:11px; min-height:22px; cursor:pointer; white-space:nowrap; z-index:2; }
 .timeline-row { display:flex; align-items:flex-start; gap:14px; }
-.playback-help { flex:0 0 245px; padding-top:9px; color:var(--muted); font-size:11px; line-height:1.55; }
+.playback-help { color:var(--muted); font-size:11px; line-height:1.75; padding-top:6px; white-space:nowrap; }
 .timeline { position:relative; height:54px; display:flex; align-items:flex-start; flex:1; min-width:0; padding-top:2px; }
 #track-bands { position:absolute; left:8px; right:8px; height:6px; border-radius:3px; background:linear-gradient(to right,var(--play-accent) var(--played,0%),var(--muted2) var(--played,0%)); pointer-events:none; }
 #track-bands i { position:absolute; inset-block:0; }
@@ -2590,8 +2595,8 @@ body.watching { overflow:hidden; }
 #seek { position:relative; width:100%; height:36px; margin:0; cursor:pointer; appearance:none; -webkit-appearance:none; background:transparent; }
 #seek::-webkit-slider-runnable-track { background:transparent; height:6px; }
 #seek::-moz-range-track { background:transparent; height:6px; }
-#seek::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:var(--text); border:2px solid var(--bg); margin-top:-5px; }
-#seek::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:var(--text); border:2px solid var(--bg); }
+#seek::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:0; height:0; border:0; background:transparent; opacity:0; }
+#seek::-moz-range-thumb { width:0; height:0; border:0; background:transparent; opacity:0; }
 #seek-hover { position:absolute; bottom:30px; z-index:3; transform:translateX(-50%); pointer-events:none;
   padding:4px 7px; border:1px solid var(--line); border-radius:4px; background:var(--panel); color:var(--text);
   font:12px/1.2 ui-monospace,Consolas,monospace; white-space:nowrap; box-shadow:0 2px 8px #0004; }
@@ -2632,8 +2637,12 @@ body.watching { overflow:hidden; }
 .player.expanded .tpanel,.player.expanded .infocard { display:none; }
 @media (max-width:700px) {
   .timeline-row { display:block; }
-  .playback-help { padding:0 0 4px; font-size:10px; }
+  .playback-help { padding:0 0 4px; font-size:10px; white-space:normal; }
   .timeline { height:52px; }
+}
+@media (max-width:600px) {
+  .playtools { grid-template-columns:1fr; }
+  .playback-help { grid-column:1; grid-row:3; padding:8px 2px 0; line-height:1.7; }
 }
 @media (max-width:400px) {
   .playtools { gap:3px; } .playtools button { padding:0 7px; }
@@ -2681,14 +2690,14 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .storbar { height:3px; margin:7px 0 0; background:var(--line); }
 .filter-reset { color:var(--accent); background:none; border:0; padding:4px 0; min-height:36px; cursor:pointer; }
 .livebtn { display:inline-flex; align-items:center; gap:7px; min-height:38px; padding:0 15px;
-  border:1px solid var(--accent); border-radius:8px; background:var(--accent); color:#fff;
+  border:1px solid var(--accent); border-radius:8px; background:var(--panel); color:var(--accent);
   font-size:13px; font-weight:600; letter-spacing:.3px; white-space:nowrap; cursor:pointer;
-  box-shadow:0 1px 3px rgba(232,68,63,.3); transition:filter .15s, box-shadow .15s; }
+  box-shadow:0 1px 3px rgba(0,0,0,.12); transition:filter .15s, box-shadow .15s; }
 .livebtn .ic { width:15px; height:15px; }
-.livebtn::after { content:''; width:6px; height:6px; border-radius:50%; background:#fff;
-  box-shadow:0 0 0 3px rgba(255,255,255,.22); animation:livepulse 1.8s ease-in-out infinite; }
+.livebtn::after { content:''; width:7px; height:7px; border-radius:50%; background:#ff3b30;
+  box-shadow:0 0 0 3px rgba(255,59,48,.22); animation:livepulse 1.2s ease-in-out infinite; }
 .livebtn[hidden] { display:none; }
-.livebtn:hover { filter:brightness(1.07); box-shadow:0 3px 12px rgba(232,68,63,.42); }
+.livebtn:hover { filter:brightness(1.05); box-shadow:0 3px 12px rgba(0,0,0,.18); }
 .livebtn:active { transform:translateY(1px); }
 @keyframes livepulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 @media (prefers-reduced-motion:reduce) { .livebtn::after { animation:none; } }
@@ -3090,7 +3099,7 @@ body.settings-open { overflow:hidden; }
 <symbol id="i-brand" viewBox="0 0 24 24"><path d="M12 3.6l2.35 4.05 4.55.7-3.3 3.2.8 4.55L12 13.95 7.6 16.1l.8-4.55-3.3-3.2 4.55-.7z"/></symbol>
 </defs></svg>
 <header class="app-header"><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">哨兵一剪梅</span></h1><span class="sub" id="stat"></span>
-<div class="system-status" aria-label="系统状态"><span class="netspeed" id="netspeed"></span><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
+<div class="system-status" aria-label="系统状态"><span class="netspeed" id="netspeed"></span><span class="netspeed" id="copyspeed" hidden></span><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
 <nav class="tabs" id="tabs" aria-label="录像分类"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button><button id="gear" title="设置" aria-expanded="false" aria-controls="panel"><svg class="ic"><use href="#i-gear"/></svg><span>设置</span></button></header>
 <main class="library-page">
 <div class="ffwarn" id="ffwarn" role="status" hidden><div class="ffwarn-head"><b id="ffwarn-title">FFmpeg 未配置</b><button class="ffwarn-fix" id="ffwarn-fix" type="button" onclick="ffmpegFix()">一键修复</button></div><span class="ffwarn-text" id="ffwarn-text">列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。点「一键修复」自动安装完整版；也可在设备上执行 <code>apk add ffmpeg</code> 后运行 <code>install.sh apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。</span></div>
@@ -3109,10 +3118,9 @@ body.settings-open { overflow:hidden; }
 <button class="stortog" id="stortog" onclick="toggleStor()" title="展开总占用" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
 </nav>
-<div class="library-toolbar"><h2 id="library-title">录像</h2><span id="library-count"></span><div class="library-filters">
+<div class="library-toolbar"><button class="livebtn" id="live-btn" onclick="openLive()" hidden><svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg><span>实时预览</span></button><h2 id="library-title">录像</h2><span id="library-count"></span><div class="library-filters">
 <nav class="filters" id="dfilters"></nav>
 <nav class="filters" id="filters"></nav>
-<button class="livebtn" id="live-btn" onclick="openLive()" hidden><svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg><span>实时预览</span></button>
 <button class="filter-reset" onclick="resetFilters()">重置</button>
 </div></div>
 <div class="dpick-pop" id="dpick-pop" hidden role="dialog" aria-modal="true" aria-label="选择日期时间段">
@@ -3174,11 +3182,13 @@ body.settings-open { overflow:hidden; }
     <div class="vwrap">
       <button type="button" class="startmask" id="startmask">▶ 轻触开始同步播放</button>
       <div class="vgrid" id="vgrid"></div>
+      <div class="player-flash" id="player-flash" aria-hidden="true"></div>
     </div>
     <section class="transport" aria-label="回放控制">
       <div class="clockline"><span id="track-start"></span><output id="ptime">--:--:--</output><span id="track-end"></span></div>
-      <div class="timeline-row"><div class="playback-help">点击画面 播放/暂停 · 长按 2×，松开 1×<br>空格 播放/暂停 · ←/→ 10 秒 · ↑/↓ 1 秒</div><div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"><output id="seek-hover" hidden></output><button id="trigger-marker" hidden>触发时刻</button></div></div>
+      <div class="timeline-row"><div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"><output id="seek-hover" hidden></output><button id="trigger-marker" hidden>触发时刻</button></div></div>
       <div class="playtools">
+        <div class="playback-help">点击画面 播放 / 暂停<br>长按画面 3×，松开 1×<br>空格 播放 / 暂停<br>← / → 10 秒 · ↑ / ↓ 1 秒</div>
         <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="skip-back-one" aria-label="回退一秒">−1s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next-one" aria-label="前进一秒">+1s</button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
         <div class="viewtools"><div class="qsel" id="qsel"></div><button id="spdbtn" onclick="cycleSpeed()">1×</button><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
       </div>
@@ -3493,12 +3503,21 @@ body.settings-open { overflow:hidden; }
       </select>
       <input class="ninput" id="nt-wx-token" type="password" placeholder="爱语飞飞 Token (IYUU 开头，已保存则留空表示不修改)">
       <div class="hint" id="nt-wx-hint">微信提醒只发送文字信息（时间 / 位置 / 原因），不含封面与视频。Token 在对应网站注册后获取，免费额度有限。</div>
+      <div class="hint" style="margin-top:8px">提醒格式（第一行作为推送标题，可换行；变量：{类型} {时间} {位置} {原因}，留空使用默认格式）</div>
+      <textarea class="ninput" id="nt-wx-format" rows="5" style="min-height:96px;resize:vertical;line-height:1.6" placeholder="留空使用默认格式"></textarea>
+      <div class="updbtns" style="margin-top:6px"><button class="mini" onclick="ntResetFormat()">填入默认格式</button></div>
     </div>
     <div class="updbtns">
       <button class="mini primary" onclick="ntSave()">保存设置</button>
       <button class="mini" onclick="ntTest()">发送测试</button>
     </div>
     <div class="hint" id="nt-msg"></div>
+    <details class="nt-logs" id="nt-logs" ontoggle="if(this.open)ntLoadLogs()">
+      <summary>系统日志概览（截取）</summary>
+      <div class="hint">推送没收到时看这里：关键状态、推送结果与最近异常。完整日志在「关于 → 日志分析」。</div>
+      <pre class="logview" id="nt-logview">展开后自动读取…</pre>
+      <div class="updbtns"><button class="mini" onclick="ntLoadLogs()">刷新</button><button class="mini" onclick="ntCopyLogs()">复制</button></div>
+    </details>
   </div>
   <div id="tab-auth" style="display:none">
     <div class="hint">改完本机会自动用新密码重新登录，手机/其它设备上的登录状态立即失效。</div>
@@ -3890,15 +3909,13 @@ async function load() {
     b.className = 'tab' + ((liveOpen && c === 'RecentClips') || (!liveOpen && c === currentCat) ? ' active' : '');
     b.dataset.category = c;
     b.innerHTML = `<span class="tl">${t(CATS_NAME[c] || c)}</span><span class="tn">${data[c].length}</span>`;
-    /* 「实时滚动记录」页签 = 最近 1 小时滚动录像列表 + 页内的「实时预览」入口,
-       两者是同一个功能, 合并为一个页面 */
+    /* 「实时滚动记录」页签 = 事件列表; 页内左上角的「实时预览」按钮进入整段连续回放 */
     b.onclick = () => {
       closePanel(); closePlayer();
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       b.classList.add('active');
       currentCat = c; reasonFilter = 'all'; dateFilter = 'all';
       render(c);
-      if (c === 'RecentClips') openLive();
     };
     tabs.appendChild(b);
   }
@@ -4000,11 +4017,12 @@ async function refreshLive() {
   let live = null;
   try { live = await (await fetch('/api/live')).json(); } catch (e) { updateSystemStatus(null); return; }
   updateSystemStatus(live.sys);
+  showCopySpeed(live.copy_bps);
   const dot = document.getElementById('livedot'), txt = document.getElementById('livetxt');
   if (live.running) {
     dot.style.background = '#4cc38a';
     if (live.pending > 0) txt.textContent = `${t('实时同步中')} · ${live.pending} ${t('待确认')}`;
-    else if (live.ago !== null && live.ago !== undefined) txt.textContent = `${t('实时同步中')} · ${live.ago}s`;
+    else if (live.ago !== null && live.ago !== undefined) txt.textContent = `${t('实时同步中')} · ${fmtSpan(live.ago)}`;
     else txt.textContent = t('实时同步中');
   } else {
     dot.style.background = '#e8443f';
@@ -4247,16 +4265,18 @@ function thumbErr(img) {
   }
   img.parentNode.innerHTML = '<div class="ph">🎞</div>';
 }
-/* 日期分组小标题: 今天/昨天/M月D日 */
+/* 日期分组小标题: 昨天/M月D日（周X） */
 function dheadLabel(d) {
   const now = new Date(), today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
   const y = new Date(now.getTime() - 864e5), yd = y.getFullYear() + '-' + String(y.getMonth() + 1).padStart(2, '0') + '-' + String(y.getDate()).padStart(2, '0');
   const m = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return d;
-  if (d === today) return t('今天');
-  if (d === yd) return t('昨天');
-  if (LANG === 'zh') return (+m[2]) + '月' + (+m[3]) + '日';
-  try { return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(LANG, { month: 'short', day: 'numeric' }); }
+  if (d === today || d === yd) return t('昨天');
+  if (LANG === 'zh') {
+    const WD = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    return (+m[2]) + '月' + (+m[3]) + '日（' + WD[new Date(+m[1], +m[2] - 1, +m[3]).getDay()] + '）';
+  }
+  try { return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(LANG, { month: 'short', day: 'numeric', weekday: 'short' }); }
   catch (e) { return d.slice(5); }
 }
 function metaCoordKey(md) {
@@ -4533,8 +4553,8 @@ function showLibrary(ev) {
     const dateTime = evTime(item);
     label.textContent = dateTime.replace(/^\d{4}\/\d{2}\/\d{2} /, '');
     time.textContent = liveMode
-      ? dateTime.slice(0, 10) + ' · 1 分钟 · ' + (item.videos || []).length + ' 路'
-      : dateTime.slice(0, 10) + ' · ' + (reasonLabel((item.meta || {}).reason) || t(CATS_NAME[libraryCat]));
+      ? dheadLabel(dateTime.slice(0, 10).replaceAll('/', '-')) + ' · 1 分钟 · ' + (item.videos || []).length + ' 路'
+      : dheadLabel(dateTime.slice(0, 10).replaceAll('/', '-')) + ' · ' + (reasonLabel((item.meta || {}).reason) || t(CATS_NAME[libraryCat]));
     button.append(label, time);
     button.onclick = () => {
       if (matchMedia('(max-width:999px)').matches) toggleLibrary(false);
@@ -6339,14 +6359,30 @@ function showNetSpeed(bps) {
   if (!el) return;
   const text = fmtBitrate(bps);
   if (!text) return;
-  el.innerHTML = '<span class="netk">' + netZoneLabel() + ' ↓</span><strong>' + esc(text) + '</strong>';
+  el.innerHTML = '<span class="netk">' + netZoneLabel() + '</span><strong>' + esc(text) + '</strong>';
   el.hidden = false;
   clearTimeout(NET.timer); NET.timer = 0;
+}
+/* 归档同步的复制速度: 由同步服务在最近一次复制完成时记录, 20 秒内视为有效 */
+function showCopySpeed(bps) {
+  const el = document.getElementById('copyspeed');
+  if (!el) return;
+  const text = fmtBitrate(bps);
+  if (!text) { el.hidden = true; return; }
+  el.innerHTML = '<span class="netk">复制</span><strong>' + esc(text) + '</strong>';
+  el.hidden = false;
+}
+function fmtSpan(sec) {
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  if (sec < 60) return '不到 1 分钟';
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60);
+  if (h > 0) return h + ' 小时 ' + m + ' 分钟';
+  return m + ' 分钟';
 }
 function hideNetSpeed() {
   const el = document.getElementById('netspeed');
   if (el) {
-    el.innerHTML = '<span class="netk">' + netZoneLabel() + ' ↓</span><strong>0 KB/s</strong>';
+    el.innerHTML = '<span class="netk">' + netZoneLabel() + '</span><strong>0 KB/s</strong>';
     el.hidden = false;
   }
   clearTimeout(NET.timer); NET.timer = 0;
@@ -6406,9 +6442,26 @@ function pauseAll() {
 }
 
 function cycleSpeed() {
-  const speeds = [0.5, 1, 2, 4];
+  const speeds = [0.5, 1, 2, 3, 4];
   baseRate = speeds[(speeds.indexOf(baseRate) + 1) % speeds.length];
   activeVideos().forEach(v => v.playbackRate = baseRate); updateControls();
+  flashPlayer(baseRate + '×');
+}
+
+/* 操作反馈: 在画面中心显示 1 秒 */
+let flashTimer = 0;
+function flashPlayer(text) {
+  const el = byId('player-flash');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => el.classList.remove('show'), 1000);
+}
+function togglePlay() {
+  if (!curClips.length) return;
+  if (wantedPlay && !atEnd) { pauseAll(); flashPlayer('暂停'); }
+  else { playAll(); flashPlayer('播放'); }
 }
 
 function fmtSec(x) {
@@ -6468,12 +6521,12 @@ function seekRelative(seconds) {
   }
   seekWall(target, seconds < 0 ? -1 : 1);
 }
-byId('ppbtn').onclick = () => wantedPlay && !atEnd ? pauseAll() : playAll();
-byId('startmask').onclick = playAll;
-byId('skip-back').onclick = () => seekRelative(-10);
-byId('skip-back-one').onclick = () => seekRelative(-1);
-byId('skip-next-one').onclick = () => seekRelative(1);
-byId('skip-next').onclick = () => seekRelative(10);
+byId('ppbtn').onclick = togglePlay;
+byId('startmask').onclick = () => { playAll(); flashPlayer('播放'); };
+byId('skip-back').onclick = () => { seekRelative(-10); flashPlayer('−10 秒'); };
+byId('skip-back-one').onclick = () => { seekRelative(-1); flashPlayer('−1 秒'); };
+byId('skip-next-one').onclick = () => { seekRelative(1); flashPlayer('+1 秒'); };
+byId('skip-next').onclick = () => { seekRelative(10); flashPlayer('+10 秒'); };
 byId('trigger-marker').onclick = () => { if (triggerTime !== null) seekWall(triggerTime); };
 byId('seek').onpointerdown = event => { seekPointerStart = event.clientX; editingSeek = true; dropPrefetch(); };
 byId('seek').onpointermove = function(event) {
@@ -6535,14 +6588,16 @@ function releasePictureSpeed() {
   if (!pictureHolding) return;
   pictureHolding = false; suppressPictureClick = true;
   baseRate = 1; activeVideos().forEach(v => v.playbackRate = 1); updateControls();
+  flashPlayer('1×');
 }
 byId('vgrid').addEventListener('pointerdown', event => {
   if (event.button !== 0 || event.target.closest('button') || !curClips.length) return;
   suppressPictureClick = false;
   clearTimeout(pictureHoldTimer);
   pictureHoldTimer = setTimeout(() => {
-    pictureHolding = true; baseRate = 2;
-    activeVideos().forEach(v => v.playbackRate = 2); updateControls();
+    pictureHolding = true; baseRate = 3;
+    activeVideos().forEach(v => v.playbackRate = 3); updateControls();
+    flashPlayer('3× 快进');
   }, 450);
 });
 byId('vgrid').addEventListener('pointerup', releasePictureSpeed);
@@ -6552,15 +6607,20 @@ byId('vgrid').addEventListener('contextmenu', event => { if (pictureHolding || s
 byId('vgrid').addEventListener('click', event => {
   if (event.target.closest('button')) return;
   if (suppressPictureClick) { suppressPictureClick = false; return; }
-  if (curClips.length) wantedPlay && !atEnd ? pauseAll() : playAll();
+  togglePlay();
 });
 document.addEventListener('keydown', e => {
   const playerOpen = byId('player').classList.contains('open');
   const editing = e.target.closest('input,select,textarea,button,[contenteditable="true"]');
   if (playerOpen && !editing && !byId('expp').classList.contains('open') && !document.body.classList.contains('settings-open')) {
-    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) wantedPlay && !atEnd ? pauseAll() : playAll(); return; }
+    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) togglePlay(); return; }
     const jumps = {ArrowLeft:-10, ArrowRight:10, ArrowUp:-1, ArrowDown:1};
-    if (jumps[e.key]) { e.preventDefault(); seekRelative(jumps[e.key]); return; }
+    if (jumps[e.key]) {
+      e.preventDefault();
+      seekRelative(jumps[e.key]);
+      flashPlayer((jumps[e.key] < 0 ? '−' : '+') + Math.abs(jumps[e.key]) + ' 秒');
+      return;
+    }
   }
   if (e.key !== 'Escape') return;
   if (storageHelpButton) { const button = storageHelpButton; storageHelpClose(); button.focus(); return; }
@@ -7246,6 +7306,7 @@ async function ntLoad() {
     document.getElementById('nt-wx-api').value = j.wx_api || 'iyuu';
     document.getElementById('nt-wx-token').value = '';
     document.getElementById('nt-wx-token').dataset.has = j.has_wx_token ? '1' : '0';
+    document.getElementById('nt-wx-format').value = j.wx_format || '';
     ntChannelUI(); ntWxApiUI();
     ntSetEye(ntHidden);
     const m = document.getElementById('nt-msg');
@@ -7274,6 +7335,7 @@ async function ntSave() {
     channel: document.getElementById('nt-channel').value,
     wx_api: document.getElementById('nt-wx-api').value,
     wx_token: document.getElementById('nt-wx-token').value.trim(),
+    wx_format: document.getElementById('nt-wx-format').value,
   };
   if (body.enabled) {
     const secSaved = document.getElementById('nt-secret').dataset.has === '1';
@@ -7304,6 +7366,33 @@ async function ntTest() {
     m.textContent = (j.ok ? '✅ ' : '❌ ') + j.msg;
     m.style.color = j.ok ? '#4cc38a' : 'var(--accent)';
   } catch (e) { m.textContent = t('发送失败') + ': ' + e; m.style.color = 'var(--accent)'; }
+}
+const NT_FMT = '{类型}\n时间：{时间}\n位置：{位置}\n原因：{原因}';
+function ntResetFormat() { document.getElementById('nt-wx-format').value = NT_FMT; }
+let NT_LOG = '';
+async function ntLoadLogs() {
+  const pre = document.getElementById('nt-logview');
+  pre.textContent = '正在读取…';
+  try {
+    const j = await (await fetch('/api/logs', { cache: 'no-store' })).json();
+    const ov = j.overview || [];
+    const keep = ov.filter(l => /推送|版本|时间|同步|ffmpeg|温度|CPU|内存|更新源|自动更新|异常/.test(l));
+    NT_LOG = (keep.length ? keep : ov).slice(0, 18).join('\n') || '暂无日志';
+    pre.textContent = NT_LOG;
+  } catch (e) { pre.textContent = '读取失败: ' + e; }
+}
+async function ntCopyLogs() {
+  if (!NT_LOG) await ntLoadLogs();
+  try {
+    await navigator.clipboard.writeText(NT_LOG);
+    const m = document.getElementById('nt-msg');
+    m.textContent = '日志概览已复制'; m.style.color = '#4cc38a';
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = NT_LOG; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (_) {}
+    ta.remove();
+  }
 }
 
 function ntMediaUI() {
@@ -9835,7 +9924,7 @@ def live_status():
             pending = len(json.load(f).get("__pending__", {}))
     except Exception:
         pass
-    ago, last = None, ""
+    ago, last, copy_bps = None, "", 0
     try:
         st = os.stat(LIVE_LOG)
         ago = int(time.time() - st.st_mtime)
@@ -9845,13 +9934,24 @@ def live_status():
         for line in reversed(lines):
             if "已同步" in line:
                 last = line.split("] ", 1)[-1]
+                # 同步服务在复制完成时写入 "(123 KB, 4.5 MB/s)"; 20 秒内作为当前复制速度
+                ts = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", line)
+                sp = re.search(r"\((\d+) KB(?:, ([\d.]+) (KB|MB)/s)?\)", line)
+                if ts and sp and sp.group(2):
+                    try:
+                        done = time.mktime(time.strptime(ts.group(1), "%Y-%m-%d %H:%M:%S"))
+                        if time.time() - done <= 20:
+                            val = float(sp.group(2))
+                            copy_bps = int(val * (1048576 if sp.group(3) == "MB" else 1024))
+                    except (ValueError, OverflowError):
+                        pass
                 break
         if not last and lines:
             last = lines[-1].split("] ", 1)[-1]
     except Exception:
         pass
     return {"running": running, "pending": pending, "ago": ago, "last": last,
-            "disk": disk_usage(), "sys": sys_status()}
+            "copy_bps": copy_bps, "disk": disk_usage(), "sys": sys_status()}
 
 
 def _log_tail(fp, max_lines=200, max_bytes=131072):
@@ -9908,6 +10008,17 @@ def log_report():
     ov.append("自动更新: %s（上次检查 %s）" % (
         AUTO_UPD.get("last_result") or "尚无记录",
         time.strftime("%H:%M:%S", time.localtime(AUTO_UPD["last_check"])) if AUTO_UPD.get("last_check") else "-"))
+    try:
+        nc = notify_conf()
+        nlast = _nstate_load().get("last") or {}
+        ch = "微信（%s）" % ("爱语飞飞" if (nc.get("wx_api") or "iyuu") == "iyuu" else "Server酱") \
+            if _notify_channel(nc) == "wechat" else "飞书"
+        ov.append("推送: %s；渠道 %s；%s；上次: %s" % (
+            "已开启" if nc.get("enabled") else "未开启", ch,
+            "已配置" if _notify_ready(nc) else "未配置",
+            (nlast.get("msg") or "无记录")))
+    except Exception:
+        pass
     sections = []
     # 1) 状态快照: OTA 记账 + 运行状态, 排查更新失败时最有用
     try:
@@ -11654,6 +11765,7 @@ _NC_DEFAULT = {
     "receive_id": "", "receive_id_type": "", "public_url": "", "saved": False, "delay": 20,
     "media": "thumb", "quality": "480p", "vdur": 30,
     "channel": "feishu", "wx_enabled": False, "wx_api": "iyuu", "wx_token": "",
+    "wx_format": "",
 }
 _TOK = {"v": "", "exp": 0}
 CAM_NUM = {0: "前视", 3: "左B柱", 4: "右B柱", 5: "左翼子板", 6: "右翼子板", 7: "后视"}
@@ -12631,11 +12743,13 @@ def _feishu_send_dm(conf, card):
 
 
 def _wx_ready(conf):
-    return bool(conf.get("wx_enabled") and str(conf.get("wx_token") or "").strip())
+    # channel 选了微信就视为开启: 兼容旧配置里 wx_enabled 未同步为 true 的情况
+    enabled = conf.get("wx_enabled") or _notify_channel(conf) == "wechat"
+    return bool(enabled and str(conf.get("wx_token") or "").strip())
 
 
 def _event_text(cat, name, test=False):
-    """把事件信息拼成适合微信推送的纯文本"""
+    """按「提醒格式」把事件信息拼成纯文本; 第一行会被当作推送标题"""
     d = os.path.join(ARCHIVE, cat, name)
     meta = {}
     try:
@@ -12649,8 +12763,15 @@ def _event_text(cat, name, test=False):
     cam = CAM_NUM.get(int(meta["camera"])) if str(meta.get("camera", "")).strip().isdigit() else ""
     when = str(meta.get("timestamp") or name)[:19].replace("T", " ").replace("_", " ")
     loc = " ".join(x for x in (meta.get("city") or "", meta.get("street") or "") if x).strip() or "位置未知"
-    head = ("[测试] " if test else "") + "哨兵提醒 · " + cat_name + (" · " + cam if cam else "")
-    return "%s\n时间：%s\n位置：%s\n原因：%s" % (head, when, loc, detail)
+    kind = ("[测试] " if test else "") + "哨兵提醒 · " + cat_name + (" · " + cam if cam else "")
+    tpl = str(notify_conf().get("wx_format") or "").strip()
+    if not tpl:
+        return "%s\n时间：%s\n位置：%s\n原因：%s" % (kind, when, loc, detail)
+    values = {"{类型}": kind, "{时间}": when, "{位置}": loc, "{原因}": detail,
+              "{分类}": cat_name, "{摄像头}": cam or "—"}
+    for k, v in values.items():
+        tpl = tpl.replace(k, v)
+    return tpl
 
 
 def _wx_send(conf, text):
@@ -12660,18 +12781,27 @@ def _wx_send(conf, text):
     name = "Server酱" if api == "serverchan" else "爱语飞飞"
     if not tok:
         return False, "未配置%s Token" % name
-    if api == "iyuu":
-        url = "https://iyuu.cn/%s.send?text=%s" % (urllib.parse.quote(tok, safe=""), urllib.parse.quote(text))
-    elif api == "serverchan":
-        lines = text.split("\n")
-        title = (lines[0] or "哨兵提醒")[:32]
-        desp = "\n".join(lines[1:]) or text
-        url = "https://sctapi.ftqq.com/%s.send?title=%s&desp=%s" % (
-            urllib.parse.quote(tok, safe=""), urllib.parse.quote(title), urllib.parse.quote(desp))
-    else:
-        return False, "暂不支持该微信接口"
+    # 粘贴整段接口地址时自动取出 Token
+    tok = re.sub(r"^https?://[^/]+/", "", tok, flags=re.I)
+    tok = re.sub(r"\.send.*$", "", tok, flags=re.I).strip().strip("/")
+    lines = text.split("\n")
+    title = (lines[0] or "哨兵提醒").strip()[:32]
+    desp = "\n".join(lines[1:]).strip() or text
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "tesla-sentry-f50"})
+        if api == "iyuu":
+            # iyuu 区分标题 text 与正文 desp; 长文本/多行放标题会被微信模板拒绝
+            url = "https://iyuu.cn/%s.send" % urllib.parse.quote(tok, safe="")
+            data = urllib.parse.urlencode({"text": title, "desp": desp}).encode()
+            req = urllib.request.Request(url, data=data, headers={
+                "User-Agent": "tesla-sentry-f50",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            })
+        elif api == "serverchan":
+            url = "https://sctapi.ftqq.com/%s.send?title=%s&desp=%s" % (
+                urllib.parse.quote(tok, safe=""), urllib.parse.quote(title), urllib.parse.quote(desp))
+            req = urllib.request.Request(url, headers={"User-Agent": "tesla-sentry-f50"})
+        else:
+            return False, "暂不支持该微信接口"
         with urllib.request.urlopen(req, timeout=20, context=_tls12()) as r:
             raw = r.read(4096).decode("utf-8", "ignore")
         try:
@@ -12680,10 +12810,10 @@ def _wx_send(conf, text):
             j = {}
         code = j.get("errcode", j.get("code", 0))
         if code in (0, 200, None):
-            return True, "微信提醒已发送"
-        return False, "微信提醒失败: %s" % (j.get("errmsg") or j.get("message") or raw[:120])
+            return True, "%s 已发送" % name
+        return False, "%s 失败: %s" % (name, j.get("errmsg") or j.get("message") or raw[:120])
     except Exception as ex:
-        return False, "微信提醒失败: %s" % str(ex)[:120]
+        return False, "%s 失败: %s" % (name, str(ex)[:120])
 
 
 def _feishu_push(cat, name, test=False):
@@ -12871,6 +13001,7 @@ def notify_status():
         "channel": _notify_channel(conf),
         "wx_enabled": bool(conf.get("wx_enabled")),
         "wx_api": conf.get("wx_api") or "iyuu",
+        "wx_format": conf.get("wx_format") or "",
         "has_wx_token": bool(str(conf.get("wx_token") or "").strip()),
         "wx_ready": _wx_ready(conf),
         "last": st.get("last") or {},
@@ -16031,6 +16162,8 @@ class Handler(BaseHTTPRequestHandler):
                     patch[k] = str(body.get(k) or "").strip()
             if str(body.get("wx_token") or "").strip():
                 patch["wx_token"] = str(body["wx_token"]).strip()
+            if "wx_format" in body:
+                patch["wx_format"] = str(body.get("wx_format") or "").strip()[:800]
             if str(body.get("app_secret") or "").strip():
                 patch["app_secret"] = str(body["app_secret"]).strip()
             if "delay" in body:

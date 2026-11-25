@@ -705,7 +705,9 @@ def do_sync(exfat, state, quiet=False, cats=CATS, recent=None):
                 log("发现新片段(待确认): %s (%d bytes)" % (key, e.size))
             continue
         try:
+            t0 = time.monotonic()
             n = copy_entry(exfat, e, dest, require_index=cat == "RecentClips")
+            cost = max(0.001, time.monotonic() - t0)
             copied += 1
             bytes_ += n
             if recent_check and cat == "RecentClips":
@@ -716,7 +718,7 @@ def do_sync(exfat, state, quiet=False, cats=CATS, recent=None):
                         copy_entry(exfat, ev_entry, safe_dest(cat, ev, "event.json"))
                     except Exception:
                         pass
-            log("已同步 %s (%d KB)" % (key, n // 1024))
+            log("已同步 %s (%d KB, %.1f MB/s)" % (key, n // 1024, n / cost / 1048576))
         except ClipNotReady:
             new_pending[key] = sig
         except Exception as ex:
