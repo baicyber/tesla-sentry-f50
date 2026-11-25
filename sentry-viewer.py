@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.005"
+APP_VERSION = "2026.11.25.007"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -712,6 +712,41 @@ def _api_manifest(timeout=5):
         return json.loads(base64.b64decode(outer["content"]).decode("utf-8", "replace"))
     except Exception:
         return None
+
+
+def _api_file(path, timeout=12):
+    """通过 GitHub API contents 直接取文件字节 (base64), 不受 raw / 镜像 CDN 缓存影响。
+
+    主程序常超过 1MB, contents 接口此时不返回 content 字段, 自动退回 git blobs 接口
+    (支持到 100MB)。国内不可达 / 超限时返回 None, 由调用方走原有多源竞速。"""
+    try:
+        t = ota_target()
+        path = path.lstrip("/")
+        url = "https://api.github.com/repos/%s/contents/%s?ref=%s" % (
+            t["repo"], urllib.parse.quote(path), urllib.parse.quote(t["branch"]))
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "tsf-ota/" + APP_VERSION,
+            "Accept": "application/vnd.github+json",
+            "Cache-Control": "no-cache"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            meta = json.loads(r.read(4 << 20).decode("utf-8", "replace"))
+        if isinstance(meta, dict):
+            content = meta.get("content")
+            if content and meta.get("encoding") == "base64":
+                return base64.b64decode(content)
+            git_url = meta.get("git_url")
+            if git_url:
+                req2 = urllib.request.Request(git_url, headers={
+                    "User-Agent": "tsf-ota/" + APP_VERSION,
+                    "Accept": "application/vnd.github+json",
+                    "Cache-Control": "no-cache"})
+                with urllib.request.urlopen(req2, timeout=timeout) as r2:
+                    blob = json.loads(r2.read(32 << 20).decode("utf-8", "replace"))
+                if isinstance(blob, dict) and blob.get("encoding") == "base64" and blob.get("content"):
+                    return base64.b64decode(blob["content"])
+    except Exception:
+        return None
+    return None
 
 
 def ota_latest(force=False):
@@ -1225,7 +1260,7 @@ def ota_apply(force=False):
     #    4G 网络偶发中途断流, 下载失败或没挑到完整文件时自动整体重试一次。
     def _fetch_viewer():
         return _race_get("/sentry-viewer.py?ts=%d" % int(time.time()), timeout=60, limit=8 << 20,
-                         validate=_viewer_blob_ok, collect=True, grace=1.5)
+                         validate=_viewer_blob_ok, collect=True, grace=3.0)
     res, picked = [], None
     for attempt in (0, 1):
         try:
@@ -1240,10 +1275,16 @@ def ota_apply(force=False):
             break
         if attempt == 0:
             time.sleep(1.5)
+    # 镜像 / 代理全部缓存旧文件 (实测 jsDelivr 会把 @main 钉在很旧的提交) 时,
+    # 走 GitHub API 直接取仓库实时文件, 无 CDN 缓存, 与清单版本一致。
+    if picked is None:
+        api_blob = _api_file("/sentry-viewer.py")
+        if api_blob and _viewer_blob_ok(api_blob) and _viewer_version(api_blob) == latest:
+            picked = ("https://api.github.com", api_blob)
     if picked is None:
         seen = sorted({("%s(%s)" % (_viewer_version(d) or "?", urllib.parse.urlsplit(b).netloc))
                        for b, d in res})
-        return False, "版本校验失败 (文件 %s / 清单 %s)；下载源仍在缓存旧文件或文件不完整，已自动重试一次，请稍后重试或在「更新源」里换一个源" \
+        return False, "版本校验失败 (文件 %s / 清单 %s)；各下载源与 GitHub 实时接口暂未返回与清单一致的完整文件（镜像可能仍在缓存旧版本），请稍后重试或在「更新源」里换一个源" \
                       % ("、".join(seen) or "?", latest)
     base, data = picked   # collect=True 返回 (下载源, 文件字节); 文件已通过 _viewer_blob_ok 校验
     # 2) 下载依赖模块: 少一个都不装 (先装主程序后补模块, 只会得到一个起不来的服务)
@@ -1251,18 +1292,29 @@ def ota_apply(force=False):
     mods = []
     for name in names:
         blob = None
-        for attempt in (0, 1):
-            try:
-                blob, _b = _race_get("/%s?ts=%d" % (name, int(time.time())), timeout=60, limit=4 << 20,
-                                     validate=lambda d: not _ota_check_py(name, d))
-                break
-            except Exception as ex:
-                if attempt:
-                    return False, "下载模块 %s 失败: %s（已自动重试一次）" % (name, ex)
-                time.sleep(1.5)
+        # 优先用主程序命中的那个源拉模块, 保证主程序与模块同版本,
+        # 避免镜像缓存把「新主程序 + 旧模块」拼成半残状态。
+        try:
+            same = _http_get(base + "/%s?ts=%d" % (name, int(time.time())), timeout=60, limit=4 << 20)
+            if same and not _ota_check_py(name, same):
+                blob = same
+        except Exception:
+            pass
+        if blob is None:
+            for attempt in (0, 1):
+                try:
+                    blob, _b = _race_get("/%s?ts=%d" % (name, int(time.time())), timeout=60, limit=4 << 20,
+                                         validate=lambda d: not _ota_check_py(name, d))
+                    break
+                except Exception:
+                    if attempt:
+                        break
+                    time.sleep(1.5)
+        if blob is None:
+            blob = _api_file("/%s" % name)
         bad = _ota_check_py(name, blob)
         if bad:
-            return False, "模块 %s 校验失败: %s" % (name, bad)
+            return False, "下载或校验模块 %s 失败: %s（各源可能缓存了旧文件，请稍后重试或在「更新源」里换一个源）" % (name, bad)
         mods.append((name, blob))
     # 3) 组合自检: 主程序 + 模块同目录跑 --ota-check, 等价于"装完之后再启一次"
     err = _ota_stage_check(data, mods)
@@ -2883,6 +2935,27 @@ body.settings-open { overflow:hidden; }
   .storage-help { min-height:44px; }
   .storage-usage { gap:16px 6px; font-size:12px; }
 }
+@media (max-width:600px) {
+  /* 设置页移动端: 更新源一行控件改为全宽堆叠, 避免切换按钮被挤偏/变小 */
+  #tab-update .updrow { align-items:center; row-gap:8px; }
+  #tab-update .updrow #upd-repo { flex:1 1 100% !important; }
+  #tab-update .updrow #upd-custom { flex:1 1 100% !important; }
+  #tab-update .updrow #upd-branch { flex:1 1 100% !important; }
+  #tab-update .updrow > button { flex:1 1 100%; }
+  /* 更新卡片: 检查更新与立即升级同一行各占一半, 自动更新独占一行 */
+  #tab-update .updvercard .updbtns { row-gap:8px; }
+  #tab-update .updbtns #upd-check { flex:1 1 42%; min-width:0; }
+  #tab-update .updbtns .updsplit { flex:1 1 50%; min-width:0; }
+  #tab-update .updbtns .updauto { flex:1 1 100%; margin:2px 0 0; padding-top:8px;
+    border-top:1px solid var(--line); justify-content:space-between; }
+  /* 上传按钮在移动端全宽、清晰可点, 防止被布局挤掉或看不见 */
+  .panel .upbtn, .panel .fm-tool.upbtn { display:flex !important; width:100%; box-sizing:border-box;
+    justify-content:center; min-height:48px; padding:10px 14px; font-size:13.5px; margin:0 0 12px; }
+  /* 文件管理操作栏保持单行, 超出可横向滑动, 不再折行错位 */
+  #tab-files .fm-bar .fm-actions { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+  #tab-files .fm-bar .fm-actions::-webkit-scrollbar { display:none; }
+  #tab-files .fm-bar .fm-actions button { flex:1 1 0; min-width:0; padding:8px 4px; font-size:11px; white-space:nowrap; }
+}
 @media (orientation:landscape) and (max-height:550px) {
   :root { --app-header:48px; }
   .app-header { height:48px; flex-wrap:nowrap; padding-inline:10px; gap:6px; }
@@ -3302,7 +3375,7 @@ body.settings-open { overflow:hidden; }
           </label>
           <span class="fm-count" id="fm-count">已选 0 项</span>
         </div>
-        <div class="row">
+        <div class="row fm-actions">
           <button class="fm-go" title="上传文件到当前目录 (≤100MB)" onclick="document.getElementById('anyfile-file').click()"><svg class="ic"><use href="#i-upload"/></svg>上传</button>
           <button onclick="fmOp('move')"><svg class="ic"><use href="#i-move"/></svg>移动</button>
           <button onclick="fmOp('copy')"><svg class="ic"><use href="#i-copy"/></svg>复制</button>
