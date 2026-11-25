@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.008"
+APP_VERSION = "2026.11.25.009"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -6536,7 +6536,7 @@ function releasePictureSpeed() {
   pictureHolding = false; suppressPictureClick = true;
   baseRate = 1; activeVideos().forEach(v => v.playbackRate = 1); updateControls();
 }
-byId('vwrap').addEventListener('pointerdown', event => {
+byId('vgrid').addEventListener('pointerdown', event => {
   if (event.button !== 0 || event.target.closest('button') || !curClips.length) return;
   suppressPictureClick = false;
   clearTimeout(pictureHoldTimer);
@@ -6545,11 +6545,11 @@ byId('vwrap').addEventListener('pointerdown', event => {
     activeVideos().forEach(v => v.playbackRate = 2); updateControls();
   }, 450);
 });
-byId('vwrap').addEventListener('pointerup', releasePictureSpeed);
-byId('vwrap').addEventListener('pointercancel', releasePictureSpeed);
-byId('vwrap').addEventListener('pointerleave', releasePictureSpeed);
-byId('vwrap').addEventListener('contextmenu', event => { if (pictureHolding || suppressPictureClick) event.preventDefault(); });
-byId('vwrap').addEventListener('click', event => {
+byId('vgrid').addEventListener('pointerup', releasePictureSpeed);
+byId('vgrid').addEventListener('pointercancel', releasePictureSpeed);
+byId('vgrid').addEventListener('pointerleave', releasePictureSpeed);
+byId('vgrid').addEventListener('contextmenu', event => { if (pictureHolding || suppressPictureClick) event.preventDefault(); });
+byId('vgrid').addEventListener('click', event => {
   if (event.target.closest('button')) return;
   if (suppressPictureClick) { suppressPictureClick = false; return; }
   if (curClips.length) wantedPlay && !atEnd ? pauseAll() : playAll();
