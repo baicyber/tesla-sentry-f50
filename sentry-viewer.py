@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.021"
+APP_VERSION = "2026.11.25.022"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -4051,7 +4051,9 @@ function gridDims(n) {
 }
 
 async function load() {
-  data = await (await fetch('/api/events')).json();
+  const res = await fetch('/api/events');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) { toast('事件列表加载失败：' + (data.error || res.status)); return; }
   const tabs = document.getElementById('tabs');
   tabs.innerHTML = '';
   const liveOpen = liveMode;
@@ -8951,6 +8953,8 @@ def _event_coords(meta):
 
 def _clip_gps(fp, which="s"):
     """读取行驶片段首帧(s)/末帧(e) SEI 里的 GPS, 按文件指纹缓存, 供驾驶记录显示起终点地址。"""
+    if not fp:
+        return None
     try:
         st = os.stat(fp)
     except OSError:
@@ -8966,35 +8970,38 @@ def _clip_gps(fp, which="s"):
             data = None
     if not isinstance(data, dict):
         data = {}
-        parsed = _mp4_video_samples(fp)
-        if parsed:
-            offs, len_size = parsed
-            with open(fp, "rb") as f:
-                for tag, idx in (("s", 0), ("e", len(offs) - 1)):
-                    if not offs:
-                        break
-                    off, size = offs[idx]
-                    if off + size > st.st_size:
-                        continue
-                    f.seek(off)
-                    blob = f.read(size)
-                    pos = 0
-                    while pos + len_size <= len(blob):
-                        n = int.from_bytes(blob[pos:pos + len_size], "big")
-                        if n <= 0 or pos + len_size + n > len(blob):
+        try:
+            parsed = _mp4_video_samples(fp)
+            if parsed:
+                offs, len_size = parsed
+                with open(fp, "rb") as f:
+                    for tag, idx in (("s", 0), ("e", len(offs) - 1)):
+                        if not offs:
                             break
-                        nal = blob[pos + len_size:pos + len_size + n]
-                        pos += len_size + n
-                        msg = _tesla_sei(nal)
-                        if not msg:
+                        off, size = offs[idx]
+                        if off + size > st.st_size:
                             continue
-                        try:
-                            lat, lon = float(msg.get(11)), float(msg.get(12))
-                        except (TypeError, ValueError):
+                        f.seek(off)
+                        blob = f.read(size)
+                        pos = 0
+                        while pos + len_size <= len(blob):
+                            n = int.from_bytes(blob[pos:pos + len_size], "big")
+                            if n <= 0 or pos + len_size + n > len(blob):
+                                break
+                            nal = blob[pos + len_size:pos + len_size + n]
+                            pos += len_size + n
+                            msg = _tesla_sei(nal)
+                            if not msg:
+                                continue
+                            try:
+                                lat, lon = float(msg.get(11)), float(msg.get(12))
+                            except (TypeError, ValueError):
+                                break
+                            if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat or lon):
+                                data[tag] = [round(lat, 6), round(lon, 6)]
                             break
-                        if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat or lon):
-                            data[tag] = [round(lat, 6), round(lon, 6)]
-                        break
+        except Exception:
+            pass
         try:
             os.makedirs(TEL_DIR, exist_ok=True)
             tmp = cache + ".tmp"
@@ -9009,21 +9016,35 @@ def _clip_gps(fp, which="s"):
     return None
 
 
+def _media_path(url):
+    """/media/<分类>/<目录>/<文件> 映射回归档区真实路径, 不存在时返回 None"""
+    url = (url or "").strip()
+    if url.startswith("/media/"):
+        url = os.path.join(ARCHIVE, url[len("/media/"):])
+    return safe_archive_path(url)
+
+
 def trip_metas(members, amap_key="", addr_format=""):
     """驾驶记录: 用首/末片段的 GPS 反推起点与终点地址, 并按「地址显示格式」拼接。"""
-    if not members or not amap_key:
+    if not members:
         return {}, {}
     start_meta = dict(members[0]["meta"])
     end_meta = dict(members[-1]["meta"])
-    for meta, member, which in ((start_meta, members[0], "s"), (end_meta, members[-1], "e")):
-        if _event_coords(meta):
-            continue
-        vids = member.get("videos") or []
-        gps = _clip_gps(safe_archive_path(vids[0]["url"]), which) if vids else None
-        if gps:
-            meta["est_lat"], meta["est_lon"] = gps
-    return (normalize_event_meta(start_meta, amap_key, addr_format),
-            normalize_event_meta(end_meta, amap_key, addr_format))
+    if not amap_key:
+        return start_meta, end_meta
+    try:
+        for meta, member, which in ((start_meta, members[0], "s"), (end_meta, members[-1], "e")):
+            if _event_coords(meta):
+                continue
+            vids = member.get("videos") or []
+            gps = _clip_gps(_media_path(vids[0]["url"]), which) if vids else None
+            if gps:
+                meta["est_lat"], meta["est_lon"] = gps
+        return (normalize_event_meta(start_meta, amap_key, addr_format),
+                normalize_event_meta(end_meta, amap_key, addr_format))
+    except Exception:
+        # 任何单个片段解析失败都不应影响列表整体
+        return start_meta, end_meta
 
 
 def _geo_load_locked():
