@@ -65,8 +65,12 @@ def load(path=None):
 
 
 def revision(values, image):
-    info = Path(image).stat()
-    body = json.dumps([values, info.st_dev, info.st_ino, info.st_size], sort_keys=True)
+    try:
+        info = Path(image).stat()
+        body = json.dumps([values, info.st_dev, info.st_ino, info.st_size], sort_keys=True)
+    except FileNotFoundError:
+        # 全新安装还没有车机镜像: 用固定值参与 revision, 首次创建镜像后自动变化
+        body = json.dumps([values, 0, 0, 0], sort_keys=True)
     return hashlib.sha256(body.encode()).hexdigest()
 
 
@@ -137,12 +141,20 @@ def tree_usage(path, seen=None, skip=None):
 
 def snapshot(image, archive, cache):
     image, archive, cache = Path(image), Path(archive), Path(cache)
-    info = image.stat()
-    if archive.stat().st_dev != info.st_dev:
+    try:
+        info = image.stat()
+    except FileNotFoundError:
+        info = None
+    try:
+        archive_info = archive.stat()
+    except FileNotFoundError:
+        archive_info = None
+    if info is not None and archive_info is not None and archive_info.st_dev != info.st_dev:
         raise ValueError('镜像和归档须位于同一数据盘')
     filesystem = os.statvfs(image.parent)
-    image_allocated = getattr(info, 'st_blocks', (info.st_size + 511) // 512) * 512
-    seen = {(info.st_dev, info.st_ino)}
+    image_allocated = 0 if info is None else getattr(
+        info, 'st_blocks', (info.st_size + 511) // 512) * 512
+    seen = set() if info is None else {(info.st_dev, info.st_ino)}
     # 转码缓存落在归档区内: 统计归档用量时排除它, 再单独计入缓存预算
     skip = set()
     try:
@@ -154,7 +166,13 @@ def snapshot(image, archive, cache):
     while not cache_parent.exists() and cache_parent != cache_parent.parent:
         cache_parent = cache_parent.parent
     try:
-        cache_on_card = cache_parent.stat().st_dev == info.st_dev
+        if info is not None:
+            ref_dev = info.st_dev
+        elif archive_info is not None:
+            ref_dev = archive_info.st_dev
+        else:
+            ref_dev = image.parent.stat().st_dev
+        cache_on_card = cache_parent.stat().st_dev == ref_dev
     except OSError:
         cache_on_card = False
     cache_allocated = 0
@@ -163,7 +181,8 @@ def snapshot(image, archive, cache):
     free = filesystem.f_bavail * filesystem.f_frsize
     return dict(total_bytes=filesystem.f_blocks * filesystem.f_frsize, free_bytes=free,
                 budget_bytes=free + image_allocated + archive_allocated + cache_allocated,
-                usb_bytes=info.st_size, archive_bytes=archive_used,
+                usb_bytes=info.st_size if info is not None else 0,
+                archive_bytes=archive_used,
                 drive_bytes=tree_usage(archive / 'DriveClips')[0])
 
 

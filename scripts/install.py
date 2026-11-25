@@ -25,7 +25,6 @@ CONF = '/etc/tesla-sentry.conf'
 SERVICES = ('tsf-mount', 'tesla-gadget', 'tesla-live', 'tesla-viewer')
 SCRIPTS = ('mkexfat.py', 'tesla-gadget.sh', 'tesla-usb-start.sh', 'tesla-img.sh', 'tesla-sync.sh',
            'usb-selfheal.sh', 'tsf-storage.sh', 'tsf-maintenance.sh')
-GIB = 1 << 30
 MARKER = 'installation.json'
 
 
@@ -41,9 +40,12 @@ def arguments(argv=None):
     parser.add_argument('--start', action='store_true', help='安装成功后启动；仅与 --apply 一起使用')
     parser.add_argument('--data-mount', default='/mnt/sdcard',
                         help='视频存储（镜像+归档）所在盘的挂载点，建议 TF 卡；F50 默认 /dev/mmcblk1p1 挂载到 /mnt/sdcard')
-    parser.add_argument('--size-gb', type=int, default=64)
-    parser.add_argument('--archive-gb', type=int, default=34)
-    parser.add_argument('--drive-gb', type=int, default=12)
+    parser.add_argument('--size-gb', type=int, default=64,
+                        help='兼容旧命令；全新安装不再预建镜像，容量在网页「存储分配」里设置')
+    parser.add_argument('--archive-gb', type=int, default=34,
+                        help='兼容旧命令；归档分配在网页「存储分配」里设置')
+    parser.add_argument('--drive-gb', type=int, default=12,
+                        help='兼容旧命令；驾驶记录配额在网页「存储分配」里设置')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--ffmpeg')
     parser.add_argument('--ffprobe')
@@ -173,11 +175,6 @@ class Installer:
         if self.args.start and not self.args.apply:
             raise InstallError('--start 需要同时指定 --apply')
 
-    def required_bytes(self):
-        # 镜像 + 归档上限 + 安全预留 + 转码缓存上限(默认 5G), 与网页保存时的校验口径一致。
-        return storage_allocation.required_bytes(dict(archive_gib=self.args.archive_gb, free_target_gib=10),
-                                                 self.args.size_gb, cache_gib=5)
-
     def payload(self):
         result = {APP + '/' + name: self.source / name
                   for name in ('sentry-viewer.py', 'tesla-live-sync.py', 'storage_allocation.py', 'storage_resize.py')}
@@ -212,8 +209,6 @@ class Installer:
                 matches = matches and self.path(CONF).is_file()
                 matches = matches and (self.path(APP) / 'auth.conf').is_file()
                 matches = matches and (self.path(APP) / 'settings.json').is_file()
-                image = self.path(self.data_home) / 'img' / 'teslacam.img'
-                matches = matches and image.stat().st_size == self.args.size_gb * GIB
             except (OSError, ValueError, KeyError):
                 matches = False
             return 'same' if matches else 'upgrade'
@@ -224,8 +219,9 @@ class Installer:
         return 'new'
 
     def options_record(self):
+        # 容量与归档分配不再属于安装参数: 全新安装后在网页「存储分配」里设置
         options = {key: getattr(self.args, key) for key in
-                   ('data_mount', 'size_gb', 'archive_gb', 'drive_gb', 'port', 'ffmpeg', 'ffprobe')}
+                   ('data_mount', 'port', 'ffmpeg', 'ffprobe')}
         if self.runtime:
             options['runtime'] = hashlib.sha256((self.runtime / 'manifest.json').read_bytes()).hexdigest()
         return options
@@ -668,13 +664,11 @@ class Installer:
         if not re.fullmatch(r'[A-Za-z0-9-]+', uuid):
             raise InstallError('无法读取数据盘 UUID')
         usage = shutil.disk_usage(self.path(self.args.data_mount))
-        # 升级不新建镜像, 也不重新分配空间, 只做只读校验
-        if not self.upgrade and self.args.size_gb > usage.total / GIB / 2:
-            raise InstallError('镜像容量不能超过数据盘实际容量的一半（%.1f G）：归档区要与车机内容一致，'
-                               '还要存放转码缓存、铃声、涂装等文件' % (usage.total / GIB / 2))
-        if not self.upgrade and usage.free < self.required_bytes():
-            raise InstallError('数据盘至少需要 %d G 空闲空间（镜像、归档、安全预留）' %
-                               (self.required_bytes() // GIB))
+        # 升级不新建镜像, 也不重新分配空间, 只做只读校验。
+        # 全新安装同样不预建镜像或归档目录: 只确认数据盘有最基本的可用空间,
+        # 具体容量与归档位置在首次打开网页时到「设置 → 存储分配」里完成。
+        if not self.upgrade and usage.free < 256 * 1024 * 1024:
+            raise InstallError('数据盘至少需要 256 MiB 空闲空间，用于日志与首次设置')
         app_bytes = sum(info['size'] for info in runtime_files.values()) + 128 * 1024 * 1024
         if shutil.disk_usage(self.path('/opt')).free < app_bytes:
             raise InstallError('/opt 至少需要 %d MiB 空闲空间' % ((app_bytes + (1 << 20) - 1) >> 20))
@@ -796,18 +790,9 @@ class Installer:
             write(app_stage / 'auth.conf', 'user=admin\npass=%s\nsecret=%s\nttl=2592000\n' %
                   (password, secrets.token_hex(32)), 0o600)
             write(app_stage / 'settings.json', '{"auto_update": false}\n', 0o600)
-            for name in ('archive', 'logs'):
-                (data_stage / name).mkdir()
-            (data_stage / 'img').mkdir()
-            (data_stage / 'archive' / 'transcode_cache').mkdir()
+            # 全新安装不生成镜像、不预建归档目录: 由网页「存储分配」首次设置时创建
+            (data_stage / 'logs').mkdir()
             (app_stage / 'cache').mkdir()
-            run([self.python(), '-B', str(self.source / 'scripts/mkexfat.py'),
-                 str(data_stage / 'img' / 'teslacam.img'), str(self.args.size_gb)])
-            image = data_stage / 'img' / 'teslacam.img'
-            with image.open('rb') as stream:
-                header = stream.read(11)
-            if header[3:11] != b'EXFAT   ' or image.stat().st_size != self.args.size_gb * GIB:
-                raise InstallError('新镜像校验失败')
             env = os.environ.copy()
             env.update(TSF_ARCHIVE=str(data_stage / 'archive'), TSF_CACHE=str(app_stage / 'cache'),
                        TSF_AUTH_FILE=str(app_stage / 'auth.conf'),
@@ -865,6 +850,8 @@ class Installer:
                     shutil.rmtree(path)
             lock.rmdir()
         print('安装完成。账号 admin；密码保存在 /opt/tesla-sentry/auth.conf。')
+        print('全新安装未创建车机镜像，也未预设归档区位置。')
+        print('请打开 http://<F50-IP>:%s → 设置 → 存储分配，按向导设置并创建车机 U 盘。' % self.args.port)
         print('启动命令：/etc/init.d/tsf-mount start；网页端口：%s' % self.args.port)
         return True
 
@@ -920,7 +907,8 @@ class Installer:
         image = old.get('TSF_IMG') or video_root + '/img/teslacam.img'
         archive = old.get('TSF_ARCHIVE') or video_root + '/archive'
         if not self.path(image).is_file():
-            raise InstallError('旧安装找不到车机镜像 %s；请确认 TF 卡已挂载后重试，或全新安装' % image)
+            # 全新安装尚未在网页里创建镜像; 原地升级继续, 不阻止程序更新
+            print('提示：当前还没有车机镜像，升级后可在网页「存储分配」里创建', flush=True)
         try:
             # 以现有目录为底复制(排除可再生的 cache 与 runtime)，保留账号、设置与上传素材
             shutil.copytree(app, staging, symlinks=True, dirs_exist_ok=True,
@@ -1019,7 +1007,8 @@ class Installer:
         run(['/etc/init.d/tesla-viewer', 'running'])
         expected = self.data_home + '/img/teslacam.img'
         lun = self.path(self.device['gadget']) / 'functions/mass_storage.0/lun.0/file'
-        if lun.read_text().strip() != expected:
+        # 全新安装还没有镜像: 此时不校验 USB 绑定, 等网页首次设置创建镜像后再自动导出
+        if os.path.isfile(expected) and lun.read_text().strip() != expected:
             raise InstallError('启动后 USB 镜像绑定校验失败；安装文件已保留')
         for attempt in range(20):
             try:
@@ -1042,8 +1031,7 @@ def main(argv=None):
             if installed and installer.args.start and not installer.upgrade:
                 installer.start()
         elif installer.preflight():
-            print('检查通过。需要 %d G 数据盘空闲空间；尚未写入文件或启动服务。' %
-                  (installer.required_bytes() // GIB))
+            print('检查通过。全新安装不会预建镜像或归档目录；安装后在网页「设置 → 存储分配」完成首次设置。')
         else:
             print('相同版本已安装，未改动设备。')
         return 0

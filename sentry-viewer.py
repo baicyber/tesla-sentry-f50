@@ -504,7 +504,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.038"
+APP_VERSION = "2026.11.25.039"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2569,6 +2569,14 @@ select.ninput { cursor:pointer; }
 .support-qrs figcaption { font-size:10.5px; color:var(--muted); margin-top:5px; line-height:1.4; }
 .item .tag { font-size:10.5px; color:#4cc38a; }
 .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--accent); color:#fff; padding:9px 20px; border-radius:20px; font-size:13px; z-index:300; display:none; }
+/* 全新安装首次进入: 引导到存储分配完成设置 */
+.setup-guide { position:fixed; inset:0; z-index:300; display:grid; place-items:center; padding:20px; background:#0008; }
+.setup-guide[hidden] { display:none; }
+.setup-card { width:min(460px,100%); background:var(--panel); border:1px solid var(--line2); border-radius:12px; padding:20px 22px; box-shadow:0 12px 40px #0006; }
+.setup-card h3 { margin:0 0 10px; font-size:18px; }
+.setup-card p,.setup-card li { font-size:13px; line-height:1.7; color:var(--muted); }
+.setup-card ol { margin:8px 0 16px; padding-left:20px; }
+.setup-actions { display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; }
 .expp { display:none; position:fixed; right:14px; bottom:70px; width:min(320px,92vw); background:var(--panel); border:1px solid var(--line2); border-radius:14px; padding:14px; z-index:150; box-shadow:0 10px 30px #00000060; }
 .expp.open { display:block; }
 .expp .expt { font-size:13.5px; font-weight:600; margin-bottom:10px; display:flex; align-items:center; }
@@ -2845,6 +2853,7 @@ body.watching { overflow:hidden; }
 .timeline-row { display:flex; align-items:flex-start; gap:14px; }
 .playback-help { display:flex; flex-direction:column; justify-content:center; gap:2px; min-height:36px;
   color:var(--muted); font-size:11px; line-height:1.5; white-space:nowrap; }
+.playback-help .ph-key:not(:last-child)::after { content:'，'; }
 .timeline { position:relative; height:34px; display:flex; align-items:flex-start; flex:1; min-width:0; padding-top:0; }
 #track-bands { position:absolute; left:8px; right:8px; top:16px; height:6px; border-radius:3px; background:linear-gradient(to right,var(--play-accent) var(--played,0%),var(--muted2) var(--played,0%)); pointer-events:none; }
 #track-bands i { position:absolute; inset-block:0; }
@@ -3116,6 +3125,17 @@ body.settings-open { overflow:hidden; }
 .usage-row.nested { margin:0 0 9px; padding-left:0; border-left:0; }
 .usage-row.nested:last-child { margin-bottom:0; }
 .usage-row.free { margin:0; padding-top:12px; border-top:1px solid var(--line); }
+/* 实际用量: 字号与行高对齐左侧容量设置, 行数撑满整张卡片 */
+#storage-usage .storage-usage { flex:1 1 auto; display:flex; flex-direction:column; margin:12px 0 0; font-size:14px; }
+#storage-usage .usage-row { flex:1 1 auto; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; column-gap:10px; row-gap:4px;
+  margin:0; padding:8px 0; min-height:48px; font-size:14px; border-bottom:1px solid var(--line); }
+#storage-usage .usage-row > span:first-child { font-size:14px; }
+#storage-usage .usage-row meter { grid-column:1 / -1; width:100%; }
+#storage-usage .usage-group { flex:1 1 auto; display:flex; flex-direction:column; margin:0; padding-left:12px; border-left:1px solid var(--line); }
+#storage-usage .usage-group .usage-row { border-bottom:0; min-height:44px; }
+#storage-usage .usage-row.free { border-bottom:0; border-top:1px solid var(--line); }
+#storage-usage .usage-actions { gap:8px; }
+#storage-usage .hint { margin-top:8px; }
 .usage-chart-box { margin:0 0 12px; padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .usage-chart-row { display:flex; align-items:center; gap:10px; margin:0 0 10px; }
 .usage-chart-row:last-of-type { margin-bottom:0; }
@@ -3161,6 +3181,12 @@ body.settings-open { overflow:hidden; }
 .storage-danger .storage-row { max-width:420px; }
 #storage-resize { border-color:var(--danger); color:var(--danger); background:transparent; }
 /* 存储分配 · 外置卡与归档同步功能区 */
+#storage-extcard { margin:0 0 14px; }
+#storage-extcard > summary { font-size:17px; font-weight:600; cursor:pointer; list-style-position:inside; }
+#storage-extcard[open] > summary { margin-bottom:10px; }
+.storage-subtitle { font-size:14px; font-weight:600; margin:4px 0 4px; }
+.storage-split { height:1px; background:var(--line); margin:18px 0 12px; }
+#storage-archive-sync { min-height:100%; }
 .storage-tools .tool-block { padding-top:14px; margin-top:14px; border-top:1px solid var(--line); }
 .storage-tools .tool-block:first-of-type { border-top:0; margin-top:0; padding-top:0; }
 .storage-tools h4 { font-size:14px; margin:0 0 8px; font-weight:600; }
@@ -3261,6 +3287,8 @@ body.settings-open { overflow:hidden; }
   .viewtools #shotbtn,.viewtools #bbtn,.viewtools #screenbtn { width:34px; min-width:34px; padding:0; }
   .viewtools #spdsel { height:44px; font-size:11px; }
   .shuttle #ppbtn { width:44px; height:44px; }
+  .playback-help .ph-kb { display:flex; flex-direction:column; }
+  .playback-help .ph-key:not(:last-child)::after { content:''; }
   .player .tpanel { padding:12px; }
   .player .tp-spd { font-size:28px; }
   .player .tp-badge { font-size:12px; padding:4px 6px; }
@@ -3285,9 +3313,9 @@ body.settings-open { overflow:hidden; }
 @media (max-width:600px) {
   /* 设置页移动端: 更新源一行控件改为全宽堆叠, 避免下拉框被挤偏/变小 */
   #tab-update .updrow { align-items:center; row-gap:8px; }
-  #tab-update .updrow #upd-repo { flex:1 1 100% !important; }
+  #tab-update .updrow #upd-repo { flex:1 1 calc(100% - 76px) !important; }
   #tab-update .updrow #upd-custom { flex:1 1 100% !important; }
-#tab-update .updrow #upd-branch { flex:1 1 100% !important; }
+#tab-update .updrow #upd-branch { flex:1 1 calc(100% - 76px) !important; }
 #tab-update .updrow #upd-branch-custom { flex:1 1 100% !important; }
   /* 更新卡片: 检查更新与立即升级同一行各占一半, 自动更新独占一行 */
   #tab-update .updvercard .updbtns { row-gap:8px; }
@@ -3532,7 +3560,7 @@ body.settings-open { overflow:hidden; }
       <div class="clockline"><span id="track-start"></span><output id="ptime">--:--:--</output><span id="track-end"></span></div>
       <div class="timeline-row"><div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"><output id="seek-hover" hidden></output><button id="trigger-marker" hidden>触发时刻</button></div></div>
       <div class="playtools">
-        <div class="playback-help"><span>画面上：单击 播放/暂停，长按 3× 快进</span><span>键盘：空格 播放/暂停（长按 3×），←→ 跳转 1s，↑↓ 跳转 10s</span></div>
+        <div class="playback-help"><span>画面上：单击 播放/暂停，长按 3× 快进</span><span class="ph-kb"><span class="ph-kb-t">键盘：</span><span class="ph-key">空格 播放/暂停</span><span class="ph-key">长按 3×</span><span class="ph-key">←→ 跳转 1s</span><span class="ph-key">↑↓ 跳转 10s</span></span></div>
         <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="skip-back-one" aria-label="回退一秒">−1s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next-one" aria-label="前进一秒">+1s</button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
         <div class="viewtools"><div class="qsel" id="bsel"><button class="qbtn" id="bbtn" title="画面亮度" aria-label="画面亮度" aria-expanded="false" onclick="toggleBright(event)"><svg class="ic"><use href="#i-sun"/></svg></button><div class="bpop" id="bpop" onclick="event.stopPropagation()"><output id="bval">1.0×</output><div class="bslider"><input type="range" id="brange" min="1" max="4" step="0.1" value="1" aria-label="画面亮度" oninput="onBrightInput(this.value)" onchange="flashBright()"></div><button type="button" class="breset" onclick="setBright(1)">复位</button></div></div><button id="shotbtn" title="截屏下载" aria-label="截屏下载" onclick="captureFrame()"><svg class="ic"><use href="#i-camera"/></svg></button><div class="qsel" id="qsel"></div><select id="spdsel" aria-label="播放速度" title="播放速度" onchange="setSpeed(Number(this.value))"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
       </div>
@@ -3607,6 +3635,17 @@ body.settings-open { overflow:hidden; }
       <div class="usage-legend" id="usage-legend"></div>
       <div class="hint" style="margin-top:7px">整卡图只显示车机 U 盘设定容量、归档区总上限与剩余空间，不显示归档区实际占用。归档总上限及各分类上限随下方设置实时联动，且不能超过整卡扣除车机 U 盘后的容量。</div>
     </div>
+    <details class="storage-quota storage-tools" id="storage-extcard">
+      <summary>外置卡管理</summary>
+      <div class="hint">检测外置 TF/SD 卡。插入新卡后可先「初始格式化」（格式化为 ext4 文件系统），再查看容量与测速。</div>
+      <div id="ext-card-info" class="tool-info">读取中…</div>
+      <div class="tool-actions">
+        <button class="mini" onclick="extCardInfo()">刷新信息</button>
+        <button class="mini" onclick="extCardSpeed()">速度测试（1G）</button>
+        <button class="mini tool-danger" onclick="extCardFormat()">初始格式化</button>
+      </div>
+      <div class="hint" id="ext-card-msg" role="status" aria-live="polite"></div>
+    </details>
     <div id="storage-plan" hidden>
       <div class="storage-total-row"><span>存储卡实际容量</span><output id="storage-total">—</output><span>G</span><button class="storage-help" type="button" aria-label="存储卡实际容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="total">?</button></div>
       <div class="storage-summary"><span>分配预览</span><span>可分配 <output id="storage-available">—</output> G</span></div>
@@ -3625,14 +3664,19 @@ body.settings-open { overflow:hidden; }
     <div class="storage-row cap"><label for="storage-archive">归档区总上限</label><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
     <div class="storage-nested"><div class="storage-row cap"><label for="storage-drive">其中：驾驶记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="驾驶记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row cap"><label for="retention-recentmax">其中：实时滚动记录上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="实时滚动记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div>
     <div class="storage-row cap"><label for="storage-sentry">其中：哨兵上限</label><input class="ninput" id="storage-sentry" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="哨兵录像上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="sentrymax">?</button></div>
-    <div class="storage-row cap"><label for="storage-saved">其中：手动保存上限</label><input class="ninput" id="storage-saved" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="手动保存上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="savedmax">?</button></div></div>
-    <div class="storage-row cap"><label for="storage-cache">转码缓存上限</label><input class="ninput" id="storage-cache" type="number" min="1" max="64" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="转码缓存上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="cachemax">?</button></div>
+    <div class="storage-row cap"><label for="storage-saved">其中：手动保存上限</label><input class="ninput" id="storage-saved" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="手动保存上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="savedmax">?</button></div>
+    <div class="storage-row cap"><label for="storage-cache">其中：转码缓存上限</label><input class="ninput" id="storage-cache" type="number" min="1" max="64" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="转码缓存上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="cachemax">?</button></div></div>
     <div class="storage-row cap"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
-    <div class="storage-advanced"><div class="storage-advanced-title">高级保护</div>
-      <div class="storage-row cap"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
-    </div>
+    <div class="storage-nested"><div class="storage-row cap"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div></div>
     <div class="updbtns"><button class="mini primary" id="storage-save" onclick="storageSave()" disabled>保存归档设置</button><button class="mini" onclick="storageLoad()">重新加载</button></div>
     <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
+    <div class="storage-split"></div>
+    <h4 class="storage-subtitle">调整车机 U 盘容量</h4>
+    <div class="storage-row cap"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
+    <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。调整会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div>
+    <div class="hint">格式化：用空白 exFAT 按当前容量重建车机 U 盘，清空镜像内全部内容（归档区保留）。车机上格式化 U 盘后网页一直提示「镜像未就绪」，或 U 盘内容损坏、调整容量失败时，用它一键恢复。</div>
+    <button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button>
+    <button class="mini" id="storage-format" onclick="storageFormat()" disabled>格式化 U 盘</button><div id="storage-resize-status"></div>
     </section><section class="storage-quota" id="storage-usage">
       <h3>实际用量 · 已用／上限</h3>
       <div class="storage-usage">
@@ -3641,9 +3685,9 @@ body.settings-open { overflow:hidden; }
         <div class="usage-group">
           <div class="usage-row nested"><span>其中：驾驶记录</span><span class="usage-actions"><output id="storage-used-drive">—</output><button class="mini usage-clear" onclick="storageClearUsage('drive')">清空</button></span><meter id="storage-meter-drive" min="0" max="100" value="0" aria-label="驾驶记录用量"></meter></div>
           <div class="usage-row nested"><span>其中：实时滚动记录</span><span class="usage-actions"><output id="storage-used-recent">—</output><button class="mini usage-clear" onclick="storageClearUsage('recent')">清空</button></span><meter id="storage-meter-recent" min="0" max="100" value="0" aria-label="实时滚动记录用量"></meter></div>
-          <div class="usage-row nested"><span>其中：哨兵</span><span class="usage-actions"><output id="storage-used-sentry">—</output><button class="mini usage-clear" onclick="storageClearUsage('sentry')">清空</button></span></div>
-          <div class="usage-row nested"><span>其中：手动保存</span><span class="usage-actions"><output id="storage-used-saved">—</output><button class="mini usage-clear" onclick="storageClearUsage('saved')">清空</button></span></div>
-          <div class="usage-row nested"><span>其中：缓存目录</span><span class="usage-actions"><output id="storage-used-cache">—</output><button class="mini usage-clear" onclick="storageClearUsage('cache')">清空</button></span></div>
+          <div class="usage-row nested"><span>其中：哨兵录像</span><span class="usage-actions"><output id="storage-used-sentry">—</output><button class="mini usage-clear" onclick="storageClearUsage('sentry')">清空</button></span><meter id="storage-meter-sentry" min="0" max="100" value="0" aria-label="哨兵录像用量"></meter></div>
+          <div class="usage-row nested"><span>其中：手动保存</span><span class="usage-actions"><output id="storage-used-saved">—</output><button class="mini usage-clear" onclick="storageClearUsage('saved')">清空</button></span><meter id="storage-meter-saved" min="0" max="100" value="0" aria-label="手动保存用量"></meter></div>
+          <div class="usage-row nested"><span>其中：转码缓存</span><span class="usage-actions"><output id="storage-used-cache">—</output><button class="mini usage-clear" onclick="storageClearUsage('cache')">清空</button></span><meter id="storage-meter-cache" min="0" max="100" value="0" aria-label="转码缓存用量"></meter></div>
           <div class="usage-row nested"><span>其中：其他文件</span><output id="storage-used-other">—</output></div>
         </div>
         <div class="usage-row free"><span>存储卡当前空闲</span><output id="storage-used-free">—</output></div>
@@ -3661,44 +3705,22 @@ body.settings-open { overflow:hidden; }
       <div class="updbtns"><button class="mini primary" id="retention-save" onclick="storageSaveRetention()" disabled>保存时间限制</button></div>
       <div class="hint" id="retention-msg" role="status" aria-live="polite"></div>
     </section>
-    <section class="storage-quota storage-tools" id="storage-tools">
-      <h3>外置卡与归档同步</h3>
-      <div class="tool-block">
-        <h4>外置卡管理</h4>
-        <div class="hint">检测外置 TF/SD 卡。插入新卡后可先初始化格式化，再查看容量与测速。</div>
-        <div id="ext-card-info" class="tool-info">读取中…</div>
-        <div class="tool-actions">
-          <button class="mini" onclick="extCardInfo()">刷新信息</button>
-          <button class="mini" onclick="extCardSpeed()">速度测试</button>
-          <button class="mini tool-danger" onclick="extCardFormat()">初始化格式化</button>
-        </div>
-        <div class="hint" id="ext-card-msg" role="status" aria-live="polite"></div>
+    <section class="storage-quota storage-tools" id="storage-archive-sync">
+      <h3>归档区同步</h3>
+      <div class="hint">把车机 U 盘镜像里的文件一键同步到归档区。同步前会扫描全盘里不在默认位置的 teslacam.img 与 archive 文件夹，可迁移到默认位置。</div>
+      <div class="tool-actions">
+        <button class="mini primary" id="arch-sync-btn" onclick="archiveSyncStart()">一键同步到归档区</button>
+        <button class="mini" onclick="archiveScan(true)">重新扫描</button>
       </div>
-      <div class="tool-block">
-        <h4>调整车机 U 盘容量</h4>
-        <div class="storage-row cap"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
-        <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。调整会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div>
-        <div class="hint">格式化：用空白 exFAT 按当前容量重建车机 U 盘，清空镜像内全部内容（归档区保留）。车机上格式化 U 盘后网页一直提示「镜像未就绪」，或 U 盘内容损坏、调整容量失败时，用它一键恢复。</div>
-        <button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button>
-        <button class="mini" id="storage-format" onclick="storageFormat()" disabled>格式化 U 盘</button><div id="storage-resize-status"></div>
+      <div class="sync-progress" id="arch-sync-progress" hidden>
+        <div class="sync-line"><span>镜像实际占用</span><b id="arch-sync-total">—</b></div>
+        <div class="sync-line"><span>写入进度</span><b id="arch-sync-pct">0%</b></div>
+        <div class="sync-bar"><i id="arch-sync-fill"></i></div>
+        <div class="sync-line"><span>同步速率</span><b id="arch-sync-rate">0 MB/s</b></div>
+        <div class="hint" id="arch-sync-msg" role="status" aria-live="polite"></div>
       </div>
-      <div class="tool-block">
-        <h4>归档区同步</h4>
-        <div class="hint">把车机 U 盘镜像里的文件一键同步到归档区。同步前会扫描全盘里不在默认位置的 teslacam.img 与 archive 文件夹，可迁移到默认位置。</div>
-        <div class="tool-actions">
-          <button class="mini primary" id="arch-sync-btn" onclick="archiveSyncStart()">一键同步到归档区</button>
-          <button class="mini" onclick="archiveScan(true)">重新扫描</button>
-        </div>
-        <div class="sync-progress" id="arch-sync-progress" hidden>
-          <div class="sync-line"><span>镜像实际占用</span><b id="arch-sync-total">—</b></div>
-          <div class="sync-line"><span>写入进度</span><b id="arch-sync-pct">0%</b></div>
-          <div class="sync-bar"><i id="arch-sync-fill"></i></div>
-          <div class="sync-line"><span>同步速率</span><b id="arch-sync-rate">0 MB/s</b></div>
-          <div class="hint" id="arch-sync-msg" role="status" aria-live="polite"></div>
-        </div>
-        <div id="arch-scan-box" class="scan-box"></div>
-        <div id="arch-migrate-actions"></div>
-      </div>
+      <div id="arch-scan-box" class="scan-box"></div>
+      <div id="arch-migrate-actions"></div>
     </section>
     </div>
     <details class="storage-quota" id="storage-paths">
@@ -3929,12 +3951,10 @@ body.settings-open { overflow:hidden; }
   <div id="tab-update" style="display:none">
     <div class="updrow" style="flex-wrap:wrap;gap:8px;align-items:center">
       <span class="updk">更新源</span>
-      <select class="ninput" id="upd-repo" style="flex:1 1 180px;min-width:0" onchange="otaRepoUI()"></select>
+      <select class="ninput" id="upd-repo" style="flex:1 1 160px;min-width:0" onchange="otaRepoUI()"></select>
       <input class="ninput" id="upd-custom" placeholder="自定义仓库 owner/repo 或 https://github.com/owner/repo" style="display:none;flex:1 1 220px;min-width:0" spellcheck="false" autocapitalize="none" onchange="otaSaveTarget()" onkeydown="if(event.key==='Enter'){event.preventDefault();otaSaveTarget();}">
-    </div>
-    <div class="updrow" style="flex-wrap:wrap;gap:8px;align-items:center">
-      <span class="updk">分支</span>
-      <select class="ninput" id="upd-branch" style="flex:1 1 180px;min-width:0" onchange="otaBranchUI()"></select>
+      <span class="updk updk-branch">分支</span>
+      <select class="ninput" id="upd-branch" style="flex:0 1 130px;min-width:0" onchange="otaBranchUI()"></select>
       <input class="ninput" id="upd-branch-custom" placeholder="自定义分支名，如 dev / release" style="display:none;flex:1 1 220px;min-width:0" spellcheck="false" autocapitalize="none" onchange="otaSaveTarget()" onkeydown="if(event.key==='Enter'){event.preventDefault();otaSaveTarget();}">
     </div>
     <div class="updvercard">
@@ -3999,6 +4019,19 @@ body.settings-open { overflow:hidden; }
   </div></div>
 </div>
 <div class="toast" id="toast"></div>
+
+<div class="setup-guide" id="setup-guide" hidden role="dialog" aria-modal="true" aria-labelledby="setup-guide-title">
+  <div class="setup-card">
+    <h3 id="setup-guide-title">首次使用 · 先完成存储设置</h3>
+    <p>全新安装不会自动创建车机 U 盘镜像，也没有预设归档区位置。请按下面步骤完成设置：</p>
+    <ol>
+      <li>确认 TF 卡已插入并挂载；新卡可在「外置卡管理」里先做「初始格式化」（ext4）。</li>
+      <li>在「存储分配」里设置车机 U 盘容量、归档区上限与安全预留。</li>
+      <li>点击「调整 U 盘容量」创建镜像，完成后即可插到车机上录制。</li>
+    </ol>
+    <div class="setup-actions"><button class="mini primary" onclick="setupGuideGo()">前往存储设置</button><button class="mini" onclick="setupGuideClose()">稍后</button></div>
+  </div>
+</div>
 
 <div class="stitch" id="stitch">
   <div class="stbox">
@@ -4466,26 +4499,34 @@ async function ffmpegFix() {
   }
 }
 let LIVE_AGO = null;
-function fmtDur(sec) {
-  sec = Math.max(0, Math.round(Number(sec) || 0));
-  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
-  if (h > 0) return h + ' 小时 ' + m + ' 分 ' + s + ' 秒';
-  if (m > 0) return m + ' 分 ' + s + ' 秒';
-  return s + ' 秒';
-}
 function paintLiveText() {
   const txt = document.getElementById('livetxt');
   if (!txt || !LIVE_AGO) return;
   if (LIVE_AGO.pending > 0) { txt.textContent = `${t('实时同步中')} · ${LIVE_AGO.pending} ${t('待确认')}`; return; }
-  if (LIVE_AGO.ago === null) { txt.textContent = t('实时同步中'); return; }
-  const elapsed = LIVE_AGO.ago + Math.floor((Date.now() - LIVE_AGO.at) / 1000);
-  txt.textContent = `${t('实时同步中')} · ${fmtDur(elapsed)}`;
+  txt.textContent = t('实时同步中');
 }
-setInterval(() => { if (LIVE_AGO) paintLiveText(); }, 1000);
+/* 首次进入引导: 还没有车机镜像时提示去存储分配完成设置 */
+let SETUP_GUIDE_SEEN = false;
+function maybeShowSetup(needed) {
+  if (!needed || SETUP_GUIDE_SEEN) return;
+  SETUP_GUIDE_SEEN = true;
+  const box = document.getElementById('setup-guide');
+  if (box) box.hidden = false;
+}
+function setupGuideGo() {
+  const box = document.getElementById('setup-guide');
+  if (box) box.hidden = true;
+  openPanel('storage');
+}
+function setupGuideClose() {
+  const box = document.getElementById('setup-guide');
+  if (box) box.hidden = true;
+}
 async function refreshLive() {
   let live = null;
   try { live = await (await fetch('/api/live')).json(); } catch (e) { updateSystemStatus(null); return; }
   updateSystemStatus(live.sys);
+  maybeShowSetup(live.setup_needed === true);
   showCopySpeed(live.copy_bps);
   const dot = document.getElementById('livedot'), txt = document.getElementById('livetxt');
   if (live.running) {
@@ -7355,12 +7396,15 @@ byId('screenbtn').onclick = async () => {
   }
   player.classList.toggle('expanded'); layoutPlayer();
 };
-let pictureHoldTimer = 0, pictureHolding = false, suppressPictureClick = false;
+let pictureHoldTimer = 0, pictureHolding = false, picturePrevPlaying = false, suppressPictureClick = false;
 function releasePictureSpeed() {
   clearTimeout(pictureHoldTimer); pictureHoldTimer = 0;
   if (!pictureHolding) return;
   pictureHolding = false; suppressPictureClick = true;
-  applyRate(baseRate); updateControls();
+  applyRate(baseRate);
+  // 长按前是暂停的, 松手回到暂停; 长按前在播放的, 松手继续播放
+  if (!picturePrevPlaying) pauseAll();
+  else if (!wantedPlay) playAll();
   flashPlayer(baseRate + '×');
 }
 byId('vgrid').addEventListener('pointerdown', event => {
@@ -7369,7 +7413,9 @@ byId('vgrid').addEventListener('pointerdown', event => {
   clearTimeout(pictureHoldTimer);
   pictureHoldTimer = setTimeout(() => {
     pictureHolding = true;
-    applyRate(3); updateControls();
+    picturePrevPlaying = wantedPlay && !atEnd;
+    if (!picturePrevPlaying) playAll();
+    applyRate(3);
     flashPlayer('3× 快进');
   }, 450);
 });
@@ -7382,13 +7428,16 @@ byId('vgrid').addEventListener('click', event => {
   if (suppressPictureClick) { suppressPictureClick = false; return; }
   togglePlay();
 });
-/* 长按空格 3× 快进, 松开恢复当前速率 */
-let spaceHoldTimer = 0, spaceHolding = false;
-function releaseSpaceSpeed() {
+/* 空格: 短按播放/暂停, 长按临时 3×; 松开后回到长按前的播放/暂停状态 */
+let spaceHoldTimer = 0, spaceHolding = false, spacePressActive = false, spacePrevPlaying = false;
+function releaseSpaceHold() {
   clearTimeout(spaceHoldTimer); spaceHoldTimer = 0;
   if (!spaceHolding) return;
   spaceHolding = false;
-  applyRate(baseRate); flashPlayer(baseRate + '×');
+  applyRate(baseRate);
+  if (!spacePrevPlaying) pauseAll();
+  else if (!wantedPlay) playAll();
+  flashPlayer(baseRate + '×');
 }
 document.addEventListener('keydown', e => {
   const playerOpen = byId('player').classList.contains('open');
@@ -7399,9 +7448,15 @@ document.addEventListener('keydown', e => {
     if (e.code === 'Space' && !typing) {
       e.preventDefault();
       if (e.repeat) return;
-      togglePlay();
+      spacePressActive = true;
+      spacePrevPlaying = wantedPlay && !atEnd;
       clearTimeout(spaceHoldTimer);
-      spaceHoldTimer = setTimeout(() => { spaceHolding = true; applyRate(3); flashPlayer('3× 快进'); }, 450);
+      spaceHoldTimer = setTimeout(() => {
+        spaceHolding = true;
+        if (!spacePrevPlaying) playAll();
+        applyRate(3);
+        flashPlayer('3× 快进');
+      }, 450);
       return;
     }
     const jumps = {ArrowLeft:-1, ArrowRight:1, ArrowUp:-10, ArrowDown:10};
@@ -7419,8 +7474,14 @@ document.addEventListener('keydown', e => {
   if (byId('player').classList.contains('expanded')) { byId('player').classList.remove('expanded'); layoutPlayer(); return; }
   closePlayer(); closePanel();
 });
-document.addEventListener('keyup', e => { if (e.code === 'Space') releaseSpaceSpeed(); });
-window.addEventListener('blur', () => { releaseSpaceSpeed(); releasePictureSpeed(); });
+document.addEventListener('keyup', e => {
+  if (e.code !== 'Space' || !spacePressActive) return;
+  spacePressActive = false;
+  clearTimeout(spaceHoldTimer); spaceHoldTimer = 0;
+  if (spaceHolding) releaseSpaceHold();
+  else togglePlay();
+});
+window.addEventListener('blur', () => { spacePressActive = false; releaseSpaceHold(); releasePictureSpeed(); });
 
 /* ---------- 设置面板 ---------- */
 function toast(msg) {
@@ -7740,8 +7801,11 @@ function storageRenderUsage() {
   const archiveLimit = inputNum('storage-archive', values.archive_gib);
   const driveLimit = inputNum('storage-drive', values.drive_gib);
   const recentLimit = inputNum('retention-recentmax', storageData.retention ? storageData.retention.recent_max_gb : 0);
+  const sentryLimit = inputNum('storage-sentry', storageData.retention ? storageData.retention.sentry_max_gb : 0);
+  const savedLimit = inputNum('storage-saved', storageData.retention ? storageData.retention.saved_max_gb : 0);
+  const cacheLimit = inputNum('storage-cache', storageData.retention ? storageData.retention.cache_max_gb : 0);
   // 实际用量的限额文字与容量条都读容量设置输入框, 改上限时同步变化
-  for (const [name, used, limit] of [['usb', disk.usb_used_bytes, usbLimit], ['archive', disk.archive_bytes, archiveLimit], ['drive', disk.drive_bytes, driveLimit], ['recent', disk.recent_bytes, recentLimit]]) {
+  for (const [name, used, limit] of [['usb', disk.usb_used_bytes, usbLimit], ['archive', disk.archive_bytes, archiveLimit], ['drive', disk.drive_bytes, driveLimit], ['recent', disk.recent_bytes, recentLimit], ['sentry', disk.sentry_bytes, sentryLimit], ['saved', disk.saved_bytes, savedLimit], ['cache', disk.cache_bytes, cacheLimit]]) {
     const notReady = name === 'usb' && disk.usb_ready === false;
     const amount = notReady ? t('未就绪') : (used == null ? '—' : (used / G).toFixed(1));
     document.getElementById('storage-used-' + name).textContent = amount + ' / ' + (limit > 0 ? limit + ' G' : t('无限制'));
@@ -7751,10 +7815,8 @@ function storageRenderUsage() {
     meter.value = limit > 0 && used != null ? Math.min(100, used / G / limit * 100) : 0;
   }
   document.getElementById('storage-used-free').textContent = (disk.free_bytes / G).toFixed(1) + ' G';
-  for (const [name, bytes] of [['sentry', disk.sentry_bytes], ['saved', disk.saved_bytes], ['cache', disk.cache_bytes], ['other', disk.other_bytes]]) {
-    const output = document.getElementById('storage-used-' + name);
-    if (output) output.textContent = bytes == null ? '—' : (bytes / G).toFixed(2) + ' G';
-  }
+  const otherOutput = document.getElementById('storage-used-other');
+  if (otherOutput) otherOutput.textContent = disk.other_bytes == null ? '—' : (disk.other_bytes / G).toFixed(2) + ' G';
   // 单行整卡只画设定容量，不用实际占用叠加；归档不限量时最多占满扣除 U 盘后的空间。
   const cardGb = gb(disk.total_bytes);
   const unlimited = archiveLimit <= 0;
@@ -7802,7 +7864,10 @@ async function storageLoad() {
     document.getElementById('storage-total').textContent = (data.disk.total_bytes / 1073741824).toFixed(1);
     const usbInput = document.getElementById('storage-usb');
     usbInput.max = String(Math.max(1, Math.floor(data.disk.total_bytes / 1073741824 / 2)));
-    usbInput.value = data.usb_gib;
+    // 首次设置还没有镜像: 给一个不超过整卡一半的默认容量, 方便直接点「调整 U 盘容量」创建
+    usbInput.value = data.usb_gib > 0
+      ? data.usb_gib
+      : Math.max(1, Math.min(64, Math.floor(data.disk.total_bytes / 1073741824 / 2)));
     if (data.prewarm) for (const [id, key] of [['prewarm-sentry','prewarm_sentry'],['prewarm-saved','prewarm_saved']]) document.getElementById(id).value = data.prewarm[key];
     for (const [id, key] of [['archive','archive_gib'],['drive','drive_gib'],['reserve','free_target_gib'],['minimum','free_min_gib']]) document.getElementById('storage-' + id).value = data.values[key];
     if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['sentrydays','sentry_keep_days'],['saveddays','saved_keep_days']]) document.getElementById('retention-' + id).value = data.retention[key];
@@ -8097,9 +8162,12 @@ async function storageRestartService() {
 }
 async function storageResize() {
   if (!storageData || !document.getElementById('storage-usb').reportValidity()) return;
-  if (!confirm('调整容量将清空车机 U 盘中的全部录像和其他文件，无法撤销。归档区保留。\n调整期间车机暂停录像，请保持供电。确认清空并继续？')) return;
+  const first = !(storageData.disk && storageData.disk.usb_bytes > 0);
+  if (first) {
+    if (!confirm('首次设置将按填写的容量创建车机 U 盘镜像。\n创建期间请保持供电，完成后即可插到车机上录制。确认创建？')) return;
+  } else if (!confirm('调整容量将清空车机 U 盘中的全部录像和其他文件，无法撤销。归档区保留。\n调整期间车机暂停录像，请保持供电。确认清空并继续？')) return;
   storageDisable(true);
-  storageMessage('正在调整容量…', true);
+  storageMessage(first ? '正在创建车机 U 盘…' : '正在调整容量…', true);
   try {
     const result = await storageFetch('/api/storage/resize', {usb_gib:Number(document.getElementById('storage-usb').value), revision:storageData.revision, clear_confirmed:true});
     storageShowJob(result.job);
@@ -8169,7 +8237,7 @@ async function extCardJobPoll(then) {
 async function extCardSpeed() {
   if (!EXT_CARD) { toast('未检测到外置卡'); return; }
   const msg = document.getElementById('ext-card-msg');
-  if (msg) msg.textContent = '正在测速（写入 64MB 并读回）…';
+  if (msg) msg.textContent = '正在测速（写入 1G 并读回）…';
   try {
     const j = await (await fetch('/api/card/speed', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
       body: JSON.stringify({ mount: EXT_CARD.mount || '' }) })).json();
@@ -8180,7 +8248,7 @@ async function extCardSpeed() {
 async function extCardFormat() {
   if (!EXT_CARD) { toast('未检测到外置卡'); return; }
   const dev = EXT_CARD.device;
-  if (!confirm('⚠️ 初始化格式化会清空 ' + dev + ' 上的全部数据，无法撤销。\n如果这是正在使用的数据卡，归档录像会全部丢失。\n如系统缺少 mkfs.ext4，会自动联网安装 e2fsprogs。\n确认继续？')) return;
+  if (!confirm('⚠️ 初始格式化会把 ' + dev + ' 格式化为 ext4 文件系统，并清空其中全部数据，无法撤销。\n如果这是正在使用的数据卡，归档录像会全部丢失。\n如系统缺少 mkfs.ext4，会自动联网安装 e2fsprogs。\n确认继续？')) return;
   const typed = prompt('请输入设备名确认格式化：' + dev, '');
   if (typed !== dev) { toast('已取消格式化'); return; }
   const msg = document.getElementById('ext-card-msg');
@@ -8635,7 +8703,7 @@ async function otaCheck(force) {
         if (/^——/.test(x) && ++seps >= 3) break;
         shown.push(x);
       }
-      n.innerHTML = shown.map(x => /^——/.test(x)
+      n.innerHTML = (j.latest ? '<div class="updsep">—— 以下为 ' + esc(j.latest) + ' 更新 ——</div>' : '') + shown.map(x => /^——/.test(x)
         ? '<div class="updsep">' + esc(x) + '</div>'
         : '· ' + esc(x)).join('<br>');
       n.style.display = 'block';
@@ -11601,7 +11669,9 @@ def live_status():
     if _ARCH_SYNC.get("state") == "running" and _ARCH_SYNC.get("bps"):
         copy_bps = max(copy_bps, int(_ARCH_SYNC["bps"]))
     return {"running": running, "pending": pending, "ago": ago, "last": last,
-            "copy_bps": copy_bps, "disk": disk_usage(), "sys": sys_status()}
+            "copy_bps": copy_bps, "disk": disk_usage(), "sys": sys_status(),
+            # 全新安装尚未创建车机镜像: 前端据此引导到「存储分配」完成首次设置
+            "setup_needed": not os.path.isfile(IMG)}
 
 
 def _log_tail(fp, max_lines=200, max_bytes=131072):
@@ -11716,12 +11786,28 @@ def log_report():
         detail_lines.append("===== %s =====" % title)
         detail_lines.extend(lines)
         detail_lines.append("")
-    # 概述里附最近异常, 不用展开详细日志也能看到报错
-    bad = [l for l in detail_lines
-           if re.search(r"error|failed|失败|traceback|exception|不完整", l, re.I) and not l.startswith("=====")]
+    # 概述里附最近异常, 不用展开详细日志也能看到报错。
+    # crond 的例行任务（tesla-viewer running / tsf-maintenance）只是正常调度, 不算异常。
+    noise = re.compile(r"(crond\[\d+\]: USER root pid|"
+                       r"tsf-maintenance\.sh (?:usb|audio)|tesla-(?:viewer|live) running)", re.I)
+    def _distinct(line):
+        text = re.sub(r"^\[[\d\-: ]+\]\s*", "", line.strip())
+        text = re.sub(r"^[A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d+\s+[\d:]+\s+\d{4}\s+", "", text)
+        return text[:200]
+    bad, seen = [], set()
+    for l in detail_lines:
+        if l.startswith("=====") or noise.search(l):
+            continue
+        if not re.search(r"error|failed|失败|traceback|exception|不完整", l, re.I):
+            continue
+        key = _distinct(l)
+        if key in seen:
+            continue
+        seen.add(key)
+        bad.append(l)
     if bad:
-        ov.append("最近异常（详见详细日志）:")
-        ov.extend("  " + l.strip()[:160] for l in bad[-5:])
+        ov.append("最近异常（最近 3 个不同异常）:")
+        ov.extend("  " + l.strip()[:160] for l in bad[-3:])
     else:
         ov.append("最近异常: 日志中未发现 error/失败 记录")
     return {"ok": True, "overview": ov, "detail": "\n".join(detail_lines)}
@@ -12785,6 +12871,62 @@ def storage_apply(body):
         return storage_status()
 
 
+def _storage_create_image(size):
+    """全新安装首次创建车机镜像: 不需要已有镜像, 建好后直接恢复 USB 导出。"""
+    with _storage_job_lock:
+        _storage_job.update(state='running', message='正在创建车机 U 盘', percent=0)
+
+    def update(message, percent):
+        with _storage_job_lock:
+            _storage_job.update(message=message, percent=percent)
+
+    def work():
+        temporary = IMG + '.resize-new'
+        try:
+            with _storage_edit_lock:
+                if not _acquire_usb_flock():
+                    raise ValueError('U 盘正被其他任务占用，请稍后重试')
+                try:
+                    os.makedirs(os.path.dirname(IMG), exist_ok=True)
+                    script = os.path.join(os.path.dirname(__file__), 'mkexfat.py')
+                    if not os.path.isfile(script):
+                        script = os.path.join(os.path.dirname(__file__), 'scripts', 'mkexfat.py')
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
+                    update('创建空白 U 盘', 20)
+                    result = subprocess.run([sys.executable, '-B', script, temporary, str(size)],
+                                            capture_output=True, text=True, timeout=900)
+                    if result.returncode:
+                        raise ValueError('创建 exFAT 镜像失败：%s'
+                                         % (result.stderr or result.stdout or '').strip()[-200:])
+                    with open(temporary, 'rb') as stream:
+                        header = stream.read(11)
+                    if header[3:11] != b'EXFAT   ' or os.path.getsize(temporary) != size * storage_allocation.GIB:
+                        raise ValueError('新镜像校验失败')
+                    os.replace(temporary, IMG)
+                    storage_allocation.sync_directory(os.path.dirname(IMG))
+                    update('恢复车机导出', 85)
+                    gadget = os.path.join(os.path.dirname(__file__), 'tesla-gadget.sh')
+                    if os.path.isfile(gadget):
+                        subprocess.run(['sh', gadget, 'on'], capture_output=True, text=True, timeout=90)
+                    _IMG_USED_CACHE.update(t=0.0, path='', v=None)
+                    with _storage_job_lock:
+                        _storage_job.update(state='done', message='创建完成', percent=100)
+                finally:
+                    if os.path.exists(temporary):
+                        try:
+                            os.unlink(temporary)
+                        except OSError:
+                            pass
+                    _release_usb_flock()
+        except Exception as exc:
+            with _storage_job_lock:
+                _storage_job.update(state='error', message=str(exc) or '创建车机 U 盘失败')
+
+    threading.Thread(target=work, daemon=True, name='storage-create').start()
+    return dict(ok=True, job=storage_job())
+
+
 def _storage_run_rewrite(size, action):
     """后台重建车机镜像 (调整容量 / 格式化共用同一套断连-重建-回滚流程)。"""
     if usb_attached or os.path.ismount(MNT):
@@ -12875,6 +13017,9 @@ def storage_start_resize(body):
                 '铃声、涂装等文件，请调小 U 盘容量或换更大的存储卡。' % half_gib)
         storage_allocation.check_resize_budget(current['values'], size, current['disk'],
                                                cache_gib=load_settings().get('cache_max_gb', 5))
+        if not os.path.isfile(IMG):
+            # 全新安装还没有镜像: 首次设置时直接创建, 不走「清空旧镜像」流程
+            return _storage_create_image(int(size))
         if size * storage_allocation.GIB == current['disk']['usb_bytes']:
             raise ValueError('U 盘容量未改变')
         return _storage_run_rewrite(size, '调整容量')
@@ -13012,7 +13157,7 @@ def _resolve_mount(target):
 
 
 def external_card_speed(body):
-    """在存储卡上写 64MB 再读回, 给出顺序写/读速度 (MB/s)。"""
+    """在存储卡上写 1G 再读回, 给出顺序写/读速度 (MB/s)。"""
     if not isinstance(body, dict):
         body = {}
     target = str(body.get("mount") or "").strip()
@@ -13025,7 +13170,7 @@ def external_card_speed(body):
 
     def work():
         fp = os.path.join(mp, ".tsf-speedtest.bin")
-        size = 64 * 1024 * 1024
+        size = 1024 * 1024 * 1024
         chunk = b"\0" * (1024 * 1024)
         try:
             t0 = time.monotonic()
@@ -13085,7 +13230,7 @@ def _ensure_mkfs_ext4(progress):
 
 
 def external_card_format(body):
-    """初始化格式化外置卡为 ext4。会清空该卡全部内容, 需前端二次确认。"""
+    """初始格式化外置卡为 ext4。会清空该卡全部内容, 需前端二次确认。"""
     dev = str((body or {}).get("device") or "").strip()
     if str((body or {}).get("confirm") or "") != dev:
         raise ValueError("请确认要格式化该卡后再继续")

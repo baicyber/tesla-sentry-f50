@@ -111,6 +111,12 @@ def log(msg):
     try:
         with open(LOG, "a") as f:
             f.write(line + "\n")
+        # 日志文件容量上限: 超过后只保留最近 2000 行, 避免长期运行把数据卡写满
+        if os.path.getsize(LOG) > 512 * 1024:
+            with open(LOG, encoding="utf-8", errors="replace") as f:
+                tail = f.readlines()[-2000:]
+            with open(LOG, "w", encoding="utf-8") as f:
+                f.writelines(tail)
     except Exception:
         pass
 

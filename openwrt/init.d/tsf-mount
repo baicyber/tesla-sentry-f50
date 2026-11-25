@@ -21,7 +21,9 @@ start_apps() {
         sh "$TSF_DIR/tesla-usb-start.sh" ||
             logger -t tsf-mount "USB 协调启动失败(见 tsf-usb 日志), 继续启动应用服务"
     elif [ -x "$TSF_DIR/tesla-gadget.sh" ]; then
-        sh "$TSF_DIR/tesla-gadget.sh" on || return 1
+        # 全新安装还没有镜像时导出必然失败; 不能因此拦掉网页, 否则无法进入首次设置
+        sh "$TSF_DIR/tesla-gadget.sh" on ||
+            logger -t tsf-mount "USB 导出失败(见 tesla-gadget.log), 继续启动应用服务"
     else
         /etc/init.d/tesla-gadget start || return 1
     fi

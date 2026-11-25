@@ -18,7 +18,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| 🗂 虚拟 U 盘 | 默认 64G 稀疏 exFAT 镜像，通过 USB Gadget `mass_storage` 导出；**部署时已预置完整 exFAT 文件系统 + `TeslaCam` 目录**，插车直接显示容量并开始录制，不用再点「格式化 USB 设备」，网卡 / 串口共存 |
+| 🗂 虚拟 U 盘 | 稀疏 exFAT 镜像，通过 USB Gadget `mass_storage` 导出；全新安装不预建镜像，打开网页按引导到「存储分配」设置容量并创建，插车即可显示容量并开始录制，网卡 / 串口共存 |
 | ⚡ 实时查看 | `tesla-live-sync.py` 每 15 秒**只读解析 exFAT**（不挂载、不断 USB），车机边写网页边看，新片段通常 15–30 秒出现；cron `*/10` 只负责写 Boombox 音频 |
 | 📦 归档与滚动窗口 | 视频落到独立 ext4 归档区，不与车机同时读写镜像；`RecentClips` 跟随车机滚动缓冲只留最近 60 分钟，`SentryClips` / `SavedClips` 的**盒子副本**默认按 14 天 / 12GB 清理（车机 U 盘那份只读不动），`.pruned` 墓碑避免「删除→重抄」死循环 |
 | 🎬 播放 | **默认单路**: 点开事件直接播触发摄像头那一路 (画面下方切换条可选 前视/后视/左B柱/右B柱/全览, 点哪个才加载哪个, 切换保留播放进度)；全览 4 路 2×2 / 6 路 3×2 自适应，250ms 同步校正、统一进度条、0.5–4x；**自动落在触发时刻所在的那一分钟、从触发前 5 秒起播**（片段栏红点标记） |
@@ -62,15 +62,18 @@ sudo ./install.sh check
 ```sh
 git clone https://github.com/baicyber/tesla-sentry-f50.git
 cd tesla-sentry-f50
-sudo ./install.sh                                                       # 64G 镜像 + F50 TF 卡存储 + 端口 8080
-sudo ./install.sh install --size-gb 120 --port 8080 --data-mount /mnt/sdcard
+sudo ./install.sh check                                                # 仅预检（只读）
+sudo ./install.sh install --port 8080 --data-mount /mnt/sdcard         # 预检 + 安装 + 启动服务
+sudo ./install.sh apply   --port 8080 --data-mount /mnt/sdcard         # 预检 + 安装，不启动
 ```
 
-安装会：检查 F50 内核 gadget / exFAT / Python → 建稀疏镜像并**预置 exFAT + `TeslaCam` 目录** → 装到 `/opt/tesla-sentry/`、写 `/etc/tesla-sentry.conf` → 注册 OpenWrt procd 服务与定时任务 → 生成随机登录密码 → 启动并打印状态。镜像不超过存储卡实际容量的一半且不超过 128G。
+安装会：检查 F50 内核 gadget / exFAT / Python / FFmpeg → 装到 `/opt/tesla-sentry/`、写 `/etc/tesla-sentry.conf` → 注册 OpenWrt procd 服务与定时任务 → 生成随机登录密码 → 启动。
 
-也可用 `sudo ./install.sh check` 仅预检、`sudo ./install.sh apply` 只安装不启动，或 `sudo ./install.sh --help` 查看全部参数。
+**首次使用**：全新安装不会自动生成车机 U 盘镜像，也不会预设归档区位置。用手机或电脑打开 `http://<F50-IP>:8080`，登录后按页面引导进入「设置 → 存储分配」，设置车机 U 盘容量、归档区上限与安全预留，点「调整 U 盘容量」创建镜像；完成后插到车机即可开始录制。
 
-**2. 插到车上**：插进手套箱 USB 口 → 车机直接识别、显示容量并开始录制。镜像里已预建 `TeslaCam/{RecentClips,SavedClips,SentryClips,EncryptedClips}`，**不再需要点「格式化 USB 设备」**；若车机仍弹出该提示，点确认也无害——车机会重写分区表，网页会自动识别新的分区/卷偏移继续读取，无需重新安装。若格式化后网页仍提示「镜像未就绪」，可在存储页「调整车机 U 盘容量」下点「格式化 U 盘」按当前容量重建。
+旧命令里的 `--size-gb` / `--archive-gb` / `--drive-gb` 仍可传入，但只作兼容保留，全新安装不再使用；容量与归档分配统一在网页「存储分配」里设置。`sudo ./install.sh --help` 可查看全部参数。
+
+**2. 插到车上**：在网页完成首次设置、创建镜像后，插进手套箱 USB 口 → 车机识别、显示容量并开始录制。首次插入时车机若提示「格式化 USB 设备」，点确认即可（车机会写入分区表，网页会自动识别新的分区/卷偏移继续读取）。若格式化后网页仍提示「镜像未就绪」，可在存储页「车机 U 盘容量」下点「格式化 U 盘」按当前容量重建。
 
 **3. 打开网页**：`http://<设备IP>:8080`（手机连设备热点、USB 网卡直连，或自行加 Tailscale / frp）。首次登录账号 `admin`，密码见安装输出或 `/opt/tesla-sentry/auth.conf`。视频由 15 秒在线同步落地，不用等定时归档。
 

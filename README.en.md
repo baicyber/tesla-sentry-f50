@@ -18,7 +18,7 @@ This project supports only the ZTE F50. Other travel routers, development boards
 
 | Capability | Details |
 |---|---|
-| 🗂 Virtual USB drive | A 64G sparse exFAT image exported through USB Gadget `mass_storage`. **The installer pre-creates a complete exFAT filesystem plus the `TeslaCam` directory**, so the car recognizes it, shows the capacity and starts recording immediately — no "Format USB device" prompt to click through. Coexists with the network interface and serial console. |
+| 🗂 Virtual USB drive | A sparse exFAT image exported through USB Gadget `mass_storage`. A fresh install does not pre-create the image: the web UI guides you to Storage allocation to set the capacity and create it. Once created, the car recognizes it, shows the capacity and starts recording. Coexists with the network interface and serial console. |
 | ⚡ Live view | `tesla-live-sync.py` parses exFAT **read-only** every 15 seconds (no mount, no USB disconnect), so the car writes while the web page reads; new clips usually show up within 15–30 seconds. The `*/10` cron job only writes Boombox audio. |
 | 📦 Archive & rolling window | Video lands in a separate ext4 archive, never fighting the car for the image. `RecentClips` follows the car's rolling buffer and keeps only the last 60 minutes; the box-side copies of `SentryClips` / `SavedClips` are pruned by age/size (default 14 days / 12GB) while the drive-side originals stay untouched. `.pruned` tombstones prevent the "delete → re-copy" loop. |
 | 🎬 Playback | **Single camera by default**: opening an event plays the camera that triggered it (a switcher bar below the player offers front / rear / left B-pillar / right B-pillar / grid — only the selected angle loads, and switching keeps your position). Grid view auto-fits 4 angles as 2×2 and 6 as 3×2, with 250ms sync correction, one shared progress bar and 0.5–4x speed. **Playback lands on the minute containing the trigger and starts 5 seconds before it** (marked with a red dot in the clip list). |
@@ -62,15 +62,18 @@ See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for details.
 ```sh
 git clone https://github.com/baicyber/tesla-sentry-f50.git
 cd tesla-sentry-f50
-sudo ./install.sh                                                       # 64G image + F50 TF-card storage + port 8080
-sudo ./install.sh install --size-gb 120 --port 8080 --data-mount /mnt/sdcard
+sudo ./install.sh check                                                # read-only check
+sudo ./install.sh install --port 8080 --data-mount /mnt/sdcard         # check + install + start
+sudo ./install.sh apply   --port 8080 --data-mount /mnt/sdcard         # check + install, do not start
 ```
 
-The installer checks the F50 kernel / gadget / exFAT / Python, creates the sparse image with exFAT and `TeslaCam`, installs into `/opt/tesla-sentry/`, writes `/etc/tesla-sentry.conf`, registers OpenWrt procd services and cron jobs, generates a random password and starts the services. The image may use at most half the card and at most 128G.
+The installer checks the F50 kernel / gadget / exFAT / Python / FFmpeg, installs into `/opt/tesla-sentry/`, writes `/etc/tesla-sentry.conf`, registers OpenWrt procd services and cron jobs, generates a random password and starts the services.
 
-Use `sudo ./install.sh check` for a check only, `sudo ./install.sh apply` to install without starting, or `sudo ./install.sh --help` for all options.
+**First run**: a fresh install does not create the virtual Tesla USB image or preconfigure the archive location. Open `http://<F50-IP>:8080`, sign in, follow the on-page guide to **Settings → Storage allocation**, set the USB capacity, archive cap and safety reserve, then click "Resize USB drive" to create the image. After that, plug it into the car and recording starts.
 
-**2. Plug it into the car**: insert into the glovebox USB port — the head unit recognizes it, shows the capacity and starts recording. The image already contains `TeslaCam/{RecentClips,SavedClips,SentryClips,EncryptedClips}`, so **there is no "Format USB device" step**. If the car still asks, confirming is harmless — it just rebuilds the same structure.
+The old `--size-gb` / `--archive-gb` / `--drive-gb` flags are still accepted for compatibility but are no longer used by fresh installs; capacity and archive allocation are configured in the web UI. Run `sudo ./install.sh --help` for all options.
+
+**2. Plug it into the car**: after the first-run setup creates the image, insert it into the glovebox USB port — the head unit recognizes it, shows the capacity and starts recording. If the car asks to "Format USB device" on first insert, confirm it; the head unit rewrites the partition table and the web UI automatically detects the new partition/volume offset. If the UI still says "image not ready" after formatting, use "Format USB drive" under "Tesla USB capacity" in Storage allocation to rebuild it at the current size.
 
 **3. Open the web UI**: `http://<device-ip>:8080` (join the box's hotspot, connect through a USB network interface, or add Tailscale / frp yourself). The first login is `admin` with the password printed by the installer or stored in `/opt/tesla-sentry/auth.conf`. Video comes from the 15-second live sync, so you don't wait for scheduled archiving.
 
