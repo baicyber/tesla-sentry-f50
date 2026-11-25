@@ -504,7 +504,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.039"
+APP_VERSION = "2026.11.25.040"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2498,6 +2498,12 @@ select.ninput { cursor:pointer; }
 .updnotes-wrap { margin:14px 0 6px; }
 .updnotes-title { font-size:12.5px; font-weight:600; margin-bottom:7px; color:var(--text); }
 .updnotes-title span { font-weight:400; color:var(--muted); font-size:11.5px; margin-left:4px; }
+.updprog { margin:10px 0 2px; }
+.updprog[hidden] { display:none; }
+.updprogbar { height:6px; border-radius:999px; background:var(--line); overflow:hidden; }
+.updprogbar i { display:block; height:100%; width:0; border-radius:999px; background:linear-gradient(90deg,var(--accent),#4aa3ff); transition:width .25s ease; }
+.updproginfo { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:6px; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+.updproginfo span:first-child { color:var(--text); font-weight:600; }
 .updmore { display:inline-block; margin-top:8px; font-size:12px; color:var(--blue); text-decoration:none; }
 .updmore:hover { text-decoration:underline; }
 .updsep { margin:7px 0 3px; color:var(--muted); font-size:11.5px; font-weight:600; }
@@ -2851,6 +2857,11 @@ body.watching { overflow:hidden; }
 #trigger-marker::after { content:''; position:absolute; left:50%; top:100%; transform:translateX(-50%); margin-top:-1px; border:4px solid transparent; border-top-color:#e5382c; }
 #trigger-marker:hover { filter:brightness(1.08); }
 .timeline-row { display:flex; align-items:flex-start; gap:14px; }
+.bufrow { display:flex; align-items:center; gap:10px; height:16px; margin:-2px 0 6px; }
+.bufrow[hidden] { display:none; }
+.bufbar { flex:1; height:4px; border-radius:999px; background:var(--line); overflow:hidden; }
+.bufbar i { display:block; height:100%; width:0; border-radius:999px; background:linear-gradient(90deg,#38bdf8,#22c55e); transition:width .3s ease; }
+.bufrow span { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .playback-help { display:flex; flex-direction:column; justify-content:center; gap:2px; min-height:36px;
   color:var(--muted); font-size:11px; line-height:1.5; white-space:nowrap; }
 .playback-help .ph-key:not(:last-child)::after { content:'，'; }
@@ -3168,6 +3179,7 @@ body.settings-open { overflow:hidden; }
 #storage-paths[open] > summary { padding-bottom:12px; }
 .retention-unit { color:var(--muted); font-size:12.5px; flex:0 0 auto; }
 /* 备注列常被挤成 28px：保留时间/存储路径改成按内容自适应宽度 */
+.storage-row.path label small { display:block; margin-top:2px; font-size:11px; font-weight:400; color:var(--muted); line-height:1.4; }
 #tab-storage .storage-row.note { grid-template-columns:minmax(0,1fr) minmax(68px,96px) minmax(0,auto); max-width:none; }
 /* 容量输入框后紧跟 G 单位: 标签 | 数字 | 单位 | 说明按钮 */
 #tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) minmax(68px,98px) minmax(0,auto) 28px; max-width:none; }
@@ -3184,7 +3196,10 @@ body.settings-open { overflow:hidden; }
 #storage-extcard { margin:0 0 14px; }
 #storage-extcard > summary { font-size:17px; font-weight:600; cursor:pointer; list-style-position:inside; }
 #storage-extcard[open] > summary { margin-bottom:10px; }
-.storage-subtitle { font-size:14px; font-weight:600; margin:4px 0 4px; }
+.storage-usb > summary { font-size:14px; font-weight:600; cursor:pointer; list-style-position:inside; }
+.storage-usb[open] > summary { margin-bottom:8px; }
+.storage-usb-actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+.storage-usb-actions .mini { flex:1 1 0; min-width:140px; min-height:38px; border-radius:9px; justify-content:center; }
 .storage-split { height:1px; background:var(--line); margin:18px 0 12px; }
 #storage-archive-sync { min-height:100%; }
 .storage-tools .tool-block { padding-top:14px; margin-top:14px; border-top:1px solid var(--line); }
@@ -3209,6 +3224,10 @@ body.settings-open { overflow:hidden; }
 .scan-item .s { flex:0 0 auto; color:var(--muted); }
 .scan-item.sel { border-color:var(--accent); }
 .scan-item[data-ext] { cursor:pointer; }
+.scan-pick-wrap { display:flex; align-items:center; flex:0 0 auto; }
+.scan-pick { width:16px; height:16px; accent-color:var(--accent); }
+.scan-del { flex:0 0 auto; }
+.scan-actions { flex-wrap:wrap; }
 .support-box { max-width:1200px; border:0; border-top:1px solid var(--line); border-radius:0; box-shadow:none; background:transparent; margin-top:28px; padding:16px 0; }
 .support-box > summary { color:var(--muted); font-size:13px; cursor:pointer; }
 .support-sec { margin-top:18px; }
@@ -3559,6 +3578,7 @@ body.settings-open { overflow:hidden; }
     <section class="transport" aria-label="回放控制">
       <div class="clockline"><span id="track-start"></span><output id="ptime">--:--:--</output><span id="track-end"></span></div>
       <div class="timeline-row"><div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"><output id="seek-hover" hidden></output><button id="trigger-marker" hidden>触发时刻</button></div></div>
+      <div class="bufrow" id="bufrow" hidden><div class="bufbar"><i id="bufprogfill"></i></div><span id="buftxt">缓存 0.0s</span></div>
       <div class="playtools">
         <div class="playback-help"><span>画面上：单击 播放/暂停，长按 3× 快进</span><span class="ph-kb"><span class="ph-kb-t">键盘：</span><span class="ph-key">空格 播放/暂停</span><span class="ph-key">长按 3×</span><span class="ph-key">←→ 跳转 1s</span><span class="ph-key">↑↓ 跳转 10s</span></span></div>
         <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="skip-back-one" aria-label="回退一秒">−1s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next-one" aria-label="前进一秒">+1s</button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
@@ -3671,12 +3691,17 @@ body.settings-open { overflow:hidden; }
     <div class="updbtns"><button class="mini primary" id="storage-save" onclick="storageSave()" disabled>保存归档设置</button><button class="mini" onclick="storageLoad()">重新加载</button></div>
     <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
     <div class="storage-split"></div>
-    <h4 class="storage-subtitle">调整车机 U 盘容量</h4>
-    <div class="storage-row cap"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
-    <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。调整会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div>
-    <div class="hint">格式化：用空白 exFAT 按当前容量重建车机 U 盘，清空镜像内全部内容（归档区保留）。车机上格式化 U 盘后网页一直提示「镜像未就绪」，或 U 盘内容损坏、调整容量失败时，用它一键恢复。</div>
-    <button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button>
-    <button class="mini" id="storage-format" onclick="storageFormat()" disabled>格式化 U 盘</button><div id="storage-resize-status"></div>
+    <details class="storage-usb" id="storage-usb-box">
+      <summary>调整车机 U 盘容量</summary>
+      <div class="storage-row cap"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
+      <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。调整会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div>
+      <div class="hint">格式化：用空白 exFAT 按当前容量重建车机 U 盘，清空镜像内全部内容（归档区保留）。车机上格式化 U 盘后网页一直提示「镜像未就绪」，或 U 盘内容损坏、调整容量失败时，用它一键恢复。</div>
+      <div class="storage-usb-actions">
+        <button class="mini primary" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button>
+        <button class="mini" id="storage-format" onclick="storageFormat()" disabled>格式化 U 盘</button>
+      </div>
+      <div id="storage-resize-status"></div>
+    </details>
     </section><section class="storage-quota" id="storage-usage">
       <h3>实际用量 · 已用／上限</h3>
       <div class="storage-usage">
@@ -3726,11 +3751,11 @@ body.settings-open { overflow:hidden; }
     <details class="storage-quota" id="storage-paths">
       <summary>存储路径</summary>
       <div class="hint">程序本体在 /opt/tesla-sentry。视频存储建议放在 TF 卡（F50 默认 /dev/mmcblk1p1，挂载 /mnt/sdcard）。目录结构固定为「视频存储根目录/img/teslacam.img」和「视频存储根目录/archive/transcode_cache」。修改后需重启服务生效，现有录像不会自动迁移。</div>
-      <div class="storage-row path"><label for="storage-path-root">视频存储根目录</label><input class="ninput" id="storage-path-root" type="text" spellcheck="false"></div>
-      <div class="storage-row path"><label>车机 U 盘镜像</label><input class="ninput" id="storage-path-img" type="text" disabled></div>
-      <div class="storage-row path"><label>归档区目录</label><input class="ninput" id="storage-path-archive" type="text" disabled></div>
-      <div class="storage-row path"><label>转码缓存目录</label><input class="ninput" id="storage-path-transcode" type="text" disabled></div>
-      <div class="storage-row path"><label>程序缓存目录</label><input class="ninput" id="storage-path-cache" type="text" disabled></div>
+      <div class="storage-row path"><label for="storage-path-root">视频存储根目录<small>放镜像、归档和日志，建议在 TF 卡上</small></label><input class="ninput" id="storage-path-root" type="text" spellcheck="false"></div>
+      <div class="storage-row path"><label>车机 U 盘镜像<small>虚拟 U 盘文件，车机录像写入这里</small></label><input class="ninput" id="storage-path-img" type="text" disabled></div>
+      <div class="storage-row path"><label>归档区目录<small>同步保存的录像副本，滚动窗口与保留期都按这里计算</small></label><input class="ninput" id="storage-path-archive" type="text" disabled></div>
+      <div class="storage-row path"><label>转码缓存目录<small>低清晰度转码的临时文件，可随时清空</small></label><input class="ninput" id="storage-path-transcode" type="text" disabled></div>
+      <div class="storage-row path"><label>程序缓存目录<small>封面、缩略图等程序临时文件</small></label><input class="ninput" id="storage-path-cache" type="text" disabled></div>
       <div class="updbtns"><button class="mini primary" id="paths-save" onclick="storageSavePaths()" disabled>保存路径设置</button></div>
       <div class="hint" id="paths-msg" role="status" aria-live="polite"></div>
     </details>
@@ -3972,6 +3997,10 @@ body.settings-open { overflow:hidden; }
       </div>
       <div class="hint" id="upd-autohint">—</div>
       <div class="hint" id="upd-msg"></div>
+      <div class="updprog" id="upd-prog" hidden>
+        <div class="updprogbar"><i id="upd-progfill"></i></div>
+        <div class="updproginfo"><span id="upd-progpct">0%</span><span id="upd-progsize"></span><span id="upd-progspeed"></span></div>
+      </div>
     </div>
     <div class="updnotes-wrap" id="upd-notes-wrap" style="display:none">
       <div class="updnotes-title">更新记录<span>仅显示最近 3 个版本</span></div>
@@ -5013,7 +5042,7 @@ let sessionId = 0, renderId = 0, lastTick = 0, editingSeek = false;
 let seekPointerStart = null;
 let prefetch = null, triggerTime = null, triggerSource = null, libraryCat = '', listScroll = 0;
 let liveMode = false, liveView = 'all', followLatest = false, atEnd = false;
-let overviewPosition = null;
+let overviewPosition = null, syncHoldAt = 0;
 let clockVideo = null, videoTimes = new WeakMap();
 let indexRequest = null, clipRequest = null;
 let gapRequest = null, gapSignature = '';
@@ -5105,6 +5134,29 @@ function bufferedPosition(video, time) {
   return time;
 }
 
+function bufferAhead(video) {
+  const time = video.currentTime;
+  for (let i = 0; i < video.buffered.length; ++i) {
+    const start = video.buffered.start(i), end = video.buffered.end(i);
+    if (start <= time && time < end) return Math.max(0, end - time);
+  }
+  return 0;
+}
+
+function updateBufferProgress() {
+  const row = byId('bufrow');
+  if (!row) return;
+  if (!liveMode) { row.hidden = true; return; }
+  const videos = activeVideos().filter(v => !v.ended && v.readyState >= 1);
+  if (!videos.length) { row.hidden = true; return; }
+  row.hidden = false;
+  const lead = Math.min(...videos.map(bufferAhead));
+  const need = Math.max(6, previewLeadForQuality() * baseRate + 3);
+  const fill = byId('bufprogfill'), text = byId('buftxt');
+  if (fill) fill.style.width = Math.max(0, Math.min(100, lead / need * 100)) + '%';
+  if (text) text.textContent = '缓存 ' + lead.toFixed(1) + 's / 预读 ' + Math.round(need) + 's';
+}
+
 function releaseVideo(v) {
   v.pause();
   v.removeAttribute('src');
@@ -5114,6 +5166,7 @@ function releaseVideo(v) {
 function dropPrefetch() {
   if (prefetch?.controller) prefetch.controller.abort();
   if (prefetch && prefetch.video) releaseVideo(prefetch.video);
+  if (prefetch?.videos) prefetch.videos.forEach(video => releaseVideo(video));
   prefetch = null;
 }
 
@@ -5626,26 +5679,37 @@ async function prepareNext() {
   if (!next || prefetch || editingSeek) return;
   const files = next.vids.filter(v => camSel === 'all' || v.cam === camSel);
   if (!files.length) return;
-  if (files.some(usesPreviewParts)) {
-    await prepareNextParts(next, files.filter(usesPreviewParts));
+  const parts = files.some(usesPreviewParts);
+  // 按当前播放缓存余量预读: 缓存快见底(或本段快到片尾)时提前准备下一段
+  const videos = activeVideos().filter(v => !v.ended && v.readyState >= 1);
+  const lead = videos.length ? Math.min(...videos.map(bufferAhead)) : 0;
+  const remaining = Math.max(0, currentClip().length - clipOffset);
+  const need = parts ? Math.max(20, previewLeadForQuality() * baseRate + 8)
+                     : Math.max(6, baseRate * 2 + 2);
+  if (parts) {
+    // 分片转码只在快到片尾时预读下一段, 避免实时滚动记录持续满载转码
+    if (remaining < need) await prepareNextParts(next, files.filter(usesPreviewParts));
     return;
   }
-  const remaining = currentClip().length - clipOffset;
-  if (camSel === 'all' || remaining >= Math.max(curQ === 'orig' ? 4 : 20, baseRate * 2)) return;
-  const file = files[0];
-  const slot = {file, video: null, quality: curQ};
+  if (lead >= need && remaining >= need) return;
+  // 原画/直连: 把下一段的每路摄像头都预加载, 四/六路切换时不至于等第一帧
+  const slot = {files, videos: new Map(), quality: curQ, nextKey: next.key};
   prefetch = slot;
-  updateDemand(file);
+  updateDemand(files[0]);
   try {
-    let url;
-    while (slot === prefetch && wantedPlay) {
-      url = await readySource(file, slot.quality, clipRequest.signal);
-      if (url || slot !== prefetch) break;
-      await new Promise(resolve => setTimeout(resolve, 1500));
+    for (const file of files) {
+      let url;
+      while (slot === prefetch && wantedPlay) {
+        url = await readySource(file, slot.quality, clipRequest.signal);
+        if (url || slot !== prefetch) break;
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+      if (slot !== prefetch || !url) break;
+      const video = makeVideo();
+      video.src = url;
+      video.load();
+      slot.videos.set(file.url, video);
     }
-    if (slot !== prefetch || !url) return;
-    slot.video = makeVideo(); slot.video.src = url;
-    slot.video.load();
   } catch (e) { /* 正式切段时重试。 */ }
 }
 
@@ -5729,6 +5793,13 @@ function holdOverview() {
 function syncOverview(videos) {
   const playing = videos.filter(v => !v.ended && !v.dataset.outside);
   if (!playing.length) return true;
+  // 某一路长时间补不上缓存时不能把四/六路永久按住: 2.5 秒后强制恢复主时钟, 落后的镜头由 tick 追帧
+  if (overviewPosition !== null) {
+    if (!syncHoldAt) syncHoldAt = performance.now();
+    else if (performance.now() - syncHoldAt > 2500) {
+      overviewPosition = null; syncHoldAt = 0; resetPlaybackClock();
+    }
+  } else syncHoldAt = 0;
   const times = playing.map(v => v.currentTime);
   if (playing.some(v => v.paused || v.seeking || v.dataset.positioning || v.dataset.startBuffer ||
       v.error || v.dataset.loadFailed || (v.readyState < 3 && v.duration - v.currentTime > .08)) ||
@@ -5914,10 +5985,13 @@ function showClip(ix, offset, continuous = false, seekStartup = false) {
   const channels = camSel === 'all' ? allCameras : [camSel];
   const old = activeVideos();
   const previous = new Map(old.map(v => [v.dataset.cam, v]));
+  const usedPrepared = new Set();
   const cells = channels.map(cam => {
     const file = group.vids.find(v => v.cam === cam);
     let prepared = null;
-    if (file && prefetch?.file?.url === file.url && prefetch.quality === curQ) {
+    if (file && prefetch?.videos?.get(file.url) && prefetch.quality === curQ) {
+      prepared = prefetch.videos.get(file.url); usedPrepared.add(file.url);
+    } else if (file && prefetch?.file?.url === file.url && prefetch.quality === curQ) {
       prepared = prefetch.video; prefetch = null;
     }
     const cell = mountCell(cam, file, prepared, offset, generation, seekStartup);
@@ -5933,6 +6007,11 @@ function showClip(ix, offset, continuous = false, seekStartup = false) {
     }
     return cell;
   });
+  // 下一段的多路预加载已经交给播放器; 没用上的释放掉, 避免占着解码器
+  if (prefetch?.videos && prefetch.nextKey === group.key) {
+    prefetch.videos.forEach((video, url) => { if (!usedPrepared.has(url)) releaseVideo(video); });
+    prefetch = null;
+  }
   if (!continuous || prefetch?.nextKey !== group.key || prefetch.done) dropPrefetch();
   old.forEach(v => { v.onerror = v.onended = null; releaseVideo(v); });
   grid.replaceChildren(...cells);
@@ -7092,6 +7171,7 @@ function tick() {
   }
   if (wantedPlay) prepareNext(); else hideNetSpeed();
   updateControls(); updateHud(clipOffset);
+  updateBufferProgress();
 }
 
 /* ---------- 实时传输速度 ---------- */
@@ -7579,8 +7659,21 @@ function playLoad() {
       remoteQuality = j.remote_quality;
       if (sel) sel.value = j.remote_quality;
     }
+    if (j && j.prewarm) {
+      for (const name of ['sentry', 'saved']) {
+        const input = document.getElementById('prewarm-' + name);
+        const value = j.prewarm['prewarm_' + name];
+        if (input && value != null) input.value = value;
+      }
+    }
+    // 播放设置页单独打开时也要能保存预转码条数, 不能依赖先进过存储分配页
+    const save = document.getElementById('prewarm-save');
+    if (save) save.disabled = false;
     playSpaceHint();
-  }).catch(() => {});
+  }).catch(() => {
+    const save = document.getElementById('prewarm-save');
+    if (save) save.disabled = false;
+  });
   playSpaceHint();
 }
 /* 地址显示格式实时预览: 优先用真实录像解析出的地址, 没有样本时用内置示例 */
@@ -7702,7 +7795,7 @@ document.addEventListener('click', event => {
 window.addEventListener('resize', storageHelpClose);
 document.querySelector('.settings-content').addEventListener('scroll', storageHelpClose);
 function storageDisable(disabled) {
-  document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize, #storage-format, #retention-save, #prewarm-save, #paths-save').forEach(element => element.disabled = disabled);
+  document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize, #storage-format, #retention-save, #paths-save').forEach(element => element.disabled = disabled);
 }
 function storageMessage(message, resize = false) {
   const output = document.getElementById('storage-msg');
@@ -7852,6 +7945,29 @@ document.querySelectorAll('#tab-storage input').forEach(input => input.addEventL
   storageRenderAllocation();
   if (storageData) storageRenderUsage();
 }));
+/* 实际用量卡片跟随左侧容量设置的高度: 右侧内容多时内部滚动, 不再把左侧撑高 */
+function syncStorageCards() {
+  const usage = document.getElementById('storage-usage');
+  if (!usage) return;
+  const left = usage.parentElement && [...usage.parentElement.children].find(el => el !== usage && el.classList.contains('storage-quota'));
+  if (!left) return;
+  if (matchMedia('(max-width: 999px)').matches) {
+    usage.style.height = ''; usage.style.maxHeight = ''; usage.style.overflowY = '';
+    return;
+  }
+  usage.style.height = 'auto'; usage.style.maxHeight = 'none'; usage.style.overflowY = '';
+  left.style.alignSelf = 'start';
+  const height = Math.round(left.getBoundingClientRect().height);
+  left.style.alignSelf = '';
+  if (height > 0) {
+    usage.style.height = height + 'px';
+    usage.style.maxHeight = height + 'px';
+    usage.style.overflowY = 'auto';
+  }
+}
+window.addEventListener('resize', syncStorageCards);
+const storageUsbBox = document.getElementById('storage-usb-box');
+if (storageUsbBox) storageUsbBox.addEventListener('toggle', () => setTimeout(syncStorageCards, 0));
 async function storageLoad() {
   const request = ++storageRequest;
   clearTimeout(storageTimer);
@@ -7890,10 +8006,15 @@ async function storageLoad() {
   } catch (error) { if (request === storageRequest) { storageData = null; storageRenderAllocation(); storageMessage(error.message); storageDisable(false); } }
 }
 function storageShowJob(job) {
-  const busy = ['running', 'recovery'].includes(job.state);
+  // recovery 不是正在执行的任务: 保持按钮可用, 让用户点「调整/格式化」时自动清理残骸
+  const busy = job.state === 'running';
   storageDisable(busy || !storageData);
-  storageMessage(job.state === 'running' ? job.message + ' ' + job.percent + '%' : job.message || '', true);
+  let text = job.state === 'running' ? job.message + ' ' + job.percent + '%' : (job.message || '');
+  if (job.state === 'recovery') text += '（可直接展开「调整车机 U 盘容量」点按钮自动清理后重试）';
+  // recovery 提示放在容量设置顶部, 避免被折叠的 U 盘区域挡住
+  storageMessage(text, job.state !== 'recovery');
   if (job.state === 'running') storageTimer = setTimeout(storagePoll, 1500);
+  syncStorageCards();
 }
 async function storagePoll() {
   if (!document.getElementById('panel').classList.contains('open') || !document.getElementById('st-storage').classList.contains('active')) return;
@@ -8185,7 +8306,7 @@ async function storageFormat() {
 }
 
 /* ---------- 外置卡与归档同步 ---------- */
-let EXT_CARDS = [], EXT_CARD = null, ARCH_SCAN_ITEMS = [], ARCH_POLL = null;
+let EXT_CARDS = [], EXT_CARD = null, ARCH_SCAN_ITEMS = [], ARCH_SCAN_SELECTED = new Set(), ARCH_POLL = null;
 function extCardRender() {
   const box = document.getElementById('ext-card-info');
   if (!box) return;
@@ -8220,7 +8341,10 @@ async function extCardJobPoll(then) {
     try { j = await (await fetch('/api/card/job', { cache: 'no-store' })).json(); } catch (e) { continue; }
     const job = j.job || {};
     if (job.state === 'running') {
-      if (msg) msg.textContent = job.message || '处理中…';
+      let text = job.message || '处理中…';
+      if (job.pct != null) text += ' ' + Math.round(job.pct) + '%';
+      if (job.speed) text += ' · ' + Number(job.speed).toFixed(1) + ' MB/s';
+      if (msg) msg.textContent = text;
       continue;
     }
     if (job.kind === 'speed' && job.state === 'done') {
@@ -8260,6 +8384,9 @@ async function extCardFormat() {
     extCardJobPoll();
   } catch (e) { if (msg) msg.textContent = '❌ ' + e.message; }
 }
+function archSelectedItems() {
+  return ARCH_SCAN_ITEMS.filter(x => ARCH_SCAN_SELECTED.has(x.path));
+}
 function archiveScanRender() {
   const box = document.getElementById('arch-scan-box'), acts = document.getElementById('arch-migrate-actions');
   if (!box) return;
@@ -8268,22 +8395,52 @@ function archiveScanRender() {
     if (acts) acts.innerHTML = '';
     return;
   }
-  box.innerHTML = ARCH_SCAN_ITEMS.map(x =>
-    '<div class="scan-item"><span class="p"><b>' + (x.type === 'img' ? '镜像' : '归档目录') + '</b> ' +
-    esc(x.path) + '</span><span class="s">' + fmtBytes(x.size) + '</span></div>').join('') +
-    '<div class="hint">以上内容不在默认位置，可一键迁移到默认镜像/归档区。</div>';
-  if (acts) acts.innerHTML = '<div class="tool-actions"><button class="mini primary" onclick="archiveMigrate()">迁移到默认位置</button></div>';
+  const picked = archSelectedItems().length;
+  box.innerHTML = ARCH_SCAN_ITEMS.map((x, i) =>
+    '<div class="scan-item' + (ARCH_SCAN_SELECTED.has(x.path) ? ' sel' : '') + '">' +
+    '<label class="scan-pick-wrap"><input type="checkbox" class="scan-pick" data-arch="' + i + '"' +
+    (ARCH_SCAN_SELECTED.has(x.path) ? ' checked' : '') + '></label>' +
+    '<span class="p"><b>' + (x.type === 'img' ? '镜像' : '归档目录') + '</b> ' +
+    esc(x.path) + '</span><span class="s">' + fmtBytes(x.size) + '</span>' +
+    '<button type="button" class="mini tool-danger scan-del" data-del="' + i + '" title="删除该源文件">删除</button></div>').join('') +
+    '<div class="hint">勾选后可批量迁移到默认位置或删除源文件（删除不可恢复）。</div>';
+  if (acts) acts.innerHTML = '<div class="tool-actions scan-actions">' +
+    '<button class="mini" onclick="archSelectAll()">' + (picked === ARCH_SCAN_ITEMS.length ? '取消全选' : '全选') + '</button>' +
+    '<button class="mini primary" onclick="archiveMigrate()"' + (picked ? '' : ' disabled') + '>迁移选中（' + picked + '）</button>' +
+    '<button class="mini tool-danger" onclick="archiveDeleteSelected()"' + (picked ? '' : ' disabled') + '>删除选中</button></div>';
+}
+function archSelectAll() {
+  if (ARCH_SCAN_SELECTED.size === ARCH_SCAN_ITEMS.length) ARCH_SCAN_SELECTED.clear();
+  else ARCH_SCAN_ITEMS.forEach(x => ARCH_SCAN_SELECTED.add(x.path));
+  archiveScanRender();
 }
 async function archiveScan(force) {
   try {
     const j = await (await fetch('/api/archive/scan' + (force ? '?force=1' : ''), { cache: 'no-store' })).json();
     ARCH_SCAN_ITEMS = j.items || [];
+    const alive = new Set(ARCH_SCAN_ITEMS.map(x => x.path));
+    for (const path of [...ARCH_SCAN_SELECTED]) if (!alive.has(path)) ARCH_SCAN_SELECTED.delete(path);
     archiveScanRender();
   } catch (e) {
     const box = document.getElementById('arch-scan-box');
     if (box) box.textContent = '扫描失败: ' + e;
   }
 }
+document.getElementById('arch-scan-box').addEventListener('click', event => {
+  const del = event.target.closest('[data-del]');
+  if (del) {
+    event.preventDefault(); event.stopPropagation();
+    const item = ARCH_SCAN_ITEMS[Number(del.dataset.del)];
+    if (item) archiveDeleteItems([item]);
+    return;
+  }
+  const pick = event.target.closest('input.scan-pick');
+  if (!pick) return;
+  const item = ARCH_SCAN_ITEMS[Number(pick.dataset.arch)];
+  if (!item) return;
+  if (pick.checked) ARCH_SCAN_SELECTED.add(item.path); else ARCH_SCAN_SELECTED.delete(item.path);
+  archiveScanRender();
+});
 function archiveSyncPaint(job) {
   const box = document.getElementById('arch-sync-progress');
   if (!box) return;
@@ -8325,10 +8482,12 @@ async function archiveSyncStart() {
   }
 }
 async function archiveMigrate(policy) {
-  const btn = document.querySelector('#arch-migrate-actions button');
+  const items = archSelectedItems();
+  if (!items.length) { toast('请先勾选要迁移的项目'); return; }
+  const btn = document.querySelector('#arch-migrate-actions .primary');
   try {
     const j = await (await fetch('/api/archive/migrate', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
-      body: JSON.stringify({ items: ARCH_SCAN_ITEMS, policy: policy || '' }) })).json();
+      body: JSON.stringify({ items, policy: policy || '' }) })).json();
     if (j.need_policy) {
       const list = (j.conflicts || []).slice(0, 30).map(c => c.dst).join('\n');
       const ans = confirm('发现 ' + j.conflict_count + ' 个同名文件：\n' + list + '\n\n点「确定」= 全部覆盖；点「取消」= 自动重命名。');
@@ -8345,20 +8504,33 @@ async function archiveMigrate(policy) {
       archiveSyncPaint(job);
       if (job.state === 'running') return;
       clearInterval(ARCH_POLL);
-      if (btn) { btn.disabled = false; btn.textContent = '迁移到默认位置'; }
       if (job.state === 'done') {
         if (job.failed && job.failed.length) toast('迁移完成，' + job.failed.length + ' 个文件失败');
-        if (confirm('迁移完成。是否删除默认位置以外的源文件？\n此操作不可恢复。')) {
-          const d = await (await fetch('/api/archive/migrate/delete', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
-            body: JSON.stringify({ items: ARCH_SCAN_ITEMS, confirm: true }) })).json();
-          toast(d.ok ? '✅ 已删除源文件' : '❌ ' + (d.msg || '删除失败'));
-          archiveScan(true);
-        }
+        if (confirm('迁移完成。是否删除这次迁移的源文件？\n此操作不可恢复。')) await archiveDeleteItems(items, true);
+        else archiveScan(true);
       } else {
         toast('❌ ' + (job.message || '迁移失败'));
+        archiveScanRender();
       }
     }, 1200);
-  } catch (e) { toast('❌ ' + e.message); }
+  } catch (e) { toast('❌ ' + e.message); archiveScanRender(); }
+}
+async function archiveDeleteSelected() {
+  const items = archSelectedItems();
+  if (!items.length) { toast('请先勾选要删除的项目'); return; }
+  await archiveDeleteItems(items, false);
+}
+async function archiveDeleteItems(items, quiet) {
+  if (!items.length) return;
+  const preview = items.slice(0, 4).map(x => x.path).join('\n') + (items.length > 4 ? '\n…' : '');
+  if (!quiet && !confirm('确定删除以下 ' + items.length + ' 个默认位置以外的源文件？\n' + preview + '\n\n此操作不可恢复，默认位置里的文件不受影响。')) return;
+  try {
+    const d = await (await fetch('/api/archive/migrate/delete', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
+      body: JSON.stringify({ items, confirm: true }) })).json();
+    toast(d.ok ? '✅ 已删除源文件' : '❌ ' + (d.msg || '删除失败'));
+    if (d.ok) items.forEach(x => ARCH_SCAN_SELECTED.delete(x.path));
+    archiveScan(true);
+  } catch (e) { toast('❌ ' + e.message); archiveScanRender(); }
 }
 
 /* ---------- 飞书推送 ---------- */
@@ -8628,11 +8800,25 @@ async function otaLoadTarget() {
     bc.value = ''; bc.style.display = 'none';
   } catch (e) {}
 }
+function otaBranchToMain() {
+  const b = document.getElementById('upd-branch'), bc = document.getElementById('upd-branch-custom');
+  if (b) {
+    if (![...b.options].some(option => option.value === 'main')) {
+      const option = document.createElement('option');
+      option.value = 'main'; option.textContent = 'main';
+      b.append(option);
+    }
+    b.value = 'main';
+  }
+  if (bc) { bc.value = ''; bc.style.display = 'none'; }
+}
 function otaRepoUI() {
   const sel = document.getElementById('upd-repo');
   const inp = document.getElementById('upd-custom');
   const custom = sel.value === '__custom__';
   inp.style.display = custom ? '' : 'none';
+  // 换更新源时分支回到主分支, 避免上一个源的分支在新源里不存在
+  otaBranchToMain();
   if (custom) { inp.focus(); return; }
   inp.value = '';
   // 选中内置源后自动切换并立即检查更新, 不再需要「切换」按钮
@@ -8812,19 +8998,45 @@ async function otaApply(force) {
     : '升级到 v' + latest + ' ?\n程序文件会被覆盖, 服务自动重启约 5 秒, 期间页面会短暂打不开。';
   if (!confirm(tip)) return;
   const btn = document.getElementById('upd-go'), msg = document.getElementById('upd-msg');
+  const prog = document.getElementById('upd-prog'), fill = document.getElementById('upd-progfill');
+  const pctEl = document.getElementById('upd-progpct'), sizeEl = document.getElementById('upd-progsize');
+  const speedEl = document.getElementById('upd-progspeed');
   btn.disabled = true;
-  // 下载/安装进度: 服务端在 _http_get 里逐块上报, 这里轮询显示「阶段 + 百分比」
-  let pct = 0;
-  const showProgress = (stage) => {
-    msg.textContent = (stage || t('正在下载并校验新版本…')) + ' ' + pct + '%';
+  // 下载/安装进度: 显示实际下载百分比、已下载/文件大小和实时速度
+  let pct = 0, seenGot = null, seenAt = 0, speed = 0;
+  const fmt = bytes => {
+    bytes = Number(bytes) || 0;
+    if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB';
+    if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+    if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KB';
+    return Math.round(bytes) + ' B';
   };
-  showProgress();
+  const paintProgress = p => {
+    const stage = (p && p.stage) || t('正在下载并校验新版本…');
+    const got = Number(p && p.got) || 0, total = Number(p && p.total) || 0, at = Number(p && p.at) || 0;
+    let shown = pct;
+    if (total > 0) {
+      if (seenGot != null && at > seenAt && got >= seenGot) {
+        const instant = (got - seenGot) / Math.max(.001, at - seenAt);
+        speed = speed ? speed * .35 + instant * .65 : instant;
+      }
+      if (got > 0) { seenGot = got; seenAt = at; }
+      shown = Math.min(100, Math.round(got * 100 / total));
+    }
+    if (prog) prog.hidden = false;
+    if (fill) fill.style.width = shown + '%';
+    if (pctEl) pctEl.textContent = (total > 0 ? t('下载') + ' ' : '') + shown + '%';
+    if (sizeEl) sizeEl.textContent = total > 0 ? fmt(got) + ' / ' + fmt(total) : '';
+    if (speedEl) speedEl.textContent = speed > 0 ? fmt(speed) + '/s' : '';
+    msg.textContent = stage + ' ' + shown + '%';
+  };
+  paintProgress(null);
   const timer = setInterval(async () => {
     try {
       const p = await (await fetch('/api/ota/progress', { cache: 'no-store' })).json();
       if (p && p.ok) {
         if (typeof p.pct === 'number') pct = Math.max(pct, Math.min(100, p.pct));
-        showProgress(p.stage);
+        paintProgress(p);
       }
     } catch (e) { /* 服务重启瞬间忽略 */ }
   }, 700);
@@ -8832,11 +9044,12 @@ async function otaApply(force) {
     const j = await (await fetch('/api/ota/apply', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({force})})).json();
     clearInterval(timer);
     msg.textContent = j.msg;
-    if (!j.ok) { btn.disabled = false; return; }
+    if (!j.ok) { if (prog) prog.hidden = true; btn.disabled = false; return; }
     otaWaitBack();
   } catch (e) {
     clearInterval(timer);
     msg.textContent = t('升级失败') + ': ' + e;
+    if (prog) prog.hidden = true;
     btn.disabled = false;
   }
 }
@@ -12440,6 +12653,19 @@ def storage_busy():
 
 
 def storage_status():
+    # 启动时 USB 可能还没绑好导致残骸清不掉; 等后续状态查询时再自愈, 避免永久卡在「请检查恢复文件」
+    if _storage_job["state"] == "recovery":
+        if not storage_resize.pending_recovery(IMG):
+            with _storage_job_lock:
+                _storage_job.update(state="idle", message="")
+        else:
+            try:
+                note = storage_resize.repair(IMG, GADGET_DIR, _udc())
+            except Exception:
+                note = ''
+            if note:
+                with _storage_job_lock:
+                    _storage_job.update(state="idle", message=note)
     values = storage_allocation.load()
     disk = storage_allocation.snapshot(IMG, ARCHIVE, TRANSCODE_DIR)
     disk['usb_used_bytes'] = _exfat_used(IMG)
@@ -12994,6 +13220,32 @@ def _storage_run_rewrite(size, action):
     return dict(ok=True, job=storage_job())
 
 
+def _storage_recover_stale():
+    """扫掉上次调整留下的 .resize-* 残骸。
+
+    只要镜像在位且 USB 导出能恢复, 这些文件就只是残骸, 不该把「调整/格式化」永久锁死。
+    先按当前绑定直接清理; 绑定没对上时先重新导出一次再清理。"""
+    if not storage_resize.pending_recovery(IMG):
+        return ''
+    try:
+        note = storage_resize.repair(IMG, GADGET_DIR, _udc())
+    except Exception:
+        note = ''
+    if note:
+        return note
+    gadget = os.path.join(os.path.dirname(__file__), 'tesla-gadget.sh')
+    if os.path.isfile(gadget):
+        try:
+            subprocess.run(['sh', gadget, 'on'], capture_output=True, text=True, timeout=90)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            note = storage_resize.repair(IMG, GADGET_DIR, _udc())
+        except Exception:
+            note = ''
+    return note
+
+
 def storage_start_resize(body):
     # Old pages only acknowledged pausing recording and must never authorize erasure.
     if not isinstance(body, dict) or body.get('clear_confirmed') is not True:
@@ -13003,6 +13255,10 @@ def storage_start_resize(body):
     with _storage_edit_lock:
         if storage_busy():
             raise ValueError('已有存储任务在进行')
+        repaired = _storage_recover_stale()
+        if repaired:
+            with _storage_job_lock:
+                _storage_job.update(state='idle', message=repaired)
         current = storage_status()
         if body.get('revision') != current['revision']:
             raise ValueError('存储配置已变化，请重新加载')
@@ -13037,6 +13293,10 @@ def storage_start_format(body):
     with _storage_edit_lock:
         if storage_busy():
             raise ValueError('已有存储任务在进行')
+        repaired = _storage_recover_stale()
+        if repaired:
+            with _storage_job_lock:
+                _storage_job.update(state='idle', message=repaired)
         current = storage_status()
         if body.get('revision') != current['revision']:
             raise ValueError('存储配置已变化，请重新加载')
@@ -13049,7 +13309,7 @@ def storage_start_format(body):
 
 # ---------------- 外置卡管理 / 归档区同步 ----------------
 _CARD_JOB_LOCK = threading.Lock()
-_CARD_JOB = {"state": "idle", "kind": "", "message": "", "write": 0.0, "read": 0.0}
+_CARD_JOB = {"state": "idle", "kind": "", "message": "", "write": 0.0, "read": 0.0, "pct": 0, "speed": 0.0}
 _ARCH_SYNC_LOCK = threading.Lock()
 _ARCH_SYNC = {"state": "idle", "message": "", "total": 0, "done": 0, "pct": 0, "bps": 0,
               "sources": [], "conflicts": [], "copied": 0, "failed": []}
@@ -13166,7 +13426,7 @@ def external_card_speed(body):
         raise ValueError("找不到可写的存储卡挂载点")
     if _CARD_JOB["state"] == "running":
         raise ValueError("正在执行其它外置卡任务")
-    _card_job_set(state="running", kind="speed", message="正在测试速度…", write=0.0, read=0.0)
+    _card_job_set(state="running", kind="speed", message="正在写入测试文件", write=0.0, read=0.0, pct=0, speed=0.0)
 
     def work():
         fp = os.path.join(mp, ".tsf-speedtest.bin")
@@ -13175,19 +13435,32 @@ def external_card_speed(body):
         try:
             t0 = time.monotonic()
             with open(fp, "wb", buffering=0) as f:
-                for _ in range(size // len(chunk)):
+                for index in range(size // len(chunk)):
                     f.write(chunk)
+                    if index % 32 == 31:
+                        elapsed = max(.001, time.monotonic() - t0)
+                        written = (index + 1) * len(chunk)
+                        _card_job_set(message="正在写入测试文件", pct=round(written / size * 50),
+                                      speed=round(written / elapsed / 1048576, 1))
                 f.flush()
                 os.fsync(f.fileno())
             wt = time.monotonic() - t0
             t1 = time.monotonic()
+            read = 0
             with open(fp, "rb", buffering=0) as f:
-                while f.read(len(chunk)):
-                    pass
+                while True:
+                    block = f.read(len(chunk))
+                    if not block:
+                        break
+                    read += len(block)
+                    if read % (32 * len(chunk)) == 0:
+                        elapsed = max(.001, time.monotonic() - t1)
+                        _card_job_set(message="正在读回测试", pct=50 + round(read / size * 50),
+                                      speed=round(read / elapsed / 1048576, 1))
             rt = time.monotonic() - t1
             w = size / wt / 1048576 if wt > 0 else 0
             r = size / rt / 1048576 if rt > 0 else 0
-            _card_job_set(state="done", write=round(w, 1), read=round(r, 1),
+            _card_job_set(state="done", write=round(w, 1), read=round(r, 1), pct=100, speed=0.0,
                           message="写入 %.1f MB/s，读取 %.1f MB/s" % (w, r))
         except Exception as ex:
             _card_job_set(state="error", message="测速失败: %s" % str(ex)[:120])
@@ -18587,7 +18860,7 @@ class Handler(BaseHTTPRequestHandler):
             with _OTA_PROG_LOCK:
                 p = dict(_OTA_PROG)
             self._json({"ok": True, "stage": p["stage"], "pct": p["pct"],
-                        "got": p["got"], "total": p["total"]})
+                        "got": p["got"], "total": p["total"], "at": p["at"]})
         elif path == "/api/ota/target":
             t = ota_target()
             self._json({"ok": True, "repo": t["repo"], "branch": t["branch"],
@@ -18620,6 +18893,7 @@ class Handler(BaseHTTPRequestHandler):
                         "brand_logo": saved.get("brand_logo", ""),
                         "brand_logo_v": brand_logo_ver(),
                         "remote_quality": saved.get("remote_quality", "480p"),
+                        "prewarm": prewarm_values(),
                         "has_amap_key": bool(saved.get("amap_key")),
                         "addr_format": saved.get("addr_format", ""),
                         "retention": retention_values(),
