@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.007"
+APP_VERSION = "2026.11.25.008"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1287,19 +1287,27 @@ def ota_apply(force=False):
         return False, "版本校验失败 (文件 %s / 清单 %s)；各下载源与 GitHub 实时接口暂未返回与清单一致的完整文件（镜像可能仍在缓存旧版本），请稍后重试或在「更新源」里换一个源" \
                       % ("、".join(seen) or "?", latest)
     base, data = picked   # collect=True 返回 (下载源, 文件字节); 文件已通过 _viewer_blob_ok 校验
+    # 主程序来自 GitHub API 时说明镜像全在缓存旧版, 模块也必须取同一提交,
+    # 否则会拼出「新主程序 + 旧模块」的半残组合。
+    via_api = base.startswith("https://api.github.com")
     # 2) 下载依赖模块: 少一个都不装 (先装主程序后补模块, 只会得到一个起不来的服务)
     names = _ota_need_modules(j, data)
     mods = []
     for name in names:
         blob = None
+        if via_api:
+            cand = _api_file("/" + name)
+            if cand and not _ota_check_py(name, cand):
+                blob = cand
         # 优先用主程序命中的那个源拉模块, 保证主程序与模块同版本,
         # 避免镜像缓存把「新主程序 + 旧模块」拼成半残状态。
-        try:
-            same = _http_get(base + "/%s?ts=%d" % (name, int(time.time())), timeout=60, limit=4 << 20)
-            if same and not _ota_check_py(name, same):
-                blob = same
-        except Exception:
-            pass
+        if blob is None and not via_api:
+            try:
+                same = _http_get(base + "/%s?ts=%d" % (name, int(time.time())), timeout=60, limit=4 << 20)
+                if same and not _ota_check_py(name, same):
+                    blob = same
+            except Exception:
+                pass
         if blob is None:
             for attempt in (0, 1):
                 try:
@@ -1312,6 +1320,8 @@ def ota_apply(force=False):
                     time.sleep(1.5)
         if blob is None:
             blob = _api_file("/%s" % name)
+        if not blob:
+            return False, "下载模块 %s 失败: 所有下载源与 GitHub 实时接口均未返回可用文件（已自动重试一次）" % name
         bad = _ota_check_py(name, blob)
         if bad:
             return False, "下载或校验模块 %s 失败: %s（各源可能缓存了旧文件，请稍后重试或在「更新源」里换一个源）" % (name, bad)
