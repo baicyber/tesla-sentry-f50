@@ -87,7 +87,11 @@ cron 是否在跑：`ps | grep cron`、`cat /etc/crontabs/root`。
 F50 是 aarch64 / OpenWrt（musl），请直接用系统包安装，不要再用 aarch64 静态包：
 
 ```sh
-apk add ffmpeg
+# OpenWrt 24.10 及更早
+opkg update && opkg install ffmpeg
+# OpenWrt 25.12 起
+apk update && apk add ffmpeg
+# 安装器会自动判断版本，并校验 libx264/HEVC
 ./install.sh apply --install-deps --ffmpeg /usr/bin/ffmpeg
 ```
 

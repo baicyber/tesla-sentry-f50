@@ -82,8 +82,7 @@ sudo ./install.sh --help             # 查看容量、端口与依赖参数
 ## 6. 快速自检
 
 ```sh
-sh scripts/tsf-check.sh
-sh scripts/tsf-check.sh --json
+sudo ./install.sh check
 ```
 
 自检不通过时，先按输出修复 F50 的 UDC、configfs、exFAT、procd、Python 或存储挂载，再运行安装器。项目不提供退回到其他设备或纯网页查看器的部署方式。

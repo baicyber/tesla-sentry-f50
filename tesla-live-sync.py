@@ -29,6 +29,7 @@ import json
 import os
 import re
 import socket
+import stat
 import struct
 import sys
 import time
@@ -437,6 +438,132 @@ def same_file(path, size):
         return False
 
 
+# ---- 硬链接复用: 同一段视频在哨兵/手动保存/驾驶记录/实时滚动里重复出现时只占一份数据块 ----
+LINK_INDEX = {"t": 0.0, "v": {}}
+LINK_INDEX_TTL = 300
+
+
+def _build_link_index():
+    index = {}
+    for cat in CATS:
+        base = os.path.join(ARCHIVE, cat)
+        if not os.path.isdir(base):
+            continue
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
+            for name in files:
+                if not name.lower().endswith(".mp4"):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    if os.path.islink(path) or not os.path.isfile(path):
+                        continue
+                except OSError:
+                    continue
+                index.setdefault(name, []).append(path)
+    return index
+
+
+def link_index():
+    now = time.time()
+    if not LINK_INDEX["v"] or now - LINK_INDEX["t"] > LINK_INDEX_TTL:
+        LINK_INDEX["v"] = _build_link_index()
+        LINK_INDEX["t"] = now
+    return LINK_INDEX["v"]
+
+
+def _image_read(exfat, entry, offset, count):
+    """按偏移从镜像里读一段 (沿簇链读取, 只读需要的部分)。"""
+    if count <= 0 or offset >= entry.size:
+        return b""
+    clusters = exfat.clusters_for(entry)
+    out = bytearray()
+    while len(out) < count and offset < entry.size:
+        block, within = divmod(offset, exfat.cluster_size)
+        if block >= len(clusters):
+            break
+        n = min(count - len(out), exfat.cluster_size - within, entry.size - offset)
+        chunk = exfat.pread(n, exfat.cluster_off(clusters[block]) + within)
+        if len(chunk) != n:
+            break
+        out.extend(chunk)
+        offset += n
+    return bytes(out)
+
+
+def _file_read(path, offset, count):
+    try:
+        with open(path, "rb") as stream:
+            stream.seek(offset)
+            return stream.read(count)
+    except OSError:
+        return b""
+
+
+def _same_content(exfat, entry, path, span=262144):
+    """大小相同还不够: 比对首尾各 256KB, 确认确实是同一段录像。"""
+    size = entry.size
+    span = min(span, size)
+    for offset in (0, max(0, size - span)):
+        n = min(span, size - offset)
+        if _image_read(exfat, entry, offset, n) != _file_read(path, offset, n):
+            return False
+    return True
+
+
+def _unlink_quiet(path):
+    """尽力删除单个文件: 只摘掉这一条链接, 不影响其它硬链接共享的数据块。"""
+    try:
+        os.unlink(path)
+        return True
+    except OSError:
+        return False
+
+
+def verify_hardlink(dest, candidate, size):
+    """校验刚建立的硬链接: 同一 inode、常规文件、大小一致、链接数 >= 2。"""
+    try:
+        made = os.stat(dest)
+        source = os.stat(candidate)
+    except OSError:
+        return False
+    return (stat.S_ISREG(made.st_mode) and made.st_size == size and
+            (made.st_dev, made.st_ino) == (source.st_dev, source.st_ino) and
+            made.st_nlink >= 2)
+
+
+def try_hardlink(exfat, entry, dest):
+    """归档里已有同名同内容的片段时直接建硬链接, 省一次 eMMC 写入与一整份空间。
+
+    建立后立即校验; 任何异常或不一致都回滚这条新链接并退回完整复制,
+    避免在归档区留下半截或内容错误的文件。"""
+    name = os.path.basename(dest)
+    for candidate in list(link_index().get(name, ())):
+        if os.path.abspath(candidate) == os.path.abspath(dest):
+            continue
+        try:
+            st = os.stat(candidate)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode) or st.st_size != entry.size:
+            continue
+        if not _same_content(exfat, entry, candidate):
+            continue
+        try:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            os.link(candidate, dest)
+        except OSError:
+            return False            # 目标已存在或源被清理: 交给完整复制
+        if not verify_hardlink(dest, candidate, entry.size):
+            _unlink_quiet(dest)     # 回滚: 只删刚建立的这条链接
+            LINK_INDEX["t"] = 0.0   # 索引里可能有失效路径, 下一轮重建
+            log("硬链接校验失败, 改为完整复制: %s" % name)
+            return False
+        link_index().setdefault(name, []).append(dest)
+        return True
+    return False
+
+
 class ClipNotReady(Exception):
     pass
 
@@ -776,28 +903,39 @@ def do_sync(exfat, state, quiet=False, cats=CATS, recent=None):
             continue
         try:
             t0 = time.monotonic()
-            n = copy_entry(exfat, e, dest, require_index=cat == "RecentClips")
+            require = cat == "RecentClips"
+            if require and not source_has_mp4_index(exfat, e):
+                raise ClipNotReady
+            linked = try_hardlink(exfat, e, dest)
+            n = e.size if linked else copy_entry(exfat, e, dest, require_index=require)
             cost = max(0.001, time.monotonic() - t0)
-            copied += 1
-            bytes_ += n
-            if recent_check and cat == "RecentClips":
-                recent.publish_archived(cur, ev)
-                ev_entry = cur.get((cat, "_event", "event.json"))
-                if ev_entry is not None:
-                    try:
-                        copy_entry(exfat, ev_entry, safe_dest(cat, ev, "event.json"))
-                    except Exception:
-                        pass
-            log("已同步 %s (%d KB, %.1f MB/s)" % (key, n // 1024, n / cost / 1048576))
         except ClipNotReady:
             new_pending[key] = sig
+            continue
         except Exception as ex:
+            # 回滚: 本次没有完整落盘, 清掉可能残留的错误目标, 下一轮重新同步
+            if os.path.isfile(dest) and not same_file(dest, e.size):
+                _unlink_quiet(dest)
             prev_count = int(old_fail.get("fail_count", 0)) if old_fail and old_fail.get("sig") == sig else 0
             fail_count = prev_count + 1
             delay = min(FAIL_RETRY_MAX, FAIL_RETRY_BASE * (1 << min(fail_count - 1, 8)))
             log("同步失败 %s: %s；%d 秒后重试" % (key, ex, delay))
             new_pending[key] = sig
             new_failures[key] = {"sig": sig, "fail_count": fail_count, "next": time.time() + delay}
+            continue
+        # 到这里文件已落盘且通过校验; 后续附带信息写入失败不回滚录像, 也不标记为同步失败
+        copied += 1
+        bytes_ += n
+        try:
+            if recent_check and cat == "RecentClips":
+                recent.publish_archived(cur, ev)
+                ev_entry = cur.get((cat, "_event", "event.json"))
+                if ev_entry is not None:
+                    copy_entry(exfat, ev_entry, safe_dest(cat, ev, "event.json"))
+        except Exception as ex:
+            log("片段已同步, 附带信息写入失败 %s: %s" % (key, ex))
+        log(("硬链接复用 %s (%d KB)" if linked else "已同步 %s (%d KB, %.1f MB/s)")
+            % ((key, n // 1024) if linked else (key, n // 1024, n / cost / 1048576)))
     if recent_check:
         recent.pending_since = {k: v for k, v in recent.pending_since.items() if k in new_pending}
     if pending != new_pending or failures != new_failures:

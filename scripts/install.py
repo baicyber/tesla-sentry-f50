@@ -24,7 +24,7 @@ APP = '/opt/tesla-sentry'
 CONF = '/etc/tesla-sentry.conf'
 SERVICES = ('tsf-mount', 'tesla-gadget', 'tesla-live', 'tesla-viewer')
 SCRIPTS = ('mkexfat.py', 'tesla-gadget.sh', 'tesla-usb-start.sh', 'tesla-img.sh', 'tesla-sync.sh',
-           'usb-selfheal.sh', 'tsf-check.sh', 'tsf-storage.sh', 'tsf-maintenance.sh')
+           'usb-selfheal.sh', 'tsf-storage.sh', 'tsf-maintenance.sh')
 GIB = 1 << 30
 MARKER = 'installation.json'
 
@@ -79,6 +79,44 @@ class Installer:
         self.repaired = False
         self.upgrade = False
         self.runtime = self.source / 'runtime' if (self.source / 'runtime').is_dir() else None
+
+    def runtime_selftest(self):
+        """离线运行库自检: Python 标准库、子进程重启、ffmpeg/libx264 与中文字幕滤镜。
+
+        以前由 scripts/check-runtime.py 单独完成; 现在并入安装器的 check 流程,
+        仓库只保留 install.sh 一个安装入口。"""
+        if not self.runtime:
+            return
+        expected = str((self.runtime / 'bin/python3').resolve())
+        run([self.python(), '-c',
+             'import ssl,fcntl,http.server,zipfile,threading,ctypes,sqlite3,bz2,lzma,zlib,'
+             'multiprocessing,hashlib,socket'])
+        child = run([self.python(), '-c', 'import sys; print(sys.executable)'], timeout=30).strip()
+        if os.path.realpath(child) != expected:
+            raise InstallError('离线 Python 子进程无法通过自带加载器重启')
+        for name in ('blkid', 'flock'):
+            run([str(self.runtime / 'bin' / name), '--version'], timeout=30)
+        with tempfile.TemporaryDirectory(prefix='tsf-check-') as directory:
+            folder = Path(directory)
+            (folder / 'test.srt').write_text(
+                '1\n00:00:00,000 --> 00:00:01,000\n行车记录\n', encoding='utf-8')
+            graph = ('[0:v]split=4[a][b][c][d];[a][b][c][d]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0,'
+                     'subtitles=test.srt:fontsdir=' + str(self.runtime / 'fonts') + '[v]')
+            run([str(self.runtime / 'bin/ffmpeg'), '-v', 'error', '-f', 'lavfi', '-i',
+                 'color=size=160x90:rate=5', '-filter_complex', graph, '-map', '[v]',
+                 '-frames:v', '5', '-threads', '1', '-c:v', 'libx264', 'test.mp4'],
+                cwd=str(folder), timeout=90)
+            info = run([str(self.runtime / 'bin/ffprobe'), '-v', 'error', '-select_streams', 'v:0',
+                        '-show_entries', 'stream=width,height,codec_name,nb_frames', '-of', 'json',
+                        str(folder / 'test.mp4')], timeout=30)
+            stream = (json.loads(info).get('streams') or [{}])[0]
+            if (stream.get('width'), stream.get('height'), stream.get('codec_name'),
+                    stream.get('nb_frames')) != (320, 180, 'h264', '5'):
+                raise InstallError('离线 ffmpeg 编码自检失败：' + info[:200])
+            run([str(self.runtime / 'bin/ffmpeg'), '-v', 'error', '-i', str(folder / 'test.mp4'),
+                 '-f', 'null', '-'], timeout=30)
+        print('离线运行库自检通过：Python、子进程、磁盘工具、四路合成、中文水印和 H.264 编码。',
+              flush=True)
 
     def python(self):
         return str(self.runtime / 'bin/python3') if self.runtime else sys.executable
@@ -136,9 +174,9 @@ class Installer:
             raise InstallError('--start 需要同时指定 --apply')
 
     def required_bytes(self):
-        # 缓存不再单独预留预算: 转码缓存按实际文件占用计入磁盘用量, 安装估算只算镜像+归档+安全预留。
+        # 镜像 + 归档上限 + 安全预留 + 转码缓存上限(默认 5G), 与网页保存时的校验口径一致。
         return storage_allocation.required_bytes(dict(archive_gib=self.args.archive_gb, free_target_gib=10),
-                                                 self.args.size_gb)
+                                                 self.args.size_gb, cache_gib=5)
 
     def payload(self):
         result = {APP + '/' + name: self.source / name
@@ -218,7 +256,7 @@ class Installer:
           - 视频路径四键 (VIDEO_ROOT/IMG/ARCHIVE/TRANSCODE) 优先取新派生值,
             其他参数 (PORT/IDLE/GADGET/FFMPEG 等) 旧 conf 有就继承
         """
-        # F50 推荐 apk add ffmpeg；未显式指定时把配置固定到 /usr/bin，避免再去找旧 aarch64 包。
+        # F50 推荐按 OpenWrt 版本用 apk/opkg 安装 ffmpeg；未显式指定时把配置固定到 /usr/bin。
         ffmpeg = self.args.ffmpeg or ('/usr/bin/ffmpeg' if self.path('/usr/bin/ffmpeg').is_file()
                                       else self.device['ffmpeg'])
         ffprobe = self.args.ffprobe or ('/usr/bin/ffprobe' if self.path('/usr/bin/ffprobe').is_file()
@@ -340,7 +378,7 @@ class Installer:
 
     def resolve_binary(self, name):
         """按 --ffmpeg/--ffprobe -> /usr/bin (apk 安装) -> PATH -> /opt/mu300 的顺序找可执行文件。
-        F50 是 aarch64/OpenWrt，推荐用 `apk add ffmpeg`；/usr/bin 的包与系统 ABI 一致，
+        F50 是 aarch64/OpenWrt，按版本用 `apk add`/`opkg install` 安装；/usr/bin 的包与系统 ABI 一致，
         不要优先使用来源不明的 aarch64 静态包。"""
         binary = getattr(self.args, name)
         if not binary:
@@ -355,38 +393,77 @@ class Installer:
             return None
         return binary
 
+    def openwrt_release(self):
+        """读取 OpenWrt 版本; 25.x 起 apk, 24.10 及更早 opkg。"""
+        for path in ('/etc/openwrt_release', '/etc/os-release'):
+            try:
+                text = self.path(path).read_text(encoding='utf-8', errors='ignore')
+            except (OSError, UnicodeDecodeError):
+                continue
+            match = re.search(r'(?:DISTRIB_RELEASE|VERSION_ID)\s*=\s*["\']?([0-9][0-9.]*)', text)
+            if match:
+                return match.group(1)
+        return ''
+
+    def package_manager(self):
+        """按 OpenWrt 版本返回 (apk/opkg, 可执行路径, 版本号)。"""
+        apk, opkg = self.tool('apk'), self.tool('opkg')
+        version = self.openwrt_release()
+        nums = re.findall(r'\d+', version)[:2] if version else []
+        prefer_apk = None
+        if nums:
+            try:
+                prefer_apk = int(nums[0]) * 100 + (int(nums[1]) if len(nums) > 1 else 0) >= 2500
+            except ValueError:
+                prefer_apk = None
+        if prefer_apk is True:
+            order = [('apk', apk), ('opkg', opkg)]
+        elif prefer_apk is False:
+            order = [('opkg', opkg), ('apk', apk)]
+        else:
+            order = [('apk', apk), ('opkg', opkg)]
+        for kind, manager in order:
+            if manager:
+                return kind, manager, version
+        return '', '', version
+
+    def pkg_hint(self, packages):
+        kind, manager, _version = self.package_manager()
+        if kind == 'apk':
+            return 'apk add ' + ' '.join(packages)
+        if kind == 'opkg':
+            return 'opkg install ' + ' '.join(packages)
+        return 'apk add %s（25.12+）或 opkg install %s（24.10 及更早）' % (
+            ' '.join(packages), ' '.join(packages))
+
     def package_install(self):
-        """缺依赖时按固件自带的包管理器装; 装不上的原因原样告诉用户。"""
-        tried = []
-        managers = []
-        if shutil.which('apk'):
-            managers.append((['apk', 'add', '--no-cache', 'ffmpeg'], None))
-            # 有的固件把 ffmpeg 拆成 cli + full 库, 精简版解不了 HEVC
-            managers.append((['apk', 'add', '--no-cache', 'libffmpeg-full'], None))
-        if shutil.which('opkg'):
-            managers.append((['opkg', 'install', 'ffmpeg'], ['opkg', 'update']))
-            managers.append((['opkg', 'install', 'libffmpeg-full'], None))
-        if not managers:
+        """按固件版本选择 apk/opkg 安装 ffmpeg 与完整库; 装不上原样告诉用户。"""
+        kind, manager, version = self.package_manager()
+        if not manager:
             raise InstallError('缺少 ffmpeg/ffprobe，且系统没有 apk/opkg；'
-                               '请先执行 `apk add ffmpeg`，'
-                               '或用 --ffmpeg/--ffprobe 指定绝对路径 (F50 推荐 /usr/bin/ffmpeg)')
-        for command, prepare in managers:
-            if prepare:
-                try:
-                    run(prepare, timeout=180)
-                except InstallError as exc:
-                    print('软件源刷新失败（继续尝试安装）：%s' % exc, flush=True)
-            print('正在安装 FFmpeg：%s' % ' '.join(command), flush=True)
+                               '请先安装 ffmpeg，或用 --ffmpeg/--ffprobe 指定绝对路径 '
+                               '(F50 推荐 /usr/bin/ffmpeg)')
+        print('OpenWrt %s，使用 %s 安装依赖' % (version or '版本未知', kind), flush=True)
+        tried = []
+        try:
+            run([manager, 'update'], timeout=180)
+        except InstallError as exc:
+            print('软件源刷新失败（继续尝试安装）：%s' % exc, flush=True)
+        for package in ('ffmpeg', 'libx264', 'libffmpeg-full'):
+            command = [manager, 'add', package] if kind == 'apk' else [manager, 'install', package]
+            print('正在安装 FFmpeg 依赖：%s' % ' '.join(command), flush=True)
             try:
                 run(command, timeout=600)
             except InstallError as exc:
-                tried.append(str(exc))
+                tried.append('%s: %s' % (package, str(exc)[:100]))
                 continue
-            if self.resolve_binary('ffmpeg') and self.resolve_binary('ffprobe'):
-                return
-            tried.append('%s 安装后仍找不到 ffmpeg/ffprobe' % command[0])
-        raise InstallError('自动安装 FFmpeg 失败：%s；请手动执行 `apk add ffmpeg`，'
-                           '或用 --ffmpeg /usr/bin/ffmpeg 指定' % '；'.join(tried))
+            if not (self.resolve_binary('ffmpeg') and self.resolve_binary('ffprobe')):
+                tried.append('%s 安装后仍找不到 ffmpeg/ffprobe' % package)
+        if self.resolve_binary('ffmpeg') and self.resolve_binary('ffprobe'):
+            return
+        raise InstallError('自动安装 FFmpeg 失败：%s；请手动执行 `%s`，'
+                           '或用 --ffmpeg /usr/bin/ffmpeg 指定'
+                           % ('；'.join(tried), self.pkg_hint(('ffmpeg',))))
 
     def ffmpeg_caps(self, binary):
         """真实能力探测: 编码器列表很长, 必须整段搜索, 不能截断。"""
@@ -400,18 +477,30 @@ class Installer:
         enc, dec = dump('-encoders'), dump('-decoders')
         filters, muxers = dump('-filters'), dump('-muxers')
         row = r'^\s*\S{6}\s+%s\s'
-        return {'x264': bool(re.search(row % 'libx264', enc, re.M)),
+        caps = {'x264': bool(re.search(row % 'libx264', enc, re.M)),
                 'v4l2': bool(re.search(row % 'h264_v4l2m2m', enc, re.M)),
                 'hevc': bool(re.search(row % 'hevc', dec, re.M)),
                 'scale': bool(re.search(r'^\s*\S+\s+scale\s', filters, re.M)),
                 'subtitles': bool(re.search(r'^\s*\S+\s+subtitles\s', filters, re.M)),
                 'mp4': bool(re.search(r'^\s*\S+\s+mp4\s', muxers, re.M))}
+        # 多路拼接与字幕依赖这些滤镜, 缺一个就算构建不完整
+        for name in ('scale', 'pad', 'fps', 'xstack', 'setsar', 'subtitles'):
+            caps[name] = bool(re.search(r'^\s*\S+\s+' + name + r'\s', filters, re.M))
+        return caps
 
     def ffmpeg_ok(self, binary):
-        """完整构建的标准: 能解 HEVC(Tesla 原片)、能编 H.264、有 scale 滤镜和 mp4 封装。"""
+        """完整构建的标准: 能解 HEVC(Tesla 原片)、能编 H.264、有 mp4 封装与全部必需滤镜。"""
         caps = self.ffmpeg_caps(binary)
-        return (caps['hevc'] and (caps['x264'] or caps['v4l2'])
-                and caps['scale'] and caps['mp4']), caps
+        return (caps['hevc'] and (caps['x264'] or caps['v4l2']) and caps['mp4']
+                and all(caps[name] for name in ('scale', 'pad', 'fps', 'xstack', 'setsar', 'subtitles'))), caps
+
+    def deps_missing(self):
+        """安装前自检: 缺 ffmpeg/ffprobe、HEVC 解码、H.264 编码或必需滤镜时返回 True。"""
+        ffmpeg, ffprobe = self.resolve_binary('ffmpeg'), self.resolve_binary('ffprobe')
+        if not (ffmpeg and ffprobe):
+            return True
+        ok, _caps = self.ffmpeg_ok(ffmpeg)
+        return not ok
 
     def install_static_ffmpeg(self):
         """固件的 ffmpeg 是精简构建时, 下载官方 arm64(aarch64) 静态包
@@ -468,8 +557,8 @@ class Installer:
         for name in ('ffmpeg', 'ffprobe'):
             binary = self.resolve_binary(name)
             if not binary:
-                raise InstallError('缺少 %s：请执行 `apk add ffmpeg`，或用 --%s /usr/bin/%s 指定'
-                                   % (name, name, name))
+                raise InstallError('缺少 %s：请执行 `%s`，或用 --%s /usr/bin/%s 指定'
+                                   % (name, self.pkg_hint(('ffmpeg',)), name, name))
             run([binary, '-version'], timeout=30)
             resolved[name] = binary
         ok, caps = self.ffmpeg_ok(resolved['ffmpeg'])
@@ -489,8 +578,9 @@ class Installer:
         filters = run([resolved['ffmpeg'], '-hide_banner', '-filters'], timeout=60)
         for required in ('scale', 'pad', 'fps', 'xstack', 'setsar', 'subtitles'):
             if not re.search(r'\s' + required + r'\s', filters):
-                raise InstallError('FFmpeg 缺少滤镜：%s。请用 `apk add ffmpeg` 安装完整构建，'
-                                   '或用 --ffmpeg /usr/bin/ffmpeg 指定' % required)
+                raise InstallError('FFmpeg 缺少滤镜：%s。请用 `%s` 安装完整构建，'
+                                   '或用 --ffmpeg /usr/bin/ffmpeg 指定'
+                                   % (required, self.pkg_hint(('ffmpeg',))))
         enc = self.ffmpeg_caps(resolved['ffmpeg'])
         encoder = 'libx264' if enc['x264'] else 'h264_v4l2m2m'
         run([resolved['ffmpeg'], '-v', 'error', '-f', 'lavfi', '-i',
@@ -532,7 +622,9 @@ class Installer:
             raise InstallError('需要 OpenWrt procd 与 cron；本安装器不安装系统固件')
         runtime_files = self.runtime_files()
         resolved = None
-        repair = self.args.install_deps and self.args.apply
+        # 正式安装/升级时自动补齐运行库, 不再要求用户手动加 --install-deps;
+        # 预检(check)模式保持只读, 只在报告里提示缺少什么。
+        repair = self.args.apply and (self.args.install_deps or self.deps_missing())
         if self.args.install_deps and not self.args.apply:
             print('提示：--install-deps 只在 --apply 时真正安装；检查模式不会改动系统', flush=True)
         if repair:
@@ -559,7 +651,7 @@ class Installer:
         run([self.python() if self.runtime else '/usr/bin/python3', '-c',
              'import sys,ssl,fcntl,http.server,zipfile,threading; assert sys.version_info >= (3,11)'])
         if self.runtime:
-            run([self.python(), '-B', str(self.source / 'scripts/check-runtime.py')], timeout=90)
+            self.runtime_selftest()
         for dest, src in self.payload().items():
             if not src.is_file():
                 raise InstallError('安装包缺少：' + str(src))
@@ -626,17 +718,26 @@ class Installer:
         for name in ('ffmpeg', 'ffprobe'):
             binary = (resolved or {}).get(name) or self.resolve_binary(name)
             if not binary:
-                raise InstallError('缺少 %s；请执行 `apk add ffmpeg`，或用 --%s /usr/bin/%s 指定，'
-                                   '或加 --install-deps 让安装器尝试安装' % (name, name, name))
+                raise InstallError('缺少 %s；请执行 `%s`，或用 --%s /usr/bin/%s 指定 '
+                                   '（--apply 安装时会自动尝试安装）'
+                                   % (name, self.pkg_hint(('ffmpeg',)), name, name))
             run([binary, '-version'])
             self.device[name] = binary
         filters = run([self.device['ffmpeg'], '-hide_banner', '-filters'])
         for required in ('scale', 'pad', 'fps', 'xstack', 'setsar', 'subtitles'):
             if not re.search(r'\s' + required + r'\s', filters):
                 raise InstallError('FFmpeg 缺少滤镜：' + required)
+        caps = self.ffmpeg_caps(self.device['ffmpeg'])
+        if not (caps['x264'] or caps['v4l2']):
+            raise InstallError('FFmpeg 缺少 H.264 编码器（libx264 或 h264_v4l2m2m）；'
+                               '请执行 `%s`（--apply 安装时会自动补装完整构建）'
+                               % self.pkg_hint(('ffmpeg', 'libx264')))
+        encoder = 'libx264' if caps['x264'] else 'h264_v4l2m2m'
+        print('FFmpeg H.264 编码器：%s；HEVC 解码：%s'
+              % (encoder, '可用' if caps['hevc'] else '缺失（缩略图/转码会失败，--apply 时会自动补装）'),
+              flush=True)
         run([self.device['ffmpeg'], '-v', 'error', '-f', 'lavfi', '-i',
-             'color=size=64x64:rate=1', '-frames:v', '1', '-c:v',
-             'libx264' if self.ffmpeg_caps(self.device['ffmpeg'])['x264'] else 'h264_v4l2m2m',
+             'color=size=64x64:rate=1', '-frames:v', '1', '-c:v', encoder,
              '-f', 'null', '-'])
         if not self.upgrade:
             with socket.socket() as probe:
