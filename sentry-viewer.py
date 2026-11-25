@@ -499,7 +499,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.029"
+APP_VERSION = "2026.11.25.030"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -509,7 +509,6 @@ OTA_STATE = os.environ.get("TSF_OTA_STATE", "/opt/tesla-sentry/ota-state.json")
 OTA_TARGET = os.path.join(os.path.dirname(OTA_STATE) or ".", "ota-target.json")
 OTA_SRC_PREF = os.path.join(os.path.dirname(OTA_STATE) or ".", "ota-src.json")  # 记住上次最快的源
 _OTA_CACHE = {"t": 0.0, "data": None, "key": ""}
-_OTA_BR = {"t": 0.0, "repo": "", "data": []}
 _OTA_TGT = {}
 
 
@@ -530,7 +529,7 @@ def ota_target():
     return _OTA_TGT
 
 
-def ota_set_target(repo, branch):
+def ota_set_target(repo, branch=""):
     """切换更新仓库与分支; 保存后清空清单缓存 (仓库支持 owner/repo 或 GitHub 地址)"""
     repo = (repo or "").strip().strip("/")
     repo = re.sub(r"^https?://", "", repo, flags=re.I)
@@ -538,7 +537,7 @@ def ota_set_target(repo, branch):
     repo = repo.rstrip("/")
     if repo.lower().endswith(".git"):
         repo = repo[:-4]
-    branch = (branch or "").strip()
+    branch = (branch or "").strip() or ota_target().get("branch") or OTA_DEFAULT_BRANCH
     if not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
         return False, "仓库地址格式应为 owner/repo, 也可直接粘贴 GitHub 仓库链接"
     if not branch or not re.match(r"^[A-Za-z0-9_.\-/]+$", branch):
@@ -847,27 +846,6 @@ def ota_latest(force=False):
     j["_base"] = base
     _OTA_CACHE.update({"t": now, "data": j, "key": key})
     return j
-
-
-def ota_branches(repo=""):
-    """列 GitHub 仓库分支 (供更新页选择); 失败返回空列表"""
-    r = (repo or ota_target()["repo"]).strip()
-    if not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", r):
-        return []
-    now = time.time()
-    if _OTA_BR["data"] and _OTA_BR["repo"] == r and now - _OTA_BR["t"] < 600:
-        return _OTA_BR["data"]
-    for u in ("https://api.github.com/repos/%s/branches?per_page=100" % r,
-              "https://ghfast.top/https://api.github.com/repos/%s/branches?per_page=100" % r):
-        try:
-            j = json.loads(_http_get(u, timeout=6, limit=1 << 20).decode("utf-8", "replace"))
-            out = [str(b.get("name")) for b in j if isinstance(b, dict) and b.get("name")]
-            if out:
-                _OTA_BR.update({"t": now, "repo": r, "data": out})
-                return out
-        except Exception:
-            continue
-    return []
 
 
 def ota_check(force=False):
@@ -3098,7 +3076,6 @@ body.settings-open { overflow:hidden; }
   #tab-update .updrow { align-items:center; row-gap:8px; }
   #tab-update .updrow #upd-repo { flex:1 1 100% !important; }
   #tab-update .updrow #upd-custom { flex:1 1 100% !important; }
-  #tab-update .updrow #upd-branch { flex:1 1 100% !important; }
   /* 更新卡片: 检查更新与立即升级同一行各占一半, 自动更新独占一行 */
   #tab-update .updvercard .updbtns { row-gap:8px; }
   #tab-update .updbtns #upd-check { flex:1 1 42%; min-width:0; }
@@ -3702,7 +3679,6 @@ body.settings-open { overflow:hidden; }
       <span class="updk">更新源</span>
       <select class="ninput" id="upd-repo" style="flex:1 1 180px;min-width:0" onchange="otaRepoUI()"></select>
       <input class="ninput" id="upd-custom" placeholder="自定义仓库 owner/repo 或 https://github.com/owner/repo" style="display:none;flex:1 1 220px;min-width:0" spellcheck="false" autocapitalize="none" onchange="otaSaveTarget()" onkeydown="if(event.key==='Enter'){event.preventDefault();otaSaveTarget();}">
-      <select class="ninput" id="upd-branch" style="flex:0 0 110px;min-width:0" onchange="otaSaveTarget()"></select>
     </div>
     <div class="updvercard">
       <div class="updverline">
@@ -8075,7 +8051,6 @@ async function otaLoadTarget() {
     r.value = j.repo || r.value;
     document.getElementById('upd-custom').value = '';
     document.getElementById('upd-custom').style.display = 'none';
-    otaFillBranches(j.branches, j.branch);
   } catch (e) {}
 }
 function otaRepoUI() {
@@ -8086,7 +8061,7 @@ function otaRepoUI() {
   if (custom) { inp.focus(); return; }
   inp.value = '';
   // 选中内置源后自动切换并立即检查更新, 不再需要「切换」按钮
-  otaReloadBranches().then(otaSaveTarget);
+  otaSaveTarget();
 }
 function otaRepoValue() {
   const sel = document.getElementById('upd-repo');
@@ -8094,30 +8069,14 @@ function otaRepoValue() {
     ? document.getElementById('upd-custom').value
     : sel.value).trim();
 }
-function otaFillBranches(list, cur) {
-  const b = document.getElementById('upd-branch');
-  let bs = (list && list.length) ? list.slice() : ['main', 'master'];
-  if (cur && bs.indexOf(cur) < 0) bs.unshift(cur);
-  b.innerHTML = bs.map(x => '<option value="' + esc(x) + '">' + esc(x) + '</option>').join('');
-  b.value = cur || bs[0];
-}
-async function otaReloadBranches() {
-  const repo = document.getElementById('upd-repo').value;
-  if (repo === '__custom__') return;
-  try {
-    const j = await (await fetch('/api/ota/target?repo=' + encodeURIComponent(repo), { cache: 'no-store' })).json();
-    otaFillBranches(j.branches, document.getElementById('upd-branch').value);
-  } catch (e) {}
-}
 async function otaSaveTarget() {
   const repo = otaRepoValue();
-  const branch = document.getElementById('upd-branch').value;
   const msg = document.getElementById('upd-msg');
-  if (!repo || !branch) { toast('请选择或填写仓库和分支'); return; }
+  if (!repo) { toast('请选择或填写仓库'); return; }
   msg.textContent = t('切换更新源…');
   try {
     const j = await (await fetch('/api/ota/target', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo, branch }) })).json();
+      body: JSON.stringify({ repo }) })).json();
     msg.textContent = (j.ok ? '✅ ' : '❌ ') + t(j.msg || '');
     if (j.ok) { await setAutoUpdate(false); await otaCheck(true); }
   } catch (e) { msg.textContent = t('切换失败') + ': ' + e; }
@@ -17023,12 +16982,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "stage": p["stage"], "pct": p["pct"],
                         "got": p["got"], "total": p["total"]})
         elif path == "/api/ota/target":
-            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            repo = (q.get("repo") or [""])[0]
             t = ota_target()
             self._json({"ok": True, "repo": t["repo"], "branch": t["branch"],
-                        "repos": OTA_REPOS, "branches": ota_branches(repo),
-                        "version": APP_VERSION})
+                        "repos": OTA_REPOS, "version": APP_VERSION})
         elif path in ("/api/storage", "/api/storage/job"):
             try:
                 self._json(dict(ok=True, job=storage_job()) if path.endswith('/job') else storage_status())
