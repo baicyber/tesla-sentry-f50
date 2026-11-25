@@ -146,12 +146,13 @@ def replace_retry(source, destination, attempts=10, delay=0.5):
     raise last
 
 
-def resize(image, size_gib, gadget, udc, mkexfat, progress):
+def resize(image, size_gib, gadget, udc, mkexfat, progress, action='调整容量'):
     """Replace USB contents with an empty disk, keeping the old inode for rollback.
 
     Interrupted operations leave named recovery files rather than overwriting them.
     The caller must confirm clearing contents and hold both USB locks.
     No video files are copied and archives outside the image are untouched.
+    `action` only changes user-facing wording (调整容量 / 格式化 U 盘).
     """
     image, gadget = Path(image), Path(gadget)
     temporary = image.with_name(image.name + '.resize-new')
@@ -160,11 +161,11 @@ def resize(image, size_gib, gadget, udc, mkexfat, progress):
     binding = gadget / 'UDC'
     lun = gadget / 'functions/mass_storage.0/lun.0/file'
     if pending_recovery(image):
-        raise ResizeError('发现上次调整留下的镜像，请先检查恢复文件')
+        raise ResizeError('发现上次操作留下的镜像，请先检查恢复文件')
     if image.is_symlink() or not image.is_file() or not Path(mkexfat).is_file():
         raise ResizeError('镜像或创建工具不可用')
     if read_attr(binding) != udc or read_attr(lun) != str(image):
-        raise ResizeError('USB 导出状态不匹配，未调整容量')
+        raise ResizeError('USB 导出状态不匹配，未执行%s' % action)
     disconnected = False
     created = False
     published = False
@@ -179,7 +180,7 @@ def resize(image, size_gib, gadget, udc, mkexfat, progress):
             stream.flush()
             os.fsync(stream.fileno())
         sync_directory(image.parent)
-        progress('准备调整容量', 0)
+        progress('准备%s' % action, 0)
         detach(binding, lun)
         disconnected = True
         # Keep other USB functions connected while the replacement is created.
@@ -212,7 +213,7 @@ def resize(image, size_gib, gadget, udc, mkexfat, progress):
         backup.unlink()
         sync_directory(image.parent)
         success = True
-        progress('容量调整完成', 100)
+        progress('%s完成' % action, 100)
     except Exception as exc:            # 先记住真实原因, 清理完再一起报, 不要被清理错误盖掉
         failure = exc
     finally:
@@ -245,8 +246,8 @@ def resize(image, size_gib, gadget, udc, mkexfat, progress):
     if failure is None and cleanup_error is None:
         return
     if cleanup_error is not None:
-        detail = '调整失败：%s；恢复也失败：%s' % (failure or '未完成', cleanup_error)
+        detail = '%s失败：%s；恢复也失败：%s' % (action, failure or '未完成', cleanup_error)
         raise ResizeError('镜像已保留，请检查恢复文件：%s' % detail, needs_recovery=True) from cleanup_error
     if isinstance(failure, ResizeError):
         raise failure
-    raise ResizeError('调整失败：%s' % failure) from failure
+    raise ResizeError('%s失败：%s' % (action, failure)) from failure

@@ -224,8 +224,6 @@ CONF_DOCS = {
     "TSF_RECENT_KEEP_MIN": "空间兜底清理时最近必留分钟",
     "TSF_RECENT_MAX_GB": "实时滚动记录体积上限 G, 0=不限",
     "TSF_BOX_KEEP_DAYS": "盒子侧哨兵/手动保存按天保留, 0=不限",
-    "TSF_USB_CLEAN_PCT": "车机U盘用量达到该百分比后自动清理旧事件, 0=关闭",
-    "TSF_USB_CLEAN_DAYS": "车机U盘自动清理时最近必留天数, 0=只按容量清",
     "TSF_DISK_GUARD_INTERVAL": "磁盘空间检查间隔秒数",
     "TSF_FREE_MIN_MB": "存储卡空闲低于此值暂停同步 (MiB)",
     "TSF_FREE_TARGET_MB": "空间不足时清理到的目标空闲 (MiB)",
@@ -242,7 +240,7 @@ CONF_DOCS = {
     "PATH": "服务进程的命令搜索路径",
 }
 # 已废弃参数: 升级时直接从 conf 移除
-LEGACY_CONF_KEYS = {"TSF_BOX_MAX_GB"}
+LEGACY_CONF_KEYS = {"TSF_BOX_MAX_GB", "TSF_USB_CLEAN_PCT", "TSF_USB_CLEAN_DAYS"}
 # 已废弃取值: TSF_CACHE=/opt/mu300 (旧版自动选择的数据卡缓存路径)
 LEGACY_CONF_VALUES = {("TSF_CACHE", "/opt/mu300"), ("TSF_CACHE", "/opt/mu300/"),
                       ("TSF_CACHE", "/opt/mu300/cache")}
@@ -499,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.030"
+APP_VERSION = "2026.11.25.031"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1591,8 +1589,6 @@ RETENTION_FIELDS = {
     "recent_keep_min": (0, 1440),   # 空间兜底清理时最近必留(分钟)
     "recent_max_gb": (0, 4096),     # 「实时滚动记录」体积上限(G), 0=不限; 归档不限量时仍独立生效
     "box_keep_days": (0, 3650),     # 哨兵/手动保存按天数保留, 0=不按天数清理
-    "usb_clean_pct": (0, 99),       # 车机U盘用量达到该百分比自动清理旧事件, 0=关闭
-    "usb_keep_days": (0, 365),      # 车机U盘自动清理时最近必留天数, 0=只按容量清
 }
 # 预转码缓存: 每个模块只预转码最新的 N 个事件, 0=关闭该模块预转码
 PREWARM_FIELDS = {
@@ -1615,8 +1611,6 @@ def load_settings():
          "recent_keep_min": _retention_default("TSF_RECENT_KEEP_MIN", 60),
          "recent_max_gb": _retention_default("TSF_RECENT_MAX_GB", 12),
          "box_keep_days": _retention_default("TSF_BOX_KEEP_DAYS", 14),
-         "usb_clean_pct": _retention_default("TSF_USB_CLEAN_PCT", 90),
-         "usb_keep_days": _retention_default("TSF_USB_CLEAN_DAYS", 7),
          "prewarm_sentry": _retention_default("TSF_PREWARM_SENTRY", 2),
          "prewarm_saved": _retention_default("TSF_PREWARM_SAVED", 2)}
     try:
@@ -3437,12 +3431,10 @@ body.settings-open { overflow:hidden; }
     <div class="storage-columns storage-settings-columns">
     <section class="storage-quota" id="storage-retention">
       <h3>保留时间设置</h3>
-      <div class="hint">填 0 表示不限制：实时滚动记录按滚动窗口保留，哨兵 / 手动保存按天数保留；车机 U 盘自动清理填 0 即关闭。设置立即作用于后台清理，并同步写入 /etc/tesla-sentry.conf，重启后仍然生效。</div>
+      <div class="hint">填 0 表示不限制：实时滚动记录按滚动窗口保留，哨兵 / 手动保存按天数保留。车机 U 盘不再自动清理，由车机循环覆盖旧片段。设置立即作用于后台清理，并同步写入 /etc/tesla-sentry.conf，重启后仍然生效。</div>
       <div class="storage-row note"><label for="retention-roll">实时滚动记录保留</label><input class="ninput" id="retention-roll" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div>
       <div class="storage-nested"><div class="storage-row note"><label for="retention-keep">空间紧张时至少保留</label><input class="ninput" id="retention-keep" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div></div>
       <div class="storage-row note"><label for="retention-days">哨兵 / 手动保存保留</label><input class="ninput" id="retention-days" type="number" min="0" max="3650" step="1" inputmode="numeric"><span class="retention-unit">天</span></div>
-      <div class="storage-row note"><label for="retention-usbpct">车机 U 盘自动清理</label><input class="ninput" id="retention-usbpct" type="number" min="0" max="99" step="1" inputmode="numeric"><span class="retention-unit">%</span><button class="storage-help" type="button" aria-label="车机 U 盘自动清理说明" aria-expanded="false" aria-controls="storage-tip" data-help="usbclean">?</button></div>
-      <div class="storage-nested"><div class="storage-row note"><label for="retention-usbdays">清理时保留最近</label><input class="ninput" id="retention-usbdays" type="number" min="0" max="365" step="1" inputmode="numeric"><span class="retention-unit">天</span></div></div>
       <div class="updbtns"><button class="mini primary" id="retention-save" onclick="storageSaveRetention()" disabled>保存时间限制</button></div>
       <div class="hint" id="retention-msg" role="status" aria-live="polite"></div>
     </section>
@@ -3459,7 +3451,10 @@ body.settings-open { overflow:hidden; }
       <div class="hint" id="paths-msg" role="status" aria-live="polite"></div>
     </details>
     <section class="storage-danger"><h3>调整车机 U 盘容量</h3><div class="storage-row cap"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
-    <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。调整会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div><button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button><div id="storage-resize-status"></div></section>
+    <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。调整会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div>
+    <div class="hint">格式化：用空白 exFAT 按当前容量重建车机 U 盘，清空镜像内全部内容（归档区保留）。车机上格式化 U 盘后网页一直提示「镜像未就绪」，或 U 盘内容损坏、调整容量失败时，用它一键恢复。</div>
+    <button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button>
+    <button class="mini" id="storage-format" onclick="storageFormat()" disabled>格式化 U 盘</button><div id="storage-resize-status"></div></section>
     <section class="storage-danger"><h3>重启服务</h3>
     <div class="hint">修改存储路径、容量分配后，点此重启服务让设置生效。重启期间网页会短暂断开（约 5 秒），刷新后自动恢复。</div>
     <button class="mini" id="storage-restart" onclick="storageRestartService()">重启服务</button><div id="storage-restart-status"></div></section>
@@ -7323,8 +7318,7 @@ const STORAGE_HELP = {
   recentmax: '实时滚动记录单独的容量上限，已包含在归档总容量内。6 路 1 小时约 12 G；填 0 表示不限制，只按保留分钟数滚动清理。',
   drive: '驾驶记录的容量上限，已包含在归档总容量内。超限时从最旧行程开始清理，保留最新片段。',
   reserve: '空间不足时，希望清理后恢复的空闲容量，不创建独立分区。增大此值可能使旧归档更早被清理。',
-  minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间。这条保护线不另占容量，不能高于安全预留空间。',
-  usbclean: '车机 U 盘用量达到该百分比后，后台会在车机空闲（约 10 分钟没写入）时自动删除镜像里最旧的事件目录，删到低于「阈值 - 10%」为止，删完立即恢复车机读写。清理只针对 TeslaCam 下的哨兵 / 手动保存 / 实时滚动记录，根目录的铃声、涂装等文件不受影响，归档区副本也不会被删除。填 0 表示关闭。'
+  minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间。这条保护线不另占容量，不能高于安全预留空间。'
 };
 let storageData = null, storageTimer = null, storageHelpButton = null, storageRequest = 0;
 function storageHelpClose() {
@@ -7351,7 +7345,7 @@ document.addEventListener('click', event => {
 window.addEventListener('resize', storageHelpClose);
 document.querySelector('.settings-content').addEventListener('scroll', storageHelpClose);
 function storageDisable(disabled) {
-  document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize, #retention-save, #prewarm-save, #paths-save').forEach(element => element.disabled = disabled);
+  document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize, #storage-format, #retention-save, #prewarm-save, #paths-save').forEach(element => element.disabled = disabled);
 }
 function storageMessage(message, resize = false) {
   const output = document.getElementById('storage-msg');
@@ -7515,7 +7509,7 @@ async function storageLoad() {
     usbInput.value = data.usb_gib;
     if (data.prewarm) for (const [id, key] of [['prewarm-sentry','prewarm_sentry'],['prewarm-saved','prewarm_saved']]) document.getElementById(id).value = data.prewarm[key];
     for (const [id, key] of [['archive','archive_gib'],['drive','drive_gib'],['reserve','free_target_gib'],['minimum','free_min_gib']]) document.getElementById('storage-' + id).value = data.values[key];
-    if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days'],['usbpct','usb_clean_pct'],['usbdays','usb_keep_days']]) document.getElementById('retention-' + id).value = data.retention[key];
+    if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days']]) document.getElementById('retention-' + id).value = data.retention[key];
     if (data.paths) {
       document.getElementById('storage-path-root').value = data.paths.video_root;
       document.getElementById('storage-path-img').value = data.paths.img;
@@ -7570,7 +7564,7 @@ async function storageSave() {
   finally { storageDisable(false); }
 }
 async function storageSaveRetention() {
-  const ids = [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days'],['usbpct','usb_clean_pct'],['usbdays','usb_keep_days']];
+  const ids = [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days']];
   const body = {};
   for (const [id, key] of ids) {
     const input = document.getElementById('retention-' + id);
@@ -7795,6 +7789,16 @@ async function storageResize() {
   storageMessage('正在调整容量…', true);
   try {
     const result = await storageFetch('/api/storage/resize', {usb_gib:Number(document.getElementById('storage-usb').value), revision:storageData.revision, clear_confirmed:true});
+    storageShowJob(result.job);
+  } catch (error) { storageMessage(error.message, true); storageDisable(false); }
+}
+async function storageFormat() {
+  if (!storageData) return;
+  if (!confirm('格式化将用空白 exFAT 按当前容量重建车机 U 盘，清空其中的全部录像和其他文件，无法撤销。归档区保留。\n格式化期间车机暂停录像，请保持供电。确认格式化？')) return;
+  storageDisable(true);
+  storageMessage('正在格式化 U 盘…', true);
+  try {
+    const result = await storageFetch('/api/storage/format', {revision:storageData.revision, clear_confirmed:true});
     storageShowJob(result.job);
   } catch (error) { storageMessage(error.message, true); storageDisable(false); }
 }
@@ -9750,30 +9754,105 @@ def _gadget_rebind(bind):
         return False
 
 
+def _exfat_vbr_ok(fd, off):
+    """off 处是否是一个结构合理的 exFAT 引导扇区 (签名 + 扇区/簇大小指数)。"""
+    try:
+        vbr = os.pread(fd, 512, off)
+    except OSError:
+        return False
+    if len(vbr) < 512 or vbr[3:11] != b"EXFAT   ":
+        return False
+    return 9 <= vbr[108] <= 12 and vbr[109] <= 25
+
+
+def _img_vol_offset(fd=None):
+    """镜像里 exFAT 卷的起始字节偏移, 找不到返回 None。
+
+    车机格式化 U 盘时会写入 MBR/GPT 分区表 (卷从分区起始扇区开始), 这时直接把
+    整个 loop 设备 mount 会报 Invalid argument, 必须挂到分区节点或按偏移挂载。
+    车机不同固件也会出现非标准布局, 所以分区表解析失败时再按签名兜底扫描,
+    避免格式化完成后一直停在「镜像未就绪（车机格式化中）」。
+    """
+    close = False
+    if fd is None:
+        try:
+            fd = os.open(IMG, os.O_RDONLY)
+            close = True
+        except OSError:
+            return None
+    try:
+        head = os.pread(fd, 512, 0)
+        if len(head) < 512:
+            return None
+        if _exfat_vbr_ok(fd, 0):
+            return 0
+        starts, gpt = [], False
+        if head[510:512] == b"\x55\xaa":
+            for i in range(4):
+                e = head[446 + i * 16: 462 + i * 16]
+                if not e[4]:
+                    continue
+                if e[4] == 0xEE:
+                    gpt = True
+                    continue
+                starts.append(struct.unpack_from("<I", e, 8)[0] * 512)
+        if gpt:
+            hdr = os.pread(fd, 92, 512)
+            if len(hdr) >= 92 and hdr[:8] == b"EFI PART":
+                tbl = struct.unpack_from("<Q", hdr, 72)[0]
+                count = struct.unpack_from("<I", hdr, 80)[0]
+                esz = struct.unpack_from("<I", hdr, 84)[0] or 128
+                for i in range(min(count or 4, 128)):
+                    p = os.pread(fd, 40, tbl * 512 + i * esz)
+                    if len(p) < 40 or not any(p[:16]):
+                        continue
+                    starts.append(struct.unpack_from("<Q", p, 32)[0] * 512)
+        for off in starts:
+            if off and _exfat_vbr_ok(fd, off):
+                return off
+        # 兜底 1: 前 1 MiB 内按扇区扫 exFAT 签名 (分区表损坏或非标准偏移)
+        scan = os.pread(fd, 1 << 20, 0)
+        pos = scan.find(b"EXFAT   ")
+        while pos >= 0:
+            off = pos - 3
+            if off > 0 and off % 512 == 0 and _exfat_vbr_ok(fd, off):
+                return off
+            pos = scan.find(b"EXFAT   ", pos + 1)
+        # 兜底 2: 分区起点在常见 MiB 对齐位置
+        for mib in (1, 2, 4, 8, 16, 32):
+            off = mib << 20
+            if _exfat_vbr_ok(fd, off):
+                return off
+        return None
+    except OSError:
+        return None
+    finally:
+        if close:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def usb_img_ready():
-    """镜像引导扇区是否已是合法 exFAT 卷。
+    """镜像里是否有合法 exFAT 卷 (整盘或分区)。
 
     车机格式化 U 盘期间镜像会被清空或重建, 此时 losetup/mount 都会失败;
     提前判掉可以给出「正在格式化」的提示, 而不是把 Invalid argument 丢给用户。
     """
-    try:
-        with open(IMG, "rb") as f:
-            vbr = f.read(512)
-        return len(vbr) >= 512 and vbr[3:11] == b"EXFAT   "
-    except OSError:
-        return False
+    return _img_vol_offset() is not None
 
 
 def usb_attach():
     """临时断开车机读取, 挂载镜像到 MNT (读写). 返回 (ok, msg)"""
     global usb_attached, usb_timer
     if storage_busy():
-        return False, "正在调整 U 盘容量"
+        return False, "正在调整容量或格式化 U 盘"
     if not usb_img_ready():
         return False, "镜像未就绪: 车机可能正在格式化 U 盘, 请稍后再试"
     with usb_lock:
         if storage_busy():
-            return False, "正在调整 U 盘容量"
+            return False, "正在调整容量或格式化 U 盘"
         if usb_attached and os.path.ismount(MNT):
             return True, "already"
         # 先拿跨进程锁再动 UDC: 归档/自愈正在操作镜像时直接让开, 不抢 loop 与挂载点。
@@ -9798,18 +9877,55 @@ def usb_attach():
                 subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
         except Exception:
             pass
-        r = subprocess.run([LOSETUP, LOOPDEV, IMG], capture_output=True, text=True)
+        r = subprocess.run([LOSETUP, "-P", LOOPDEV, IMG], capture_output=True, text=True)
+        if r.returncode != 0:
+            r = subprocess.run([LOSETUP, LOOPDEV, IMG], capture_output=True, text=True)
         if r.returncode != 0:
             _gadget_rebind(True)
             _release_usb_flock()
             return False, "losetup 失败: " + r.stderr.strip()[-120:]
-        r = subprocess.run(["mount", "-t", "exfat", LOOPDEV, MNT], capture_output=True, text=True)
-        if r.returncode != 0:
+        off = _img_vol_offset()
+
+        def mount_dev(dev, extra=None):
+            args = ["mount", "-t", "exfat"]
+            if extra:
+                args += ["-o", extra]
+            res = subprocess.run(args + [dev, MNT], capture_output=True, text=True)
+            return res.returncode == 0, (res.stderr or "").strip()[-120:]
+
+        mounted, err = False, ""
+        # 1) 有分区表时卷在分区里: 挂载分区节点 (loop3p1...), 整盘直接挂会 Invalid argument
+        if off:
+            devs = []
+            for _ in range(20):
+                devs = sorted(glob.glob(LOOPDEV + "p*"))
+                if devs:
+                    break
+                time.sleep(0.1)
+            for dev in devs:
+                mounted, err = mount_dev(dev)
+                if mounted:
+                    break
+        else:
+            mounted, err = mount_dev(LOOPDEV)
+        # 2) 内核没生成分区节点时, 让 loop 从卷偏移开始, 不再依赖 p1 节点
+        if not mounted and off:
+            subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
+            r = subprocess.run([LOSETUP, "-o", str(off), LOOPDEV, IMG], capture_output=True, text=True)
+            if r.returncode == 0:
+                mounted, err = mount_dev(LOOPDEV)
+        # 3) 个别 busybox 不支持 losetup -o: 交给 mount 自己按 offset 挂镜像文件
+        if not mounted and off:
+            subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
+            mounted, err = mount_dev(IMG, "offset=%d" % off)
+        if not mounted:
             subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
             _gadget_rebind(True)
             _release_usb_flock()
-            msg = r.stderr.strip()[-120:]
-            if "Invalid argument" in msg:
+            msg = err
+            if off and "Invalid argument" in msg:
+                msg += "（镜像分区暂时读不出来，可稍后重试；持续失败请用「格式化 U 盘」重建）"
+            elif "Invalid argument" in msg:
                 msg += "（镜像不是有效的 exFAT 卷，车机可能正在格式化，请稍后再试）"
             return False, "挂载失败: " + msg
         usb_attached = True
@@ -9826,10 +9942,10 @@ def usb_detach():
     """卸载镜像并恢复车机导出. 返回 (ok, msg)"""
     global usb_attached, usb_timer
     if storage_busy():
-        return False, "正在调整 U 盘容量"
+        return False, "正在调整容量或格式化 U 盘"
     with usb_lock:
         if storage_busy():
-            return False, "正在调整 U 盘容量"
+            return False, "正在调整容量或格式化 U 盘"
         if usb_timer:
             usb_timer.cancel()
             usb_timer = None
@@ -9863,152 +9979,6 @@ def usb_img_age():
         return time.time() - os.path.getmtime(IMG)
     except OSError:
         return -1
-
-
-# ---------- 车机U盘容量定时清理 ----------
-# 车机U盘(镜像)写满后车机会停止录像, 网页端也只能看到满盘。这里在车机空闲窗口内
-# 按设定删除镜像里最旧的事件目录, 逻辑与归档区一致: 从最旧开始删, 保留最近 N 天,
-# 删到占用低于「阈值 - 10%」为止。
-# 安全前提与写锁车音一致: 车机 N 秒没写 + 跨进程排他锁 + 短暂停止 USB 导出;
-# 只删 TeslaCam 下按时间命名的事件目录, 根目录文件(Boombox/Wraps/锁车音)一律不碰。
-USB_CLEAN_MNT = os.environ.get("TSF_USB_CLEAN_MNT", MNT + "-clean")
-USB_CLEAN_IDLE_S = int(os.environ.get("TSF_IDLE", "600"))
-USB_CLEAN_INTERVAL = max(60, int(os.environ.get("TSF_USB_CLEAN_INTERVAL", "600")))
-USB_CLEAN_LOG = os.environ.get(
-    "TSF_USB_CLEAN_LOG",
-    os.path.join(os.path.dirname(SETTINGS_FILE) or "/opt/tesla-sentry", "usb-clean.log"))
-USB_CLEAN_CATS = ("SentryClips", "SavedClips", "RecentClips")
-_usb_clean_ts = [0.0]
-
-
-def _usb_clean_log(msg):
-    try:
-        with open(USB_CLEAN_LOG, "a", encoding="utf-8") as f:
-            f.write("[%s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
-        if os.path.getsize(USB_CLEAN_LOG) > 256 * 1024:   # 环形截断
-            with open(USB_CLEAN_LOG, encoding="utf-8") as f:
-                tail = f.readlines()[-1000:]
-            with open(USB_CLEAN_LOG, "w", encoding="utf-8") as f:
-                f.writelines(tail)
-    except OSError:
-        pass
-
-
-def _usb_clean_candidates(root):
-    """镜像内可删的事件目录 (按时间从旧到新)。只认时间戳命名的目录, 最近还在写的跳过。"""
-    rows = []
-    now = time.time()
-    for cat in USB_CLEAN_CATS:
-        base = os.path.join(root, "TeslaCam", cat)
-        try:
-            names = os.listdir(base)
-        except OSError:
-            continue
-        for name in names:
-            if name.startswith("."):
-                continue
-            dt = _ev_dt(name)
-            p = os.path.join(base, name)
-            if not dt or not os.path.isdir(p):
-                continue
-            try:
-                if now - os.path.getmtime(p) < USB_CLEAN_IDLE_S:
-                    continue                     # 车机可能还在往里写
-            except OSError:
-                continue
-            rows.append((dt, p))
-    rows.sort(key=lambda x: x[0])
-    return rows
-
-
-def usb_auto_clean():
-    """车机U盘接近满时自动清理最旧事件, 返回删除的事件数。
-
-    车机正在录制/写入时不动手; 镜像无效、拿不到锁或网页正在管理U盘时本轮跳过。
-    """
-    if USB_CLEAN_PCT <= 0 or storage_busy():
-        return 0
-    now = time.time()
-    if now - _usb_clean_ts[0] < USB_CLEAN_INTERVAL:
-        return 0
-    try:
-        nominal = os.path.getsize(IMG)
-    except OSError:
-        return 0
-    used = _exfat_used(IMG)
-    _usb_clean_ts[0] = now          # 位图解析有成本, 10 分钟内不重复检查
-    if not nominal or used is None or used * 100 < nominal * USB_CLEAN_PCT:
-        return 0
-    age = usb_img_age()
-    if age >= 0 and age < USB_CLEAN_IDLE_S:
-        _usb_clean_log("跳过: 车机 %d 秒前仍在写入镜像" % age)
-        return 0
-    if os.path.ismount(MNT) or usb_attached or _usb_flock_fd is not None:
-        return 0
-    if not _acquire_usb_flock():
-        return 0
-    _usb_clean_ts[0] = now
-    pct_before = int(used * 100 / nominal)
-    lb = ""
-    mounted = False
-    removed = 0
-    try:
-        os.makedirs(USB_CLEAN_MNT, exist_ok=True)
-        r = subprocess.run([LOSETUP, "-f"], capture_output=True, text=True)
-        lb = (r.stdout.strip().splitlines() or [""])[0] if r.returncode == 0 else ""
-        if not lb:
-            lb = LOOPDEV
-        if subprocess.run([LOSETUP, lb, IMG], capture_output=True).returncode != 0:
-            _usb_clean_log("losetup 失败, 本轮跳过")
-            return 0
-        _gadget_rebind(False)          # 短暂停止导出, 避免车机同时写
-        time.sleep(1)
-        if subprocess.run(["mount", "-t", "exfat", lb, USB_CLEAN_MNT],
-                          capture_output=True).returncode != 0:
-            _usb_clean_log("挂载镜像失败 (车机可能正在格式化), 本轮跳过")
-            return 0
-        mounted = True
-        rows = _usb_clean_candidates(USB_CLEAN_MNT)
-        if not rows:
-            _usb_clean_log("镜像已用 %d%%, 但没有可清理的事件目录" % pct_before)
-            return 0
-        newest = rows[-1][0]
-        keep_cutoff = (newest - datetime.timedelta(days=USB_KEEP_DAYS)
-                       if USB_KEEP_DAYS > 0 else None)
-        target = max(0, USB_CLEAN_PCT - 10)
-
-        def usage_pct():
-            try:
-                st = os.statvfs(USB_CLEAN_MNT)
-            except OSError:
-                return 0
-            return (st.f_blocks - st.f_bavail) * 100.0 / st.f_blocks if st.f_blocks else 0
-
-        for dt, p in rows:
-            if usage_pct() <= target:
-                break
-            if keep_cutoff and dt >= keep_cutoff:
-                break                   # 剩下的都在保留期内
-            try:
-                shutil.rmtree(p)
-                removed += 1
-            except OSError:
-                pass
-        _usb_clean_log("自动清理完成: 删除 %d 个事件, 用量 %d%% -> %d%%"
-                       % (removed, pct_before, int(usage_pct())))
-        return removed
-    finally:
-        if mounted:
-            subprocess.run(["sync"], capture_output=True)
-            for _ in range(3):
-                if subprocess.run(["umount", USB_CLEAN_MNT], capture_output=True).returncode == 0:
-                    break
-                time.sleep(2)
-        if lb:
-            subprocess.run([LOSETUP, "-d", lb], capture_output=True)
-        _gadget_rebind(True)
-        _release_usb_flock()
-        _IMG_USED_CACHE.update(t=0.0, path="", v=None)   # 下次重新读用量
 
 
 # ---------- 车机U盘「幽灵占用」回收 (位图自愈) ----------
@@ -10832,7 +10802,11 @@ def _exfat_used(path):
     fd = None
     try:
         fd = os.open(path, os.O_RDONLY)
-        vbr = os.pread(fd, 512, 0)
+        # 车机格式化可能带分区表, 卷不在 0 偏移, 所有读取都要加上卷偏移
+        base = _img_vol_offset(fd)
+        if base is None:
+            return None
+        vbr = os.pread(fd, 512, base)
         if len(vbr) >= 512 and vbr[3:11] == b"EXFAT   ":
             bps = 1 << vbr[108]
             csize = bps << vbr[109]
@@ -10843,7 +10817,7 @@ def _exfat_used(path):
             fat_len = struct.unpack_from("<I", vbr, 84)[0]
             nfats = vbr[110]
             flags = struct.unpack_from("<H", vbr, 106)[0]
-            fat_at = (fat_off + (fat_len if (nfats > 1 and (flags & 0x1)) else 0)) * bps
+            fat_at = base + (fat_off + (fat_len if (nfats > 1 and (flags & 0x1)) else 0)) * bps
             hi = ccnt + 2
 
             def nextc(c):
@@ -10854,7 +10828,7 @@ def _exfat_used(path):
             bm_cl = bm_len = 0
             c, guard = root, 0
             while 2 <= c < hi and guard < 8192 and not bm_cl:
-                buf = os.pread(fd, csize, heap + (c - 2) * csize)
+                buf = os.pread(fd, csize, base + heap + (c - 2) * csize)
                 if not buf:
                     break
                 for i in range(0, len(buf) - 31, 32):
@@ -10875,7 +10849,7 @@ def _exfat_used(path):
                 used = 0
                 while got < need and 2 <= c < hi and guard < 65536:
                     n = min(csize, need - got)
-                    buf = os.pread(fd, n, heap + (c - 2) * csize)
+                    buf = os.pread(fd, n, base + heap + (c - 2) * csize)
                     if not buf:
                         break
                     for b in buf:
@@ -11685,8 +11659,6 @@ RECENT_MAX_GB = int(os.environ.get("TSF_RECENT_MAX_GB", "12"))        # 「实�
 # 清掉的分类/事件会记入 /archive/.pruned 墓碑文件, 同步端读到就跳过 —— 否则车机 U 盘上
 # 还留着的旧事件会被当成新片段重抄回来, 形成 删除→重抄 的死循环 (和 RecentClips 同理)。
 BOX_KEEP_DAYS = int(os.environ.get("TSF_BOX_KEEP_DAYS", "14"))        # 盒子侧哨兵/手动保存保留天数, 0=不按天数清
-USB_CLEAN_PCT = int(os.environ.get("TSF_USB_CLEAN_PCT", "90"))        # 车机U盘用量达到该百分比自动清理, 0=关闭
-USB_KEEP_DAYS = int(os.environ.get("TSF_USB_CLEAN_DAYS", "7"))        # 自动清理时最近必留天数, 0=只按容量清
 ARCHIVE_TOTAL_GB = int(os.environ.get("TSF_ARCHIVE_TOTAL_GB", "30"))  # 所有录像归档总量上限(GB), 0=不按总量清
 DISK_GUARD_INTERVAL = max(30, int(os.environ.get("TSF_DISK_GUARD_INTERVAL", "60")))
 PRUNED_FILE = os.path.join(ARCHIVE, ".pruned")                        # 墓碑: 每行 "分类/事件名", 同步端跳过
@@ -11725,7 +11697,6 @@ if storage_resize.pending_recovery(IMG):
 def refresh_storage_settings():
     global ARCHIVE_TOTAL_GB, DRIVE_MAX_GB, FREE_MIN_MB, FREE_TARGET_MB
     global RECENT_ROLL_MIN, RECENT_KEEP_MIN, RECENT_MAX_GB, BOX_KEEP_DAYS
-    global USB_CLEAN_PCT, USB_KEEP_DAYS
     try:
         values = storage_allocation.load()
     except (OSError, ValueError, TypeError):
@@ -11740,8 +11711,6 @@ def refresh_storage_settings():
     RECENT_KEEP_MIN = int(saved['recent_keep_min'])
     RECENT_MAX_GB = int(saved['recent_max_gb'])
     BOX_KEEP_DAYS = int(saved['box_keep_days'])
-    USB_CLEAN_PCT = int(saved['usb_clean_pct'])
-    USB_KEEP_DAYS = int(saved['usb_keep_days'])
 
 
 refresh_storage_settings()
@@ -11845,8 +11814,6 @@ def save_retention(body):
         'TSF_RECENT_KEEP_MIN': current['recent_keep_min'],
         'TSF_RECENT_MAX_GB': current['recent_max_gb'],
         'TSF_BOX_KEEP_DAYS': current['box_keep_days'],
-        'TSF_USB_CLEAN_PCT': current['usb_clean_pct'],
-        'TSF_USB_CLEAN_DAYS': current['usb_keep_days'],
     })
     return dict(ok=True, values=current, conf_synced=written)
 
@@ -12152,10 +12119,10 @@ def storage_apply(body):
     if not isinstance(body, dict) or not isinstance(body.get('values'), dict):
         raise ValueError('存储参数不完整')
     if storage_busy():
-        raise ValueError('正在调整 U 盘容量')
+        raise ValueError('正在调整容量或格式化 U 盘')
     with _storage_edit_lock:
         if storage_busy():
-            raise ValueError('正在调整 U 盘容量')
+            raise ValueError('正在调整容量或格式化 U 盘')
         current = storage_status()
         if body.get('revision') != current['revision']:
             return dict(ok=False, msg='存储配置已变化，请重新加载', conflict=True)
@@ -12184,15 +12151,75 @@ def storage_apply(body):
         return storage_status()
 
 
+def _storage_run_rewrite(size, action):
+    """后台重建车机镜像 (调整容量 / 格式化共用同一套断连-重建-回滚流程)。"""
+    if usb_attached or os.path.ismount(MNT):
+        raise ValueError('请先结束 U 盘文件管理并恢复车机导出')
+    with _storage_job_lock:
+        _storage_job.update(state='running', message='准备' + action, percent=0)
+
+    def update(message, percent):
+        with _storage_job_lock:
+            _storage_job.update(message=message, percent=percent)
+
+    def work():
+        recovery = False
+        try:
+            with _storage_edit_lock, usb_lock:
+                if usb_attached or os.path.ismount(MNT) or not _acquire_usb_flock():
+                    raise ValueError('U 盘正被其他任务占用，请稍后重试')
+                try:
+                    # 上一次 U 盘管理/归档若留下 loop 绑定, 镜像文件会被独占打开,
+                    # rename 时报 EBUSY。只释放确实指向本镜像的 loop, 不动系统其它 loop。
+                    try:
+                        probe = subprocess.run([LOSETUP, LOOPDEV], capture_output=True, text=True, timeout=10)
+                        if probe.returncode == 0 and IMG in (probe.stdout or ""):
+                            subprocess.run([LOSETUP, '-d', LOOPDEV], capture_output=True, timeout=10)
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+                    script = os.path.join(os.path.dirname(__file__), 'mkexfat.py')
+                    if not os.path.isfile(script):
+                        script = os.path.join(os.path.dirname(__file__), 'scripts', 'mkexfat.py')
+                    storage_resize.resize(IMG, int(size), GADGET_DIR, _udc(), script, update, action=action)
+                except storage_resize.ResizeError as exc:
+                    recovery = getattr(exc, 'needs_recovery', False)
+                    raise
+                finally:
+                    if not recovery:
+                        _release_usb_flock()
+            # 新镜像的用量缓存必须立刻失效, 否则面板会继续显示旧镜像的占用
+            _IMG_USED_CACHE.update(t=0.0, path='', v=None)
+            with _storage_job_lock:
+                _storage_job.update(state='done', message=action + '完成', percent=100)
+        except Exception as exc:
+            recovery = recovery or storage_resize.pending_recovery(IMG)
+            message = str(exc)
+            busy_text = message.lower()
+            if (getattr(exc, 'errno', None) == 16 or 'errno 16' in busy_text
+                    or 'resource busy' in busy_text):
+                message = ('%s失败：USB 导出仍被车机占用 (Resource busy)。'
+                           '请在车机上弹出 U 盘/拔插一次数据线后重试；若仍失败，重启设备再试。' % action)
+            with _storage_job_lock:
+                _storage_job.update(state='recovery' if recovery else 'error', message=message)
+
+    try:
+        threading.Thread(target=work, daemon=True, name='storage-rewrite').start()
+    except Exception:
+        with _storage_job_lock:
+            _storage_job.update(state='error', message='无法启动%s，请稍后重试' % action)
+        raise
+    return dict(ok=True, job=storage_job())
+
+
 def storage_start_resize(body):
     # Old pages only acknowledged pausing recording and must never authorize erasure.
     if not isinstance(body, dict) or body.get('clear_confirmed') is not True:
         raise ValueError('请确认清空车机 U 盘中的全部内容后再调整容量')
     if storage_busy():
-        raise ValueError('已有容量调整任务')
+        raise ValueError('已有存储任务在进行')
     with _storage_edit_lock:
         if storage_busy():
-            raise ValueError('已有容量调整任务')
+            raise ValueError('已有存储任务在进行')
         current = storage_status()
         if body.get('revision') != current['revision']:
             raise ValueError('存储配置已变化，请重新加载')
@@ -12208,57 +12235,29 @@ def storage_start_resize(body):
         storage_allocation.check_resize_budget(current['values'], size, current['disk'])
         if size * storage_allocation.GIB == current['disk']['usb_bytes']:
             raise ValueError('U 盘容量未改变')
-        if usb_attached or os.path.ismount(MNT):
-            raise ValueError('请先结束 U 盘文件管理并恢复车机导出')
-        with _storage_job_lock:
-            _storage_job.update(state='running', message='准备调整容量', percent=0)
-        def update(message, percent):
-            with _storage_job_lock:
-                _storage_job.update(message=message, percent=percent)
-        def work():
-            recovery = False
-            try:
-                with _storage_edit_lock, usb_lock:
-                    if usb_attached or os.path.ismount(MNT) or not _acquire_usb_flock():
-                        raise ValueError('U 盘正被其他任务占用，请稍后重试')
-                    try:
-                        # 上一次 U 盘管理/归档若留下 loop 绑定, 镜像文件会被独占打开,
-                        # rename 时报 EBUSY。只释放确实指向本镜像的 loop, 不动系统其它 loop。
-                        try:
-                            probe = subprocess.run([LOSETUP, LOOPDEV], capture_output=True, text=True, timeout=10)
-                            if probe.returncode == 0 and IMG in (probe.stdout or ""):
-                                subprocess.run([LOSETUP, '-d', LOOPDEV], capture_output=True, timeout=10)
-                        except (OSError, subprocess.SubprocessError):
-                            pass
-                        script = os.path.join(os.path.dirname(__file__), 'mkexfat.py')
-                        if not os.path.isfile(script):
-                            script = os.path.join(os.path.dirname(__file__), 'scripts', 'mkexfat.py')
-                        storage_resize.resize(IMG, int(size), GADGET_DIR, _udc(), script, update)
-                    except storage_resize.ResizeError as exc:
-                        recovery = getattr(exc, 'needs_recovery', False)
-                        raise
-                    finally:
-                        if not recovery:
-                            _release_usb_flock()
-                with _storage_job_lock:
-                    _storage_job.update(state='done', message='容量调整完成', percent=100)
-            except Exception as exc:
-                recovery = recovery or storage_resize.pending_recovery(IMG)
-                message = str(exc)
-                busy_text = message.lower()
-                if (getattr(exc, 'errno', None) == 16 or 'errno 16' in busy_text
-                        or 'resource busy' in busy_text):
-                    message = ('调整失败：USB 导出仍被车机占用 (Resource busy)。'
-                               '请在车机上弹出 U 盘/拔插一次数据线后重试；若仍失败，重启设备再试。')
-                with _storage_job_lock:
-                    _storage_job.update(state='recovery' if recovery else 'error', message=message)
-        try:
-            threading.Thread(target=work, daemon=True, name='storage-resize').start()
-        except Exception:
-            with _storage_job_lock:
-                _storage_job.update(state='error', message='无法启动容量调整，请稍后重试')
-            raise
-        return dict(ok=True, job=storage_job())
+        return _storage_run_rewrite(size, '调整容量')
+
+
+def storage_start_format(body):
+    """用空白 exFAT 按当前容量重建车机 U 盘 (清空镜像内容, 不动归档区)。
+
+    车机格式化后网页仍读不到、或镜像损坏时, 用它一键恢复成车机能识别的 U 盘。
+    """
+    if not isinstance(body, dict) or body.get('clear_confirmed') is not True:
+        raise ValueError('请确认清空车机 U 盘中的全部内容后再格式化')
+    if storage_busy():
+        raise ValueError('已有存储任务在进行')
+    with _storage_edit_lock:
+        if storage_busy():
+            raise ValueError('已有存储任务在进行')
+        current = storage_status()
+        if body.get('revision') != current['revision']:
+            raise ValueError('存储配置已变化，请重新加载')
+        if current['disk']['usb_bytes'] <= 0:
+            raise ValueError('未找到车机 U 盘镜像，请先在「调整车机 U 盘容量」中创建')
+        # 保持当前容量重建; 镜像容量本身就是整数 GiB, round 只是兜底
+        size = max(1, int(round(current['usb_gib'])))
+        return _storage_run_rewrite(size, '格式化 U 盘')
 
 
 def drive_classify(start, duration, gears, previous):
@@ -12943,11 +12942,6 @@ def disk_guard():
                     print("重复片段合并完成: %d 个, 释放约 %.1f MiB" % (merged, freed / 1048576.0), flush=True)
         except Exception as ex:
             print("重复片段合并失败: %s" % ex, flush=True)
-        # 车机U盘接近满时自动清理旧事件 (挂载类操作, 放在清理锁之外, 内部自带空闲/互斥检查)
-        try:
-            usb_auto_clean()
-        except Exception as ex:
-            print("车机U盘自动清理失败: %s" % ex, flush=True)
         time.sleep(DISK_GUARD_INTERVAL)
 
 
@@ -17350,7 +17344,7 @@ class Handler(BaseHTTPRequestHandler):
                 # failures must not expose device paths or implementation data.
                 self._json(dict(ok=False, msg=str(exc) if isinstance(exc, ValueError) else '操作失败，请稍后重试'), 409)
             return
-        if p in ("/api/storage", "/api/storage/resize"):
+        if p in ("/api/storage", "/api/storage/resize", "/api/storage/format"):
             origin = self.headers.get('Origin')
             if (self.headers.get('X-TSF-Storage') != '1' or
                     self.headers.get('Sec-Fetch-Site') == 'cross-site' or
@@ -17359,7 +17353,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 body = self._read_json()
-                result = storage_start_resize(body) if p.endswith('/resize') else storage_apply(body)
+                if p.endswith('/format'):
+                    result = storage_start_format(body)
+                elif p.endswith('/resize'):
+                    result = storage_start_resize(body)
+                else:
+                    result = storage_apply(body)
                 self._json(result, 200 if result['ok'] else 409)
             except (OSError, ValueError, TypeError) as exc:
                 self._json(dict(ok=False, msg=str(exc)), 400)

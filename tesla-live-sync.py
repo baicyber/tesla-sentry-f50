@@ -185,16 +185,87 @@ class Entry:
         return "<%s %s size=%d vdl=%d>" % ("DIR" if self.is_dir else "FILE", self.name, self.size, self.vdl)
 
 
+def _exfat_vbr_ok(fd, off, size):
+    """off 处是否是结构合理的 exFAT 引导扇区。"""
+    if off < 0 or off + 512 > size:
+        return False
+    try:
+        vbr = os.pread(fd, 512, off)
+    except OSError:
+        return False
+    if len(vbr) < 512 or vbr[3:11] != b"EXFAT   ":
+        return False
+    return 9 <= vbr[108] <= 12 and vbr[109] <= 25
+
+
+def _vol_offset(fd, size):
+    """镜像里 exFAT 卷的起始字节偏移 (整盘 / MBR / GPT / 非标准布局)。
+
+    车机格式化 U 盘会写入分区表, 卷从分区起始扇区开始。只按 0 偏移解析会一直
+    报「不是 exFAT 卷」, 表现为格式化后网页和在线同步都读不到录像。
+    """
+    if _exfat_vbr_ok(fd, 0, size):
+        return 0
+    try:
+        head = os.pread(fd, 512, 0)
+    except OSError:
+        return None
+    starts, gpt = [], False
+    if len(head) >= 512 and head[510:512] == b"\x55\xaa":
+        for i in range(4):
+            e = head[446 + i * 16: 462 + i * 16]
+            if not e[4]:
+                continue
+            if e[4] == 0xEE:
+                gpt = True
+                continue
+            starts.append(struct.unpack_from("<I", e, 8)[0] * 512)
+    if gpt:
+        try:
+            hdr = os.pread(fd, 92, 512)
+        except OSError:
+            hdr = b""
+        if len(hdr) >= 92 and hdr[:8] == b"EFI PART":
+            tbl = struct.unpack_from("<Q", hdr, 72)[0]
+            count = struct.unpack_from("<I", hdr, 80)[0]
+            esz = struct.unpack_from("<I", hdr, 84)[0] or 128
+            for i in range(min(count or 4, 128)):
+                p = os.pread(fd, 40, tbl * 512 + i * esz)
+                if len(p) < 40 or not any(p[:16]):
+                    continue
+                starts.append(struct.unpack_from("<Q", p, 32)[0] * 512)
+    for off in starts:
+        if off and _exfat_vbr_ok(fd, off, size):
+            return off
+    # 兜底: 分区表损坏或非标准布局时, 前 1 MiB 按扇区扫签名, 再试常见对齐位置
+    scan = os.pread(fd, min(1 << 20, size), 0)
+    pos = scan.find(b"EXFAT   ")
+    while pos >= 0:
+        off = pos - 3
+        if off > 0 and off % 512 == 0 and _exfat_vbr_ok(fd, off, size):
+            return off
+        pos = scan.find(b"EXFAT   ", pos + 1)
+    for mib in (1, 2, 4, 8, 16, 32):
+        off = mib << 20
+        if _exfat_vbr_ok(fd, off, size):
+            return off
+    return None
+
+
 class ExFat:
     """最小 exFAT 只读解析器 (只依赖标准库)"""
 
     def __init__(self, path):
         self.path = path
         self.fd = os.open(path, os.O_RDONLY)
-        self.fd_ino = os.fstat(self.fd).st_ino
-        vbr = os.pread(self.fd, 512, 0)
-        if len(vbr) < 512 or vbr[3:11] != b"EXFAT   ":
+        info = os.fstat(self.fd)
+        self.fd_ino = info.st_ino
+        self.image_size = info.st_size
+        base = _vol_offset(self.fd, self.image_size)
+        if base is None:
             raise ValueError("不是 exFAT 卷: %s" % path)
+        self.base = base
+        vbr = os.pread(self.fd, 512, base)
         self.part_offset = struct.unpack_from("<Q", vbr, 64)[0]
         self.vol_len = struct.unpack_from("<Q", vbr, 72)[0]
         self.fat_offset = struct.unpack_from("<I", vbr, 80)[0]
@@ -214,8 +285,7 @@ class ExFat:
 
     # ---------- 底层读取 ----------
     def pread(self, n, off):
-        out = os.pread(self.fd, n, off)
-        return out
+        return os.pread(self.fd, n, self.base + off)
 
     def cluster_off(self, cluster):
         return self.heap_byte + (cluster - 2) * self.cluster_size
@@ -339,10 +409,10 @@ class ExFat:
         """车机格式化/重建镜像期间引导扇区会被清空或改写，用它判断是否需要重开。
         只读 11 字节，每个轮询周期做一次也不影响性能。"""
         try:
-            vbr = os.pread(self.fd, 11, 0)
+            vbr = os.pread(self.fd, 8, self.base + 3)
         except OSError:
             return False
-        return len(vbr) >= 11 and vbr[3:11] == b"EXFAT   "
+        return len(vbr) == 8 and vbr == b"EXFAT   "
 
     def close(self):
         try:
@@ -842,7 +912,7 @@ def main():
             try:
                 st = os.stat(IMG)
                 if exfat is not None and (st.st_ino != exfat.fd_ino
-                                          or st.st_size != exfat.vol_len * exfat.bytes_per_sector):
+                                          or st.st_size != exfat.image_size):
                     log("镜像大小或 inode 变化, 重新打开")
                     exfat.close()
                     exfat = None

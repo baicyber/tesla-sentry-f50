@@ -71,7 +71,7 @@ sudo ./install.sh install --size-gb 120 --port 8080 --data-mount /mnt/sdcard
 
 也可用 `sudo ./install.sh check` 仅预检、`sudo ./install.sh apply` 只安装不启动，或 `sudo ./install.sh --help` 查看全部参数。
 
-**2. 插到车上**：插进手套箱 USB 口 → 车机直接识别、显示容量并开始录制。镜像里已预建 `TeslaCam/{RecentClips,SavedClips,SentryClips,EncryptedClips}`，**不再需要点「格式化 USB 设备」**；若车机仍弹出该提示，点确认也无害，只是把同样的结构重建一遍。
+**2. 插到车上**：插进手套箱 USB 口 → 车机直接识别、显示容量并开始录制。镜像里已预建 `TeslaCam/{RecentClips,SavedClips,SentryClips,EncryptedClips}`，**不再需要点「格式化 USB 设备」**；若车机仍弹出该提示，点确认也无害——车机会重写分区表，网页会自动识别新的分区/卷偏移继续读取，无需重新安装。若格式化后网页仍提示「镜像未就绪」，可在存储页「调整车机 U 盘容量」下点「格式化 U 盘」按当前容量重建。
 
 **3. 打开网页**：`http://<设备IP>:8080`（手机连设备热点、USB 网卡直连，或自行加 Tailscale / frp）。首次登录账号 `admin`，密码见安装输出或 `/opt/tesla-sentry/auth.conf`。视频由 15 秒在线同步落地，不用等定时归档。
 

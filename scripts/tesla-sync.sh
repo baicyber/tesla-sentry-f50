@@ -81,6 +81,29 @@ restore() {
     log "export restored, state=$(cat /sys/class/udc/$UDC/state 2>/dev/null)"
 }
 
+# 车机格式化 U 盘后会写入 MBR/GPT 分区表, exFAT 卷在分区里, 整盘 mount 会失败。
+# 依次尝试: 分区节点 -> 整盘 -> MBR 分区起始偏移, 兼容没生成 loopXp1 的内核。
+mount_image() {
+    if $BB -P "$LB" "$IMG" 2>>"$LOG"; then
+        for p in "$LB"p*; do
+            [ -e "$p" ] || continue
+            mount -t exfat "$p" "$MNT" 2>>"$LOG" && return 0
+        done
+        mount -t exfat "$LB" "$MNT" 2>>"$LOG" && return 0
+        $BB -d "$LB" 2>/dev/null
+    else
+        $BB "$LB" "$IMG" 2>>"$LOG" || return 1
+        mount -t exfat "$LB" "$MNT" 2>>"$LOG" && return 0
+        $BB -d "$LB" 2>/dev/null
+    fi
+    lba=$(od -An -tu4 -j454 -N4 "$IMG" 2>/dev/null | tr -d ' \n')
+    if [ -n "$lba" ] && [ "$lba" -gt 0 ] 2>/dev/null; then
+        $BB -o $((lba * 512)) "$LB" "$IMG" 2>>"$LOG" && \
+            mount -t exfat "$LB" "$MNT" 2>>"$LOG" && return 0
+    fi
+    return 1
+}
+
 # 1. 网页 U 盘管理模式占用中则跳过 (锁之外的第二道保险)
 if grep -qs " $MNT " /proc/mounts; then
     log "skip: mirror mounted by viewer usb-manage"
@@ -113,11 +136,7 @@ sleep 1
 mkdir -p "$MNT" "$AUDIO_Q" "$AUDIO_DONE"
 LB=$($BB -f 2>/dev/null)
 [ -z "$LB" ] && LB=/dev/loop3
-if ! $BB "$LB" "$IMG" 2>>"$LOG"; then
-    log "ERROR: losetup $LB failed"
-    restore; exit 1
-fi
-if ! mount -t exfat "$LB" "$MNT" 2>>"$LOG"; then
+if ! mount_image; then
     log "ERROR: mount image failed (镜像不是 exFAT?)"
     $BB -d "$LB" 2>/dev/null
     restore; exit 1
