@@ -101,7 +101,7 @@ sudo ./uninstall.sh --purge      # 连镜像和归档一起删（不可恢复）
 | `TSF_DEDUP_INTERVAL` / `TSF_DEDUP_MAX_MB` | `1800` / `4096` | 合并「实时滚动记录」与哨兵事件重复片段的检查间隔（秒，0 = 关闭）与每轮校验上限（MiB） |
 | `TSF_FREE_MIN_MB` / `TSF_FREE_TARGET_MB` | `4096` / `10240` | 空间兜底清理的触发阈值与目标 |
 | `TSF_PREWARM_SENTRY` / `TSF_PREWARM_SAVED` | `3` / `3` | 哨兵录像 / 手动保存各预转码缓存最新多少个事件，0 = 关闭该模块预转码（网页「预转码设置」会写回这里） |
-| `TSF_CACHE` | 自动 | 缩略图 / 遥测 / 合成临时缓存目录；旧值 `/opt/mu300` 已废弃，升级时自动清理 |
+| `TSF_CACHE` | 已废弃 | 程序缓存已并入 `TSF_TRANSCODE_DIR/app/`，旧配置保留仅为兼容 |
 
 OTA、飞书推送、认证的参数**不写入这个 conf**，走环境变量（如 `TSF_OTA_SOURCES`、`TSF_OTA_REPO`）或网页配置。完整变量表见 `docs/COMPATIBILITY.md` 第 8 节。
 

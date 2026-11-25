@@ -16,12 +16,6 @@ IMG="$TSF_IMG"
 LOG="$TSF_LOG_DIR/tesla-gadget.log"
 CONF_NAME="${TSF_GADGET_CONFIG:-c.1}"
 
-if [ "$1" != status ]; then
-    for tsf_pending in "$IMG.resize-state" "$IMG.resize-new" "$IMG.resize-backup"; do
-        [ ! -e "$tsf_pending" ] || { echo "ERROR: 容量调整未完成，请检查恢复文件"; exit 1; }
-    done
-fi
-
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
 
 # --- 自动探测 ---

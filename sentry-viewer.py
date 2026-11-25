@@ -214,7 +214,7 @@ CONF_DOCS = {
     "TSF_GADGET": "USB Gadget configfs 目录",
     "TSF_GADGET_CONFIG": "USB Gadget 配置名 (configs 下的子目录, 通常 c.1)",
     "TSF_UDC": "USB 控制器名称 (UDC)",
-    "TSF_CACHE": "程序缓存目录 (缩略图/遥测/合成临时); 旧值 /opt/mu300 已废弃会自动移除",
+    "TSF_CACHE": "已废弃；程序缓存已并入转码缓存目录 app/，保留仅为兼容旧配置",
     "TSF_TRANSCODE_DIR": "转码缓存目录 (在归档区内, 与视频一一对应)",
     "TSF_LOG_DIR": "运行日志目录",
     "TSF_LIVE_LOG": "实时同步日志路径",
@@ -504,7 +504,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.040"
+APP_VERSION = "2026.11.26.041"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2857,11 +2857,6 @@ body.watching { overflow:hidden; }
 #trigger-marker::after { content:''; position:absolute; left:50%; top:100%; transform:translateX(-50%); margin-top:-1px; border:4px solid transparent; border-top-color:#e5382c; }
 #trigger-marker:hover { filter:brightness(1.08); }
 .timeline-row { display:flex; align-items:flex-start; gap:14px; }
-.bufrow { display:flex; align-items:center; gap:10px; height:16px; margin:-2px 0 6px; }
-.bufrow[hidden] { display:none; }
-.bufbar { flex:1; height:4px; border-radius:999px; background:var(--line); overflow:hidden; }
-.bufbar i { display:block; height:100%; width:0; border-radius:999px; background:linear-gradient(90deg,#38bdf8,#22c55e); transition:width .3s ease; }
-.bufrow span { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .playback-help { display:flex; flex-direction:column; justify-content:center; gap:2px; min-height:36px;
   color:var(--muted); font-size:11px; line-height:1.5; white-space:nowrap; }
 .playback-help .ph-key:not(:last-child)::after { content:'，'; }
@@ -3578,7 +3573,6 @@ body.settings-open { overflow:hidden; }
     <section class="transport" aria-label="回放控制">
       <div class="clockline"><span id="track-start"></span><output id="ptime">--:--:--</output><span id="track-end"></span></div>
       <div class="timeline-row"><div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"><output id="seek-hover" hidden></output><button id="trigger-marker" hidden>触发时刻</button></div></div>
-      <div class="bufrow" id="bufrow" hidden><div class="bufbar"><i id="bufprogfill"></i></div><span id="buftxt">缓存 0.0s</span></div>
       <div class="playtools">
         <div class="playback-help"><span>画面上：单击 播放/暂停，长按 3× 快进</span><span class="ph-kb"><span class="ph-kb-t">键盘：</span><span class="ph-key">空格 播放/暂停</span><span class="ph-key">长按 3×</span><span class="ph-key">←→ 跳转 1s</span><span class="ph-key">↑↓ 跳转 10s</span></span></div>
         <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="skip-back-one" aria-label="回退一秒">−1s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next-one" aria-label="前进一秒">+1s</button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
@@ -3754,8 +3748,7 @@ body.settings-open { overflow:hidden; }
       <div class="storage-row path"><label for="storage-path-root">视频存储根目录<small>放镜像、归档和日志，建议在 TF 卡上</small></label><input class="ninput" id="storage-path-root" type="text" spellcheck="false"></div>
       <div class="storage-row path"><label>车机 U 盘镜像<small>虚拟 U 盘文件，车机录像写入这里</small></label><input class="ninput" id="storage-path-img" type="text" disabled></div>
       <div class="storage-row path"><label>归档区目录<small>同步保存的录像副本，滚动窗口与保留期都按这里计算</small></label><input class="ninput" id="storage-path-archive" type="text" disabled></div>
-      <div class="storage-row path"><label>转码缓存目录<small>低清晰度转码的临时文件，可随时清空</small></label><input class="ninput" id="storage-path-transcode" type="text" disabled></div>
-      <div class="storage-row path"><label>程序缓存目录<small>封面、缩略图等程序临时文件</small></label><input class="ninput" id="storage-path-cache" type="text" disabled></div>
+      <div class="storage-row path"><label>转码缓存目录<small>低清晰度转码与程序临时文件（缩略图/遥测）都放在这里，可随时清空</small></label><input class="ninput" id="storage-path-transcode" type="text" disabled></div>
       <div class="updbtns"><button class="mini primary" id="paths-save" onclick="storageSavePaths()" disabled>保存路径设置</button></div>
       <div class="hint" id="paths-msg" role="status" aria-live="polite"></div>
     </details>
@@ -5141,20 +5134,6 @@ function bufferAhead(video) {
     if (start <= time && time < end) return Math.max(0, end - time);
   }
   return 0;
-}
-
-function updateBufferProgress() {
-  const row = byId('bufrow');
-  if (!row) return;
-  if (!liveMode) { row.hidden = true; return; }
-  const videos = activeVideos().filter(v => !v.ended && v.readyState >= 1);
-  if (!videos.length) { row.hidden = true; return; }
-  row.hidden = false;
-  const lead = Math.min(...videos.map(bufferAhead));
-  const need = Math.max(6, previewLeadForQuality() * baseRate + 3);
-  const fill = byId('bufprogfill'), text = byId('buftxt');
-  if (fill) fill.style.width = Math.max(0, Math.min(100, lead / need * 100)) + '%';
-  if (text) text.textContent = '缓存 ' + lead.toFixed(1) + 's / 预读 ' + Math.round(need) + 's';
 }
 
 function releaseVideo(v) {
@@ -7171,7 +7150,6 @@ function tick() {
   }
   if (wantedPlay) prepareNext(); else hideNetSpeed();
   updateControls(); updateHud(clipOffset);
-  updateBufferProgress();
 }
 
 /* ---------- 实时传输速度 ---------- */
@@ -7997,7 +7975,6 @@ async function storageLoad() {
       document.getElementById('storage-path-img').value = data.paths.img;
       document.getElementById('storage-path-archive').value = data.paths.archive;
       document.getElementById('storage-path-transcode').value = data.paths.transcode;
-      document.getElementById('storage-path-cache').value = data.paths.cache;
     }
     storageSyncArchiveLimit();
     storageRenderAllocation();
@@ -8125,7 +8102,7 @@ async function storageSavePaths() {
       ? '已保存并写入 /etc/tesla-sentry.conf；请重启服务生效（现有录像不会自动迁移）'
       : '已保存；当前环境没有可写的 /etc/tesla-sentry.conf（重启后请检查）';
     if (result.paths) {
-      for (const [id, key] of [['storage-path-root','video_root'],['storage-path-img','img'],['storage-path-archive','archive'],['storage-path-transcode','transcode'],['storage-path-cache','cache']]) {
+      for (const [id, key] of [['storage-path-root','video_root'],['storage-path-img','img'],['storage-path-archive','archive'],['storage-path-transcode','transcode']]) {
         const el = document.getElementById(id);
         if (el) el.value = result.paths[key];
       }
@@ -9700,7 +9677,7 @@ def _migrate_transcode_cache():
     _TRANSCODE_MIGRATED[0] = True
     os.makedirs(TRANSCODE_DIR, exist_ok=True)
     # --- 旧形态 1: 程序目录 cache/res-cache ---
-    old_prog = os.path.join(CACHE_ROOT, "res-cache")
+    old_prog = os.path.join(APP_HOME, "cache", "res-cache")
     if old_prog != TRANSCODE_DIR and os.path.isdir(old_prog):
         _move_children(old_prog, TRANSCODE_DIR)
     # --- 旧形态 2: 归档区 .transcode ---
@@ -10778,6 +10755,23 @@ def usb_detach():
         usb_attached = False
         _release_usb_flock()   # 挂载周期结束才释放, 失败路径继续持锁
         return True, "detached"
+
+
+def _force_image_offline():
+    """调整/格式化前强制停掉网页 U 盘管理和 loop 挂载, 不再要求用户先手动恢复导出。"""
+    global usb_attached, usb_timer
+    if usb_timer:
+        usb_timer.cancel()
+        usb_timer = None
+    if os.path.ismount(MNT):
+        for flag in ('-l', '-f'):
+            subprocess.run(["umount", flag, MNT], capture_output=True)
+            if not os.path.ismount(MNT):
+                break
+            time.sleep(0.5)
+    subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
+    usb_attached = False
+    _release_usb_flock()
 
 
 def usb_detach_safe():
@@ -11977,19 +11971,23 @@ def log_report():
     # 2) 各日志文件尾部
     files = [(LIVE_LOG, 200), ("/opt/tesla-sentry/health.log", 120)]
     sizes = []
+    project_lines = []
     for fp, n in files:
         lines, size = _log_tail(fp, n)
+        project_lines.extend(lines)
         sizes.append("%s %s" % (os.path.basename(fp), ("%d KB" % (size // 1024)) if size else "不存在"))
         sections.append(("%s（尾部 %d 行）" % (fp, n), lines or ["(空或不存在)"]))
     ov.append("日志文件: " + "；".join(sizes))
-    # 3) OpenWrt 系统日志: 服务 stdout/stderr 走 syslog, 更新失败、崩溃重启都在这里
+    # 3) OpenWrt 系统日志: 只保留 tesla/sentry/ffmpeg 相关行, frpc 等无关服务不进概述
     if shutil.which("logread"):
         try:
             p = subprocess.run(["logread"], capture_output=True, text=True, timeout=8, errors="replace")
             all_lines = (p.stdout or "").splitlines()
-            lines = [l for l in all_lines if re.search(r"tesla|sentry|ffmpeg", l, re.I)]
+            related = re.compile(r"tesla|sentry|tsf-|ffmpeg", re.I)
+            lines = [l for l in all_lines if related.search(l)]
+            project_lines.extend(lines)
             sections.append(("logread 系统日志（tesla/sentry 相关，尾部 200 行）",
-                             lines[-200:] or all_lines[-60:] or ["(空)"]))
+                             lines[-200:] or ["(未发现 tesla/sentry 相关日志)"]))
         except Exception as ex:
             sections.append(("logread 系统日志", ["读取失败: %s" % ex]))
     else:
@@ -11999,17 +11997,17 @@ def log_report():
         detail_lines.append("===== %s =====" % title)
         detail_lines.extend(lines)
         detail_lines.append("")
-    # 概述里附最近异常, 不用展开详细日志也能看到报错。
-    # crond 的例行任务（tesla-viewer running / tsf-maintenance）只是正常调度, 不算异常。
+    # 概述只统计本项目日志与已筛过的系统日志, 不把 frpc 之类无关服务算成异常。
     noise = re.compile(r"(crond\[\d+\]: USER root pid|"
-                       r"tsf-maintenance\.sh (?:usb|audio)|tesla-(?:viewer|live) running)", re.I)
+                       r"tsf-maintenance\.sh (?:usb|audio)|tesla-(?:viewer|live) running|"
+                       r"\bfrp[cs]\b)", re.I)
     def _distinct(line):
         text = re.sub(r"^\[[\d\-: ]+\]\s*", "", line.strip())
         text = re.sub(r"^[A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d+\s+[\d:]+\s+\d{4}\s+", "", text)
         return text[:200]
     bad, seen = [], set()
-    for l in detail_lines:
-        if l.startswith("=====") or noise.search(l):
+    for l in project_lines:
+        if noise.search(l):
             continue
         if not re.search(r"error|failed|失败|traceback|exception|不完整", l, re.I):
             continue
@@ -12252,12 +12250,9 @@ APP_HOME = os.path.dirname(os.path.realpath(__file__))
 # 程序缓存 (缩略图/遥测/多路合成临时) 放在安装目录 cache/ 下, 不占数据卡:
 #   thumbs / tel-cache / stitch-tmp。转码缓存单独放在归档区内 (TRANSCODE_DIR,
 #   见文件顶部定义), 与归档视频一一对应, 删归档视频时自动清理对应缓存。
-# TSF_CACHE 仍可覆盖程序缓存根; 旧版自动选择的 /opt/mu300 或数据卡 cache
-# 视为历史默认值, 升级后自动迁到安装目录, 避免继续占用数据卡。
-CACHE_ROOT = os.environ.get("TSF_CACHE") or os.path.join(APP_HOME, "cache")
-if CACHE_ROOT in ("/opt/mu300", os.path.join(os.environ.get("TSF_CARD_MNT", "/mnt/sdcard"),
-                                             "tesla-sentry", "cache")):
-    CACHE_ROOT = os.path.join(APP_HOME, "cache")
+# 程序缓存(缩略图/遥测/合成临时)统一放进转码缓存目录下的 app/, 不再单独占程序盘,
+# 也不再从 TSF_CACHE 读取; 旧版 cache/res-cache 会在启动时迁移。
+CACHE_ROOT = os.path.join(TRANSCODE_DIR, "app")
 STITCH_DIR = CACHE_ROOT + "/stitch-tmp"  # 不用 /tmp: tmpfs 占内存, 大视频会挤爆 RAM
 STITCH_JOBS = {}
 STITCH_LOCK = threading.Lock()
@@ -12272,8 +12267,7 @@ _THUMB_CLEAN = {"t": 0.0}
 
 
 def thumb_bases():
-    """缩略图缓存目录: eMMC 优先, 写不进去 (满了/只读) 再退到归档盘。
-    以前只认 /opt/mu300/thumbs, 盘一满就静默 404, 表现就是「缩略图一直不见」。"""
+    """缩略图缓存目录: 默认在转码缓存 app/ 下; 写不进去 (盘满/只读) 再退到归档区 .thumbs。"""
     return [THUMB_DIR, os.path.join(ARCHIVE, '.thumbs')]
 
 
@@ -12612,7 +12606,8 @@ if storage_resize.pending_recovery(IMG):
     if _repair_note:
         print('storage: ' + _repair_note, flush=True)
     else:
-        _storage_job.update(state='recovery', message='发现未完成的容量调整，请检查恢复文件')
+        _storage_job.update(state='recovery',
+                            message='检测到旧版容量调整残留，点「调整 U 盘容量」或「格式化 U 盘」会自动清理')
 
 
 def refresh_storage_settings():
@@ -12690,7 +12685,7 @@ def storage_status():
                 job=storage_job(), usb_gib=disk['usb_bytes'] / storage_allocation.GIB,
                 retention=retention_values(), prewarm=prewarm_values(),
                 paths=dict(video_root=VIDEO_ROOT, img=IMG, archive=ARCHIVE,
-                           transcode=TRANSCODE_DIR, cache=CACHE_ROOT))
+                           transcode=TRANSCODE_DIR))
 
 
 def retention_values():
@@ -12798,7 +12793,7 @@ def save_paths(body):
     })
     return dict(ok=True, conf_synced=written, restart_required=True,
                 paths=dict(video_root=root, img=img, archive=archive,
-                           transcode=transcode, cache=CACHE_ROOT))
+                           transcode=transcode))
 
 
 def _clear_tree(root):
@@ -13154,9 +13149,7 @@ def _storage_create_image(size):
 
 
 def _storage_run_rewrite(size, action):
-    """后台重建车机镜像 (调整容量 / 格式化共用同一套断连-重建-回滚流程)。"""
-    if usb_attached or os.path.ismount(MNT):
-        raise ValueError('请先结束 U 盘文件管理并恢复车机导出')
+    """后台重建车机镜像 (调整容量 / 格式化共用: 强制断连 -> 删除 -> 重建 -> 导出)。"""
     with _storage_job_lock:
         _storage_job.update(state='running', message='准备' + action, percent=0)
 
@@ -13168,10 +13161,10 @@ def _storage_run_rewrite(size, action):
         recovery = False
         try:
             with _storage_edit_lock, usb_lock:
+                # 网页 U 盘管理/loop 挂载会占着镜像, 直接强制卸载再继续, 不要求用户手动操作
+                _force_image_offline()
                 # 在线同步每轮只持共享锁几秒; 重试等待而不是立刻报「被其他任务占用」
                 for _ in range(120):
-                    if usb_attached or os.path.ismount(MNT):
-                        raise ValueError('请先结束 U 盘文件管理并恢复车机导出')
                     if _acquire_usb_flock():
                         break
                     time.sleep(0.5)
@@ -13179,7 +13172,7 @@ def _storage_run_rewrite(size, action):
                     raise ValueError('U 盘正被其他任务占用，请稍后重试')
                 try:
                     # 上一次 U 盘管理/归档若留下 loop 绑定, 镜像文件会被独占打开,
-                    # rename 时报 EBUSY。只释放确实指向本镜像的 loop, 不动系统其它 loop。
+                    # 删除时会报 EBUSY。只释放确实指向本镜像的 loop, 不动系统其它 loop。
                     try:
                         probe = subprocess.run([LOSETUP, LOOPDEV], capture_output=True, text=True, timeout=10)
                         if probe.returncode == 0 and IMG in (probe.stdout or ""):

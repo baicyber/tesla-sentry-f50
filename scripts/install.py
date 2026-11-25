@@ -262,7 +262,6 @@ class Installer:
                         TSF_VIDEO_ROOT=self.data_home,
                         TSF_IMG=self.data_home + '/img/teslacam.img',
                         TSF_ARCHIVE=self.data_home + '/archive',
-                        TSF_CACHE=APP + '/cache',
                         TSF_TRANSCODE_DIR=self.data_home + '/archive/transcode_cache',
                         TSF_LOG_DIR=self.data_home + '/logs',
                         TSF_LIVE_LOG=self.data_home + '/logs/tesla-live.log',
@@ -307,7 +306,6 @@ class Installer:
                             'TSF_CARD_MNT', 'TSF_CARD_UUID'):
                     if old.get(key):
                         settings[key] = old[key]
-                settings['TSF_CACHE'] = APP + '/cache'
                 # FFmpeg 用本次探测/安装好的路径, 避免继续引用已失效的旧路径
                 for key, name in (('TSF_FFMPEG', 'ffmpeg'), ('TSF_FFPROBE', 'ffprobe')):
                     if self.device.get(name):
@@ -326,7 +324,6 @@ class Installer:
             'TSF_CARD_MNT': 'F50 数据卡挂载点',
             'TSF_VIDEO_ROOT': '视频存储根目录: img/ 放车机镜像, archive/ 放归档',
             'TSF_IMG': '车机 U 盘镜像路径 (exFAT 稀疏文件)', 'TSF_ARCHIVE': '归档区目录',
-            'TSF_CACHE': '程序缓存目录 (缩略图/遥测/合成临时)',
             'TSF_TRANSCODE_DIR': '转码缓存目录', 'TSF_LOG_DIR': '运行日志目录',
             'TSF_LIVE_LOG': '实时同步日志路径', 'TSF_LIVE_STATE': '实时同步状态文件路径',
             'TSF_MNT': '挂载镜像写 Boombox/铃声时使用的临时挂载点',
@@ -792,9 +789,8 @@ class Installer:
             write(app_stage / 'settings.json', '{"auto_update": false}\n', 0o600)
             # 全新安装不生成镜像、不预建归档目录: 由网页「存储分配」首次设置时创建
             (data_stage / 'logs').mkdir()
-            (app_stage / 'cache').mkdir()
             env = os.environ.copy()
-            env.update(TSF_ARCHIVE=str(data_stage / 'archive'), TSF_CACHE=str(app_stage / 'cache'),
+            env.update(TSF_ARCHIVE=str(data_stage / 'archive'),
                        TSF_AUTH_FILE=str(app_stage / 'auth.conf'),
                        TSF_SETTINGS=str(app_stage / 'settings.json'))
             run([self.python(), '-B', str(app_stage / 'sentry-viewer.py'), '--ota-check'], env=env)
@@ -941,7 +937,7 @@ class Installer:
                                                       'options': self.options_record()}, indent=2) + '\n',
                                           encoding='utf-8', newline='\n')
             env = os.environ.copy()
-            env.update(TSF_ARCHIVE=archive, TSF_CACHE=str(staging / 'cache'),
+            env.update(TSF_ARCHIVE=archive,
                        TSF_AUTH_FILE=str(staging / 'auth.conf'),
                        TSF_SETTINGS=str(staging / 'settings.json'))
             run([self.python(), '-B', str(staging / 'sentry-viewer.py'), '--ota-check'], env=env)

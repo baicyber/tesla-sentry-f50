@@ -99,7 +99,7 @@ Main config: `/etc/tesla-sentry.conf` (restart services after editing):
 | `TSF_RECENT_ROLL_MIN` | `60` | `RecentClips` rolling window in minutes, 0 = no rolling |
 | `TSF_BOX_KEEP_DAYS` | `14` | Box-side retention for Sentry / saved clips, by age; 0 = unlimited |
 | `TSF_FREE_MIN_MB` / `TSF_FREE_TARGET_MB` | `4096` / `10240` | Free-space fallback cleanup: trigger threshold and target |
-| `TSF_CACHE` | automatic | Thumbnail / telemetry / transcode cache directory |
+| `TSF_CACHE` | deprecated | App cache now lives in `TSF_TRANSCODE_DIR/app/`; kept only for compatibility |
 
 OTA, Feishu push and authentication settings are **not** written to this file — they use environment variables (such as `TSF_OTA_SOURCES`, `TSF_OTA_REPO`) or the web UI. The full variable table is in section 8 of `docs/COMPATIBILITY.md`.
 
