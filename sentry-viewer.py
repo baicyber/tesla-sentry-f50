@@ -504,7 +504,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.037"
+APP_VERSION = "2026.11.25.038"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -16591,9 +16591,8 @@ def mem_available_mb():
     return -1
 
 
-# ---------- 导出/合成前的空间预检 ----------
-# 各清晰度按保守码率估算 (实测 720p/15fps 约 2Mbps, 这里留出余量)
-EXPORT_MBPS = {"720p": 3.0, "480p": 1.8, "360p": 1.0, "orig": 5.0}
+# ---------- 导出/合成结束后的空间清理 ----------
+EXPORT_MARGIN_MB = 100   # 导出结束后至少保留的空闲空间
 
 
 def _export_target_dir():
@@ -16604,47 +16603,39 @@ def _export_target_dir():
     return "/"
 
 
-def _export_reserve_mb():
-    """导出目录的安全余量: 数据卡沿用暂停同步保护线, 根分区(loop 镜像)只留 256MB。"""
+def export_cleanup(keep_paths=()):
+    """导出/合成结束后清理旧产物: 从最旧的开始删, 直到空闲恢复到至少 100MB。
+
+    本次任务刚生成、还需要下载的成片放在 keep_paths 里, 不会被删。
+    返回删除的文件数。"""
+    keep = set(os.path.realpath(p) for p in keep_paths if p)
     target = _export_target_dir()
+    free = free_mb(target)
+    if free < 0 or free >= EXPORT_MARGIN_MB:
+        return 0
+    candidates = []
     try:
-        st = os.statvfs(target)
-        total_mb = st.f_blocks * st.f_frsize // 1048576
+        for name in os.listdir(STITCH_DIR):
+            p = os.path.join(STITCH_DIR, name)
+            try:
+                if os.path.isdir(p) or os.path.realpath(p) in keep:
+                    continue
+                candidates.append((os.path.getmtime(p), p))
+            except OSError:
+                continue
     except OSError:
-        total_mb = 0
-    if 0 < total_mb < 8192:
-        return 256
-    return max(256, FREE_MIN_MB)
-
-
-def export_space_needed(paths, quality="720p", cells=1):
-    """估算一次服务端导出要写入的字节数 (成片 + 逐路中间文件, 含 50% 余量)。
-
-    多路是同一分钟并行合成, 时长取各路最大值而不是相加。"""
-    duration = 0.0
-    for p in paths:
-        duration = max(duration, probe_duration(p))
-    duration = duration or 60.0
-    mbps = EXPORT_MBPS.get(quality, 3.0) * (1.5 if cells > 1 else 1.0)
-    final = duration * mbps * 1000000 / 8
-    middle = duration * 1.2 * 1000000 / 8 * max(0, cells - 1)
-    return int((final + middle) * 1.5) + 32 * 1048576
-
-
-def export_space_error(paths, quality="720p", cells=1):
-    """空间不足时返回可直接展示给用户的错误文案, 足够时返回 None。"""
-    free = free_mb(_export_target_dir())
-    if free < 0:
-        return None
-    need_mb = export_space_needed(paths, quality, cells) // 1048576
-    reserve = _export_reserve_mb()
-    if need_mb + reserve > free:
-        need_text = ("%.1fG" % (need_mb / 1024.0)) if need_mb >= 1024 else ("%dMB" % need_mb)
-        free_text = ("%.1fG" % (free / 1024.0)) if free >= 1024 else ("%dMB" % free)
-        return ("设备存储空间不足：本次导出预计需要 %s，当前空闲 %s（需保留 %.0fMB 安全余量）。"
-                "请先清理归档或降低导出清晰度/时长后重试"
-                % (need_text, free_text, reserve))
-    return None
+        return 0
+    candidates.sort()
+    removed = 0
+    for _mtime, p in candidates:
+        if free_mb(target) >= EXPORT_MARGIN_MB:
+            break
+        try:
+            os.unlink(p)
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _stitch_worker(job_id, paths, out_path, total):
@@ -16761,6 +16752,15 @@ def _stitch_worker(job_id, paths, out_path, total):
             if job and not job.get("cancel"):
                 job["state"] = "error"
                 job["err"] = str(e)[:300]
+    finally:
+        # 导出结束(成功/失败/取消)后清理旧产物, 保证至少保留 100MB 空闲
+        try:
+            with STITCH_LOCK:
+                job = STITCH_JOBS.get(job_id)
+                keep = [out_path] if job and job.get("state") == "done" else []
+            export_cleanup(keep)
+        except Exception:
+            pass
 
 
 def _queue_stitch_job(job_id, job, worker, args, busy_message):
@@ -16797,9 +16797,6 @@ def start_stitch(cat, name, cams):
     if len(files) < 2:
         return None, "至少需要选择两路画面"
     paths = [os.path.join(evdir, f) for f in files]
-    err = export_space_error(paths, "720p", len(files))
-    if err:
-        return None, err
     os.makedirs(STITCH_DIR, exist_ok=True)
     # 内存与并发保护: 设备只有 1.4G, 同时跑两个合成会直接 OOM 拖垮整机
     busy_message = "已有合成任务在进行, 请等待完成后再试"
@@ -17077,6 +17074,14 @@ def _export_worker(job_id, paths, out_path, total, wm, q="720p"):
                 os.unlink(out_path)
             except OSError:
                 pass
+        # 导出结束(成功/失败/取消)后清理旧产物, 保证至少保留 100MB 空闲
+        try:
+            with STITCH_LOCK:
+                job = STITCH_JOBS.get(job_id)
+                keep = [out_path] if job and job.get("state") == "done" else []
+            export_cleanup(keep)
+        except Exception:
+            pass
 
 
 def start_export(cat, name, cams, wm=True, q="720p", files=None):
@@ -17121,9 +17126,6 @@ def start_export(cat, name, cams, wm=True, q="720p", files=None):
     if 0 < avail < 260:
         return None, "设备可用内存不足(%dMB), 稍后再试" % avail
     paths = [os.path.join(evdir, f) for f in files]
-    err = export_space_error(paths, q, len(paths))
-    if err:
-        return None, err
     os.makedirs(STITCH_DIR, exist_ok=True)
     now = time.time()
     for old in os.listdir(STITCH_DIR):
