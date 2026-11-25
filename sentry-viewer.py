@@ -2362,7 +2362,8 @@ body.watching { overscroll-behavior:none; }
 /* 触发摄像头那一路: 与片段芯片一致的红点标记 */
 .cambar button.trig::before { content:''; display:inline-block; width:5px; height:5px; border-radius:50%;
   background:#ff453a; margin-right:5px; vertical-align:1px; }
-.cambar button.trig.on::before { background:#fff; }
+/* 选中该镜头标签时仍保持红点, 不要变成白色 */
+.cambar button.trig.on::before { background:#ff453a; box-shadow:0 0 0 1.5px rgba(255,255,255,.85); }
 .clipbar { display:none; gap:6px; flex-wrap:wrap; margin-top:9px; }
 .clipbar.show { display:flex; }
 .clipbar button { background:var(--panel2); color:var(--muted); border:1px solid var(--line2); border-radius:8px;
