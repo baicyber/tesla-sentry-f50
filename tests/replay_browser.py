@@ -54,16 +54,14 @@ def check_overview_scrubbing(browser, base, viewer, archive, event, key, ffmpeg)
     page.get_by_role('button', name='暂停', exact=True).click()
     slider = page.locator('#seek')
 
-    def drag(seconds):
+    def slider_position(seconds):
         rect = slider.bounding_box()
         end = float(slider.get_attribute('max'))
-        def x(offset):
-            return rect['x'] + 8 + (rect['width'] - 16) * offset / end
-        y = rect['y'] + rect['height'] / 2
-        page.mouse.move(x(float(slider.input_value())), y)
-        page.mouse.down()
-        page.mouse.move(x(seconds), y, steps=8)
-        page.mouse.up()
+        return {'x':8 + (rect['width'] - 16) * seconds / end, 'y':rect['height'] / 2}
+
+    def drag(seconds):
+        slider.drag_to(slider, source_position=slider_position(float(slider.input_value())),
+                       target_position=slider_position(seconds), steps=8)
 
     drag(1.2)
     page.locator('#cambar').get_by_text('全览', exact=True).click()
@@ -88,11 +86,10 @@ def check_overview_scrubbing(browser, base, viewer, archive, event, key, ffmpeg)
     drag(22.3)
     page.wait_for_function("curClipIx===9 && activeVideos().every(v=>v.videoHeight===360&&!v.seeking)", timeout=30000)
     page.get_by_role('button', name='播放', exact=True).click()
-    rect = slider.bounding_box()
-    y = rect['y'] + rect['height'] / 2
-    page.mouse.move(rect['x'] + 8 + (rect['width'] - 16) * 22.4 / 23, y)
+    slider.hover(position=slider_position(22.4))
     page.mouse.down()
-    page.mouse.move(rect['x'] + 8 + (rect['width'] - 16) * 4.4 / 23, y, steps=5)
+    assert page.evaluate('editingSeek')
+    slider.hover(position=slider_position(4.4))
     page.wait_for_function("activeVideos().every(v=>v.ended)")
     page.mouse.up()
     page.wait_for_function("curClipIx===2 && wantedPlay && activeVideos().some(v=>!v.paused&&v.currentTime>.4)", timeout=6000)
@@ -131,6 +128,8 @@ def check_review_fixes(browser, base, key):
         page.wait_for_function("activeVideos()[0]?.readyState >= 2")
         page.locator("#screenbtn").click()
         page.wait_for_function("document.fullscreenElement !== null")
+        expect(page.locator('.app-header #play-rate')).to_be_in_viewport()
+        expect(page.locator('#tabs')).to_be_hidden()
         page.locator(".pdl").click()
         page.locator("#expp .x").click()
         expect(page.locator("#expp")).to_be_hidden()
@@ -143,6 +142,8 @@ def check_review_fixes(browser, base, key):
         page.wait_for_function("activeVideos()[0]?.readyState >= 2")
         page.locator("#screenbtn").click()
         expect(page.locator("#player.expanded")).to_be_visible()
+        expect(page.locator('.app-header #play-bytes')).to_be_in_viewport()
+        expect(page.locator('#tabs')).to_be_hidden()
         page.locator(".pdl").click()
         expect(page.locator("#expp")).to_be_visible()
         page.locator("#expp .x").click()
@@ -366,12 +367,13 @@ def check_drive_trips(browser, base, key):
 def main(root, ffmpeg, chrome, viewer_path, minute_clips=False):
     archive = root / "archive"
     os.environ.update(TSF_ARCHIVE=str(archive), TSF_CACHE=str(root / "cache"),
-                      TSF_SETTINGS=str(root / "settings.json"), TSF_FFMPEG=ffmpeg)
+                      TSF_SETTINGS=str(root / "settings.json"))
     if os.name == "nt":
         sys.modules["fcntl"] = types.ModuleType("fcntl")  # Linux USB management is never started.
     spec = importlib.util.spec_from_file_location("viewer", viewer_path)
     viewer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(viewer)
+    viewer.FFMPEG_BIN = ffmpeg
     viewer.live_status = lambda: {"running": True}
     viewer.ensure_dirs()
     Path(viewer.RES_DIR).mkdir(parents=True, exist_ok=True)

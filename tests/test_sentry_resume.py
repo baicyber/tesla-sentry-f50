@@ -13,11 +13,12 @@ from unittest.mock import Mock, patch
 
 
 def load_viewer(folder):
-    with patch.dict(os.environ, TSF_CACHE=folder, TSF_FFMPEG=sys.executable):
+    with patch.dict(os.environ, TSF_CACHE=folder):
         spec = importlib.util.spec_from_file_location("viewer", Path(__file__).resolve().parents[1] / "sentry-viewer.py")
         viewer = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {"fcntl": types.ModuleType("fcntl")} if os.name == "nt" else {}):
             spec.loader.exec_module(viewer)
+    viewer.FFMPEG_BIN = sys.executable
     return viewer
 
 
@@ -221,6 +222,150 @@ class PreviewQueueTest(unittest.TestCase):
                 self.assertEqual(playback.result(timeout=3), b"part-1")
                 self.assertEqual(background.result(timeout=3), 2 if cache_only else b"part-0")
             self.assertEqual(attempts, [0, 1, 0])
+
+    def test_streaming_part_returns_before_batch_finishes_and_yields_to_other_camera(self):
+        with tempfile.TemporaryDirectory() as folder:
+            viewer = load_viewer(folder)
+            front = Path(folder) / "2026-11-19_14-00-00-front.mp4"
+            back = Path(folder) / "2026-11-19_14-00-00-back.mp4"
+            front.write_bytes(b"front")
+            back.write_bytes(b"back")
+            part0_written = threading.Event()
+            stream_yielded = threading.Event()
+            back_started = threading.Event()
+
+            def encode(fp, quality, prefix, index, duration, transport, ahead, connected, warm, startup_boost):
+                if fp == str(front) and index == 0:
+                    Path(f"{prefix}0.{transport}").write_bytes(b"front-0")
+                    with viewer._part_ready_changed:
+                        viewer._part_ready_changed.notify_all()
+                    part0_written.set()
+                    # Keep running while idle until another camera enters the queue.
+                    deadline = viewer.time.monotonic() + 3
+                    while viewer.time.monotonic() < deadline:
+                        if not connected():
+                            stream_yielded.set()
+                            return
+                        viewer.time.sleep(0.01)
+                    return
+                if fp == str(back) and index == 0:
+                    back_started.set()
+                    Path(f"{prefix}0.{transport}").write_bytes(b"back-0")
+                    with viewer._part_ready_changed:
+                        viewer._part_ready_changed.notify_all()
+
+            with (patch.object(viewer, "preview_cores", return_value=3),
+                  patch.object(viewer, "_encode_preview_parts", side_effect=encode),
+                  ThreadPoolExecutor(max_workers=2) as pool):
+                first = pool.submit(viewer.preview_part, str(front), "480p", 0, 10, "mp4", False, lambda: True)
+                self.assertTrue(part0_written.wait(timeout=3))
+                # First HTTP caller returns immediately while the background stream is still alive.
+                self.assertEqual(first.result(timeout=2), b"front-0")
+                self.assertFalse(stream_yielded.is_set(), "idle background stream should keep encoding")
+                second = pool.submit(viewer.preview_part, str(back), "480p", 0, 10, "mp4", False, lambda: True)
+                self.assertTrue(stream_yielded.wait(timeout=3), "background stream must yield to another camera")
+                self.assertEqual(second.result(timeout=3), b"back-0")
+                self.assertTrue(back_started.is_set())
+
+    def test_streaming_read_ahead_finishes_batch_before_yielding_to_same_priority_peer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            viewer = load_viewer(folder)
+            front = Path(folder) / "2026-11-19_14-00-00-front.mp4"
+            back = Path(folder) / "2026-11-19_14-00-00-back.mp4"
+            front.write_bytes(b"front")
+            back.write_bytes(b"back")
+            part0_written = threading.Event()
+            peer_queued = threading.Event()
+            batch_finished_uninterrupted = threading.Event()
+
+            def encode(fp, quality, prefix, index, duration, transport, ahead, connected, warm, startup_boost):
+                if fp == str(front) and index == 0:
+                    Path(f"{prefix}0.{transport}").write_bytes(b"front-0")
+                    with viewer._part_ready_changed:
+                        viewer._part_ready_changed.notify_all()
+                    part0_written.set()
+                    self.assertTrue(peer_queued.wait(timeout=3))
+                    # Same-priority peer read-ahead must NOT kill our streaming batch after part 0.
+                    self.assertTrue(connected(), "same-priority read-ahead prematurely killed streaming batch")
+                    Path(f"{prefix}1.{transport}").write_bytes(b"front-1")
+                    batch_finished_uninterrupted.set()
+                    return
+                if fp == str(back) and index == 0:
+                    Path(f"{prefix}0.{transport}").write_bytes(b"back-0")
+
+            with (patch.object(viewer, "preview_cores", return_value=3),
+                  patch.object(viewer, "_encode_preview_parts", side_effect=encode),
+                  ThreadPoolExecutor(max_workers=2) as pool):
+                first = pool.submit(viewer.preview_part, str(front), "480p", 0, 10, "mp4", True, lambda: True)
+                self.assertTrue(part0_written.wait(timeout=3))
+                self.assertEqual(first.result(timeout=2), b"front-0")
+                second = pool.submit(viewer.preview_part, str(back), "480p", 0, 10, "mp4", True, lambda: True)
+                with viewer._part_queue_changed:
+                    self.assertTrue(viewer._part_queue_changed.wait_for(lambda: len(viewer._part_waiters) == 1, timeout=3))
+                peer_queued.set()
+                self.assertTrue(batch_finished_uninterrupted.wait(timeout=3))
+                self.assertEqual(second.result(timeout=3), b"back-0")
+
+    def test_lowest_remaining_buffer_camera_runs_first_within_same_priority(self):
+        with tempfile.TemporaryDirectory() as folder:
+            viewer = load_viewer(folder)
+            cams = {}
+            for name in ("front", "back", "left_repeater"):
+                p = Path(folder) / f"2026-11-19_14-00-00-{name}.mp4"
+                p.write_bytes(name.encode())
+                cams[name] = str(p)
+            gate = threading.Event()
+            order = []
+
+            def encode(fp, quality, prefix, index, duration, transport, ahead, connected, warm, startup_boost):
+                cam = viewer.cam_of(os.path.basename(fp))
+                order.append(cam)
+                if cam == "front":
+                    gate.wait(timeout=3)
+                Path(f"{prefix}{index}.{transport}").write_bytes(cam.encode())
+
+            with (patch.object(viewer, "preview_cores", return_value=3),
+                  patch.object(viewer, "_encode_preview_parts", side_effect=encode),
+                  ThreadPoolExecutor(max_workers=3) as pool):
+                f1 = pool.submit(viewer.preview_part, cams["front"], "720p", 0, 10, "mp4", True, lambda: True, lead_ds=50)
+                with viewer._part_queue_changed:
+                    viewer._part_queue_changed.wait_for(lambda: len(viewer._part_waiters) == 1, timeout=3)
+                # Queue back (healthy 6.0s lead) before left_repeater (urgent 0.8s lead).
+                f2 = pool.submit(viewer.preview_part, cams["back"], "720p", 0, 10, "mp4", True, lambda: True, lead_ds=60)
+                with viewer._part_queue_changed:
+                    viewer._part_queue_changed.wait_for(lambda: len(viewer._part_waiters) == 2, timeout=3)
+                f3 = pool.submit(viewer.preview_part, cams["left_repeater"], "720p", 0, 10, "mp4", True, lambda: True, lead_ds=8)
+                with viewer._part_queue_changed:
+                    viewer._part_queue_changed.wait_for(lambda: len(viewer._part_waiters) == 3, timeout=3)
+                gate.set()
+                self.assertEqual(f1.result(timeout=3), b"front")
+                self.assertEqual(f3.result(timeout=3), b"left_repeater")
+                self.assertEqual(f2.result(timeout=3), b"back")
+            self.assertEqual(order, ["front", "left_repeater", "back"])
+
+    def test_big_core_rotation_excludes_little_cores_under_normal_and_thermal_modes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            viewer = load_viewer(folder)
+            seen_masks = []
+
+            def fake_popen(args, **kwargs):
+                # Pin wrapper is either ['taskset', '-c', mask, ...] or [python, '-c', script, mask, ...]
+                mask_str = args[2] if args[0] == "taskset" else args[3]
+                seen_masks.append(tuple(int(x) for x in mask_str.split(",")))
+                proc = Mock()
+                proc.poll.return_value = 0
+                proc.wait.return_value = 0
+                return proc
+
+            with (patch.object(viewer.os, "sched_getaffinity", return_value=set(range(8)), create=True),
+                  patch.object(viewer.subprocess, "Popen", side_effect=fake_popen)):
+                for cores, pref in ((3, viewer._BIG_CORE_ROTATIONS[0]), (3, viewer._BIG_CORE_ROTATIONS[1]),
+                                    (2, viewer._BIG_CORE_ROTATIONS_2[0]), (2, viewer._BIG_CORE_ROTATIONS_2[1])):
+                    with patch.object(viewer, "preview_cores", return_value=cores):
+                        self.assertTrue(viewer.run_variant(["ffmpeg", "-i", "in", "out"], lambda: True, preferred=pref))
+            self.assertEqual(seen_masks, [(4, 5, 6), (5, 6, 7), (4, 5), (6, 7)])
+            for mask in seen_masks:
+                self.assertTrue(all(cpu >= 4 for cpu in mask), f"little core leaked into mask: {mask}")
 
 
 if __name__ == "__main__":

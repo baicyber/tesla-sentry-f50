@@ -13,6 +13,8 @@ from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from playwright.sync_api import expect, sync_playwright
+from theme_controls import check_theme_controls, check_theme_before_body
+from viewer_performance_browser import verify_browser_reload, verify_language_and_rows, verify_text_cache
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -35,6 +37,7 @@ def main(chrome, output):
         spec.loader.exec_module(viewer)
         viewer.live_status = lambda: {'running': True}
         viewer.ensure_dirs()
+        (Path(viewer.FILES_DIR) / 'theme-check.txt').write_text('sample', encoding='utf-8')
         viewer.storage_allocation.snapshot = lambda *args: dict(total_bytes=128 << 30,
             free_bytes=50 << 30, budget_bytes=120 << 30, usb_bytes=64 << 30,
             archive_bytes=40 << 30, drive_bytes=18 << 30, cache_gib=4)
@@ -65,18 +68,30 @@ def main(chrome, output):
                 page.locator('[name=u]').fill('admin')
                 page.locator('[name=p]').fill('isolated-storage-test')
                 page.locator('button[type=submit]').click()
+                page.wait_for_url(base + '/')
+                default_tag = verify_text_cache(page.request, base)
+                verify_browser_reload(page, base)
+                verify_language_and_rows(browser, page.context.storage_state(), base)
+                viewer.save_settings({'ui_style': 'apple'})
+                try:
+                    changed = page.request.get(base + '/', headers={'Accept-Encoding':'gzip', 'If-None-Match':default_tag})
+                    assert changed.status == 200 and changed.headers['etag'] != default_tag
+                    check_theme_before_body(browser, page.context.storage_state(), base)
+                finally:
+                    viewer.save_settings({'ui_style': 'default'})
                 page.locator('#gear').click()
                 page.locator('#st-storage').click()
                 expect(page.locator('#storage-archive')).to_have_value('34')
                 expect(page.locator('#storage-save')).to_be_enabled()
-                expect(page.locator('#storage-budget')).to_have_text('还可分配 8.0 GiB')
+                expect(page.locator('.storage-summary')).to_contain_text('可分配总量 120.0 GiB')
+                expect(page.locator('#storage-budget')).to_have_text('未分配余额 8.0 GiB')
                 page.locator('#storage-drive').fill('20')
-                expect(page.locator('#storage-budget')).to_have_text('还可分配 8.0 GiB')
+                expect(page.locator('#storage-budget')).to_have_text('未分配余额 8.0 GiB')
                 page.locator('.storage-advanced').filter(has=page.locator('#storage-minimum')).locator('summary').click()
                 page.locator('#storage-minimum').fill('6')
-                expect(page.locator('#storage-budget')).to_have_text('还可分配 8.0 GiB')
+                expect(page.locator('#storage-budget')).to_have_text('未分配余额 8.0 GiB')
                 page.locator('#storage-usb').fill('65')
-                expect(page.locator('#storage-budget')).to_have_text('还可分配 7.0 GiB')
+                expect(page.locator('#storage-budget')).to_have_text('未分配余额 7.0 GiB')
                 expect(page.locator('#storage-used-usb')).to_have_text('3.0 / 64 GiB')
                 expect(page.locator('#storage-used-drive')).to_have_text('18.0 / 12 GiB')
                 page.locator('#storage-archive').fill('60')
@@ -85,7 +100,7 @@ def main(chrome, output):
                 expect(page.locator('#storage-plan')).to_be_hidden()
                 expect(page.locator('#storage-budget')).to_contain_text('请输入有效的整数容量')
                 page.get_by_role('button', name='重新加载', exact=True).click()
-                expect(page.locator('#storage-budget')).to_have_text('还可分配 8.0 GiB')
+                expect(page.locator('#storage-budget')).to_have_text('未分配余额 8.0 GiB')
                 page.locator('.storage-advanced').filter(has=page.locator('#storage-minimum')).locator('summary').click()
                 assert page.locator('.storage-nested #storage-drive').count() == 1
                 for width in (1440, 1024, 768, 320):
@@ -165,6 +180,14 @@ def main(chrome, output):
                 mobile.locator('#gear').click()
                 mobile.locator('#st-storage').click()
                 expect(mobile.locator('#storage-save')).to_be_enabled()
+                for field in ('archive', 'drive', 'reserve', 'usb'):
+                    control = mobile.locator('#storage-' + field)
+                    control.focus()
+                    expect(control).to_have_attribute('aria-describedby', 'storage-budget')
+                    expect(mobile.locator('.storage-row:focus-within + #storage-budget')).to_be_visible()
+                mobile.set_viewport_size({'width': 1024, 'height': 844})
+                expect(mobile.locator('#storage-budget-home > #storage-budget')).to_be_visible()
+                mobile.set_viewport_size({'width': 390, 'height': 844})
                 mobile_help = mobile.locator('[data-help=drive]')
                 assert mobile_help.bounding_box()['width'] >= 44
                 assert mobile_help.bounding_box()['height'] >= 44
@@ -198,10 +221,21 @@ def main(chrome, output):
                 translated.goto(base)
                 expect(translated.locator('#tabs [data-category=SentryClips] .tl')).to_have_text(viewer.LANG_TABLE['en']['哨兵告警'])
                 translated.locator('#gear').click()
+                expect(translated.locator('.storage-summary')).to_contain_text('Total allocatable space 120.0 GiB')
+                expect(translated.locator('#storage-budget')).to_contain_text('Unallocated space')
                 for identifier,key in (('files','车机U盘'),('archive','归档区'),('skin','网页背景')):
                     expect(translated.locator('#st-'+identifier)).to_have_text(viewer.LANG_TABLE['en'][key])
+                translated.locator('#st-archive').click()
+                row = translated.locator('#file-list .item').filter(has_text='theme-check.txt')
+                for action, icon in [('下载', 'download'), ('删除', 'trash')]:
+                    control = row.get_by_role('button', name=viewer.LANG_TABLE['en'][action], exact=True)
+                    expect(control.locator('svg')).to_have_attribute('aria-hidden', 'true')
+                    expect(control.locator('use')).to_have_attribute('href', '#i-' + icon)
                 english.close()
                 touch.close()
+                page.set_viewport_size({"width": 1280, "height": 900})
+                page.goto(base)
+                check_theme_controls(page)
                 browser.close()
             print('PASS: allocation math, nested limits, actual usage, 14px help and touch targets, layout at 4 widths, save, validation, confirmation, stale revisions, request protection, USB refusal')
         finally:
