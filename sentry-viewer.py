@@ -504,7 +504,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.26.041"
+APP_VERSION = "2026.11.26.042"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3229,6 +3229,13 @@ body.settings-open { overflow:hidden; }
 .storage-tip { z-index:240; }
 :root:fullscreen .app-header,body:has(.player.expanded) .app-header { display:none; }
 :root:fullscreen .player,.player.expanded { top:0; height:100%; }
+/* 不支持屏幕方向锁的浏览器 (iOS Safari) 全屏时整体旋转 90°, 强制横向铺满 */
+.player.force-landscape {
+  top:0 !important; left:0 !important; right:auto !important; bottom:auto !important;
+  width:100vh; width:100dvh; height:100vw;
+  transform-origin:top left; transform:rotate(90deg) translateY(-100%);
+  z-index:1000;
+}
 @media (max-width:1199px) {
   .app-header { padding-inline:18px; gap:10px; }
   .app-header .tabs { gap:6px; }
@@ -4397,9 +4404,8 @@ function gridDims(n) {
   if (n <= 1) return [1, 1];
   if (n === 2) return [2, 1];
   if (n <= 4) return [2, 2];
-  if (n <= 6) return window.innerWidth <= 700 ? [2, 3] : [3, 2];
-  const c = window.innerWidth <= 700 ? 2 : 3;
-  return [c, Math.ceil(n / c)];
+  /* 手机与电脑保持一致: 6 路固定 3 列 2 行, 不再在窄屏切成 2 列 3 行 */
+  return [3, Math.ceil(n / 3)];
 }
 
 async function load() {
@@ -5152,6 +5158,10 @@ function dropPrefetch() {
 function layoutPlayer() {
   const grid = byId('vgrid'), count = grid.children.length;
   const player = byId('player');
+  /* 不支持屏幕方向锁时用 CSS 旋转播放器强制横屏, 此时布局宽高要按旋转前的本地尺寸算 */
+  const rotated = player.classList.contains('force-landscape');
+  const viewW = rotated ? player.clientWidth : innerWidth;
+  const viewH = rotated ? player.clientHeight : innerHeight;
   const listVisible = matchMedia('(max-width:999px)').matches
     ? player.classList.contains('library-open') : !player.classList.contains('library-collapsed');
   player.querySelector('.list-toggle').setAttribute('aria-expanded', String(listVisible));
@@ -5160,13 +5170,15 @@ function layoutPlayer() {
   const width = grid.clientWidth;
   const video = grid.querySelector('video');
   const ratio = video && video.videoWidth ? video.videoHeight / video.videoWidth : 0.75;
-  const landscapePhone = matchMedia('(orientation:landscape) and (max-height:550px)').matches;
+  const landscapePhone = (viewW > viewH && viewH <= 550) ||
+    matchMedia('(orientation:landscape) and (max-height:550px)').matches;
   const immersive = !!document.fullscreenElement || byId('player').classList.contains('expanded');
-  const top = document.querySelector('.player .ptop').getBoundingClientRect().bottom;
+  const ptop = document.querySelector('.player .ptop');
+  const top = rotated ? ptop.offsetHeight : ptop.getBoundingClientRect().bottom;
   const controls = document.querySelector('.transport').offsetHeight + document.querySelector('.video-toolbar').offsetHeight;
-  const available = innerHeight - top - controls - 55;
-  const limit = landscapePhone ? Math.max(100, innerHeight - top - 16) :
-    immersive ? Math.max(160, available) : Math.max(160, Math.min(innerHeight * .58, available));
+  const available = viewH - top - controls - 55;
+  const limit = landscapePhone ? Math.max(100, viewH - top - 16) :
+    immersive ? Math.max(160, available) : Math.max(160, Math.min(viewH * .58, available));
   grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0,1fr))';
   grid.style.gridAutoRows = Math.max(1, Math.min(width / cols * ratio, limit / rows)) + 'px';
 }
@@ -6492,6 +6504,9 @@ function updateHud(t) {
   renderHud(ans);
 }
 window.addEventListener('resize', () => { if (document.getElementById('player').classList.contains('open')) layoutPlayer(); });
+window.addEventListener('orientationchange', () => setTimeout(() => {
+  if (document.getElementById('player').classList.contains('open')) syncForcedLandscape();
+}, 150));
 
 let liveTimer = null, liveReading = false, liveStream = null, liveDirty = false, liveSignature = '';
 const demandClient = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, '0')).join('');
@@ -7379,7 +7394,7 @@ function closePlayer() {
   closePlayback(); liveMode = false; liveView = 'all';
   byId('vgrid').replaceChildren();
   byId('telhud').classList.remove('show');
-  byId('player').classList.remove('open', 'expanded', 'library-open');
+  byId('player').classList.remove('open', 'expanded', 'library-open', 'force-landscape');
   byId('livep').hidden = true;
   document.body.classList.remove('watching');
   render(currentCat); window.scrollTo(0, listScroll);
@@ -7444,16 +7459,56 @@ byId('seek').onchange = function() {
   finishSeek();
 };
 byId('seek').onblur = finishSeek;
-document.addEventListener('fullscreenchange', () => requestAnimationFrame(layoutPlayer));
-byId('screenbtn').onclick = async () => {
+document.addEventListener('fullscreenchange', () => syncForcedLandscape());
+let landscapeLocked = false;
+async function tryLockLandscape() {
+  try {
+    if (screen.orientation && screen.orientation.lock) {
+      await screen.orientation.lock('landscape');
+      landscapeLocked = true;
+      return true;
+    }
+  } catch (e) {}
+  landscapeLocked = false;
+  return false;
+}
+/* 全屏时强制横向: 优先用屏幕方向锁; iOS 等不支持时把播放器整体旋转 90° */
+function syncForcedLandscape() {
   const player = byId('player');
-  if (document.fullscreenElement) { await document.exitFullscreen(); return; }
+  const fullscreen = !!document.fullscreenElement || player.classList.contains('expanded');
+  if (!fullscreen || landscapeLocked) player.classList.remove('force-landscape');
+  else if (matchMedia('(pointer:coarse)').matches && matchMedia('(orientation:portrait)').matches) player.classList.add('force-landscape');
+  else player.classList.remove('force-landscape');
+  layoutPlayer();
+}
+async function togglePlayerFullscreen() {
+  const player = byId('player');
+  const unlock = () => {
+    if (screen.orientation && screen.orientation.unlock) { try { screen.orientation.unlock(); } catch (e) {} }
+    landscapeLocked = false;
+  };
+  if (document.fullscreenElement) {
+    unlock();
+    try { await document.exitFullscreen(); } catch (e) {}
+    syncForcedLandscape();
+    return;
+  }
+  if (player.classList.contains('expanded')) {
+    unlock();
+    player.classList.remove('expanded', 'force-landscape');
+    layoutPlayer();
+    return;
+  }
   const root = document.documentElement;
   if (root.requestFullscreen) {
-    try { await root.requestFullscreen(); return; } catch (e) {}
+    try { await root.requestFullscreen(); } catch (e) {}
   }
-  player.classList.toggle('expanded'); layoutPlayer();
-};
+  /* iOS Safari 不支持元素全屏, 退回整屏放大模式, 再用 CSS 旋转补足横屏 */
+  if (!document.fullscreenElement) player.classList.add('expanded');
+  await tryLockLandscape();
+  syncForcedLandscape();
+}
+byId('screenbtn').onclick = togglePlayerFullscreen;
 let pictureHoldTimer = 0, pictureHolding = false, picturePrevPlaying = false, suppressPictureClick = false;
 function releasePictureSpeed() {
   clearTimeout(pictureHoldTimer); pictureHoldTimer = 0;
@@ -8269,7 +8324,7 @@ async function storageResize() {
   try {
     const result = await storageFetch('/api/storage/resize', {usb_gib:Number(document.getElementById('storage-usb').value), revision:storageData.revision, clear_confirmed:true});
     storageShowJob(result.job);
-  } catch (error) { storageMessage(error.message, true); storageDisable(false); }
+  } catch (error) { storageFail(error); }
 }
 async function storageFormat() {
   if (!storageData) return;
@@ -8279,7 +8334,13 @@ async function storageFormat() {
   try {
     const result = await storageFetch('/api/storage/format', {revision:storageData.revision, clear_confirmed:true});
     storageShowJob(result.job);
-  } catch (error) { storageMessage(error.message, true); storageDisable(false); }
+  } catch (error) { storageFail(error); }
+}
+/* 上一次任务完成会让 revision 变化; 自动重新读一次配置, 用户不必手动刷新页面再点 */
+function storageFail(error) {
+  storageMessage(error.message, true);
+  storageDisable(false);
+  if (error && /重新加载/.test(error.message)) setTimeout(storageLoad, 1200);
 }
 
 /* ---------- 外置卡与归档同步 ---------- */
@@ -12595,7 +12656,9 @@ _DEDUP = {"t": 0.0}
 
 _storage_edit_lock = threading.RLock()
 _storage_job_lock = threading.Lock()
-_storage_job = {"state": "idle", "message": "", "percent": 0}
+_storage_job = {"state": "idle", "message": "", "percent": 0, "started": 0.0}
+# 后台重建卡死时线程不会回来; 超过这个时间就解除占用, 不能把「调整/格式化」永久锁死
+STORAGE_JOB_STALE_S = max(60, int(os.environ.get("TSF_STORAGE_JOB_STALE_S", "1200")))
 if storage_resize.pending_recovery(IMG):
     # 先试着自愈: 导出状态本来就正常的话, 那些 .resize-* 只是残骸, 不该把功能锁死
     try:
@@ -12606,7 +12669,7 @@ if storage_resize.pending_recovery(IMG):
     if _repair_note:
         print('storage: ' + _repair_note, flush=True)
     else:
-        _storage_job.update(state='recovery',
+        _storage_job.update(state='recovery', started=0.0,
                             message='检测到旧版容量调整残留，点「调整 U 盘容量」或「格式化 U 盘」会自动清理')
 
 
@@ -12640,11 +12703,32 @@ refresh_storage_settings()
 
 def storage_job():
     with _storage_job_lock:
-        return dict(_storage_job)
+        job = dict(_storage_job)
+    # 线程若因异常/系统挂起没回来, 不能让「running」永久占位
+    started = job.get('started') or 0.0
+    if job['state'] == 'running' and started and time.time() - started > STORAGE_JOB_STALE_S:
+        with _storage_job_lock:
+            if _storage_job['state'] == 'running' and _storage_job.get('started') == started:
+                _storage_job.update(state='error', started=0.0,
+                                    message='上一次存储任务超时未结束，已解除占用，请重新操作')
+            return dict(_storage_job)
+    return job
 
 
 def storage_busy():
-    return storage_job()['state'] in ('running', 'recovery')
+    # recovery 只是旧版残骸提示, 不是正在执行的任务; 调整/格式化会先自动清理再继续
+    return storage_job()['state'] == 'running'
+
+
+def _storage_wait_for_job(timeout=20.0):
+    """上一任务还在跑时先等它结束 (重复点击/紧接着操作), 而不是直接报错。"""
+    deadline = time.time() + timeout
+    while storage_busy():
+        if time.time() >= deadline:
+            job = storage_job()
+            raise ValueError('上一个存储任务仍在进行（%s %d%%），请等它完成后再操作'
+                             % (job.get('message') or '处理中', int(job.get('percent') or 0)))
+        time.sleep(0.3)
 
 
 def storage_status():
@@ -13095,7 +13179,7 @@ def storage_apply(body):
 def _storage_create_image(size):
     """全新安装首次创建车机镜像: 不需要已有镜像, 建好后直接恢复 USB 导出。"""
     with _storage_job_lock:
-        _storage_job.update(state='running', message='正在创建车机 U 盘', percent=0)
+        _storage_job.update(state='running', message='正在创建车机 U 盘', percent=0, started=time.time())
 
     def update(message, percent):
         with _storage_job_lock:
@@ -13132,7 +13216,7 @@ def _storage_create_image(size):
                         subprocess.run(['sh', gadget, 'on'], capture_output=True, text=True, timeout=90)
                     _IMG_USED_CACHE.update(t=0.0, path='', v=None)
                     with _storage_job_lock:
-                        _storage_job.update(state='done', message='创建完成', percent=100)
+                        _storage_job.update(state='done', message='创建完成', percent=100, started=0.0)
                 finally:
                     if os.path.exists(temporary):
                         try:
@@ -13142,7 +13226,8 @@ def _storage_create_image(size):
                     _release_usb_flock()
         except Exception as exc:
             with _storage_job_lock:
-                _storage_job.update(state='error', message=str(exc) or '创建车机 U 盘失败')
+                _storage_job.update(state='error', started=0.0,
+                                    message=str(exc) or '创建车机 U 盘失败')
 
     threading.Thread(target=work, daemon=True, name='storage-create').start()
     return dict(ok=True, job=storage_job())
@@ -13151,7 +13236,7 @@ def _storage_create_image(size):
 def _storage_run_rewrite(size, action):
     """后台重建车机镜像 (调整容量 / 格式化共用: 强制断连 -> 删除 -> 重建 -> 导出)。"""
     with _storage_job_lock:
-        _storage_job.update(state='running', message='准备' + action, percent=0)
+        _storage_job.update(state='running', message='准备' + action, percent=0, started=time.time())
 
     def update(message, percent):
         with _storage_job_lock:
@@ -13192,7 +13277,7 @@ def _storage_run_rewrite(size, action):
             # 新镜像的用量缓存必须立刻失效, 否则面板会继续显示旧镜像的占用
             _IMG_USED_CACHE.update(t=0.0, path='', v=None)
             with _storage_job_lock:
-                _storage_job.update(state='done', message=action + '完成', percent=100)
+                _storage_job.update(state='done', message=action + '完成', percent=100, started=0.0)
         except Exception as exc:
             recovery = recovery or storage_resize.pending_recovery(IMG)
             message = str(exc)
@@ -13202,13 +13287,14 @@ def _storage_run_rewrite(size, action):
                 message = ('%s失败：USB 导出仍被车机占用 (Resource busy)。'
                            '请在车机上弹出 U 盘/拔插一次数据线后重试；若仍失败，重启设备再试。' % action)
             with _storage_job_lock:
-                _storage_job.update(state='recovery' if recovery else 'error', message=message)
+                _storage_job.update(state='recovery' if recovery else 'error', started=0.0, message=message)
 
     try:
         threading.Thread(target=work, daemon=True, name='storage-rewrite').start()
     except Exception:
         with _storage_job_lock:
-            _storage_job.update(state='error', message='无法启动%s，请稍后重试' % action)
+            _storage_job.update(state='error', started=0.0,
+                                message='无法启动%s，请稍后重试' % action)
         raise
     return dict(ok=True, job=storage_job())
 
@@ -13243,11 +13329,9 @@ def storage_start_resize(body):
     # Old pages only acknowledged pausing recording and must never authorize erasure.
     if not isinstance(body, dict) or body.get('clear_confirmed') is not True:
         raise ValueError('请确认清空车机 U 盘中的全部内容后再调整容量')
-    if storage_busy():
-        raise ValueError('已有存储任务在进行')
+    _storage_wait_for_job()
     with _storage_edit_lock:
-        if storage_busy():
-            raise ValueError('已有存储任务在进行')
+        _storage_wait_for_job()
         repaired = _storage_recover_stale()
         if repaired:
             with _storage_job_lock:
@@ -13281,11 +13365,9 @@ def storage_start_format(body):
     """
     if not isinstance(body, dict) or body.get('clear_confirmed') is not True:
         raise ValueError('请确认清空车机 U 盘中的全部内容后再格式化')
-    if storage_busy():
-        raise ValueError('已有存储任务在进行')
+    _storage_wait_for_job()
     with _storage_edit_lock:
-        if storage_busy():
-            raise ValueError('已有存储任务在进行')
+        _storage_wait_for_job()
         repaired = _storage_recover_stale()
         if repaired:
             with _storage_job_lock:
