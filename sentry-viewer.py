@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.014"
+APP_VERSION = "2026.11.25.015"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2662,7 +2662,7 @@ body.watching { overflow:hidden; }
 .watch-live .live-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .watch-live .live-row #lv-status { margin-right:auto; }
 .watch-live .live-iv-lab { font-size:12px; color:var(--muted); }
-.watch-live .live-hint { flex:0 1 340px; min-width:0; margin-left:2px; font-size:12px; line-height:1.5; color:var(--muted); }
+.watch-live .live-hint { display:block; width:100%; margin-top:6px; font-size:12px; line-height:1.6; color:var(--muted); }
 .watch-live :disabled { opacity:.5; cursor:default; }
 /* 亮度竖向滑块 */
 .viewtools .bpop { display:none; position:absolute; bottom:calc(100% + 8px); right:0; z-index:12; flex-direction:column; align-items:center; gap:6px; padding:8px 4px 6px; border:1px solid var(--line2); border-radius:8px; background:var(--panel); box-shadow:0 6px 18px rgba(0,0,0,.28); }
@@ -3279,8 +3279,8 @@ body.settings-open { overflow:hidden; }
       <div id="livep" class="watch-live" hidden>
         <div class="live-row"><span id="lv-status"></span><button id="lv-back" onclick="backToLatest()">回到最新</button>
         <span class="live-iv-lab">间隔</span><select id="lv-iv" aria-label="检查间隔" onchange="liveRestart()"><option value="3">3 秒</option><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">1 分钟</option><option value="0">仅手动</option></select>
-        <button onclick="liveTick()">立即更新</button>
-        <div class="live-hint">「间隔」是自动检查新片段的频率：间隔越短，新片段出现得越快，也更耗流量；选「仅手动」后只有点「立即更新」才会刷新。</div></div>
+        <button onclick="liveTick()">立即更新</button></div>
+        <div class="live-hint">「间隔」是自动检查新片段的频率：间隔越短，新片段出现得越快，也更耗流量；选「仅手动」后只有点「立即更新」才会刷新。</div>
       </div>
     </section>
     <div class="infocard" id="infocard">
