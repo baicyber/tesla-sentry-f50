@@ -5,6 +5,7 @@
 """
 import base64
 import glob
+import gzip
 import datetime
 import json
 import os
@@ -12,6 +13,7 @@ import re
 import hmac
 import hashlib
 from functools import lru_cache
+from collections import OrderedDict
 import math
 import shutil
 import signal
@@ -243,8 +245,71 @@ for language, recent_label in (
     ("ru", "Последний час"),
 ):
     LANG_TABLE[language].update({"最近1小时": recent_label})
+for language, labels in {
+    "de": {
+        "可分配总量": "Zuweisbare Gesamtkapazität", "未分配余额": "Noch nicht zugewiesen",
+        "正在加载录像": "Aufnahmen werden geladen", "录像加载失败": "Aufnahmen konnten nicht geladen werden",
+        "重试": "Erneut versuchen", "存储用量详情": "Details zur Speicherbelegung",
+        "U盘根目录": "Stammverzeichnis des USB-Laufwerks",
+    },
+    "en": {
+        "可分配总量": "Total allocatable space", "未分配余额": "Unallocated space",
+        "正在加载录像": "Loading recordings", "录像加载失败": "Could not load recordings",
+        "重试": "Retry", "存储用量详情": "Storage usage details",
+        "U盘根目录": "USB drive root",
+    },
+    "es": {
+        "可分配总量": "Espacio total asignable", "未分配余额": "Espacio sin asignar",
+        "正在加载录像": "Cargando grabaciones", "录像加载失败": "No se pudieron cargar las grabaciones",
+        "重试": "Reintentar", "存储用量详情": "Detalles del uso de almacenamiento",
+        "U盘根目录": "Raíz de la unidad USB",
+    },
+    "fr": {
+        "可分配总量": "Espace total allouable", "未分配余额": "Espace non alloué",
+        "正在加载录像": "Chargement des enregistrements", "录像加载失败": "Impossible de charger les enregistrements",
+        "重试": "Réessayer", "存储用量详情": "Détails de l’utilisation du stockage",
+        "U盘根目录": "Racine du lecteur USB",
+    },
+    "it": {
+        "可分配总量": "Spazio totale assegnabile", "未分配余额": "Spazio non assegnato",
+        "正在加载录像": "Caricamento delle registrazioni", "录像加载失败": "Impossibile caricare le registrazioni",
+        "重试": "Riprova", "存储用量详情": "Dettagli sull’utilizzo dello spazio",
+        "U盘根目录": "Directory principale dell’unità USB",
+    },
+    "ja": {
+        "可分配总量": "割り当て可能な総容量", "未分配余额": "未割り当て容量",
+        "正在加载录像": "録画を読み込み中", "录像加载失败": "録画を読み込めませんでした",
+        "重试": "再試行", "存储用量详情": "ストレージ使用量の詳細",
+        "U盘根目录": "USB ドライブのルート",
+    },
+    "ko": {
+        "可分配总量": "할당 가능한 총 용량", "未分配余额": "미할당 용량",
+        "正在加载录像": "녹화 영상 불러오는 중", "录像加载失败": "녹화 영상을 불러올 수 없습니다",
+        "重试": "다시 시도", "存储用量详情": "저장 공간 사용량 상세 정보",
+        "U盘根目录": "USB 드라이브 최상위 폴더",
+    },
+    "nl": {
+        "可分配总量": "Totaal toewijsbare ruimte", "未分配余额": "Niet-toegewezen ruimte",
+        "正在加载录像": "Opnamen laden", "录像加载失败": "Kan de opnamen niet laden",
+        "重试": "Opnieuw proberen", "存储用量详情": "Details van het opslaggebruik",
+        "U盘根目录": "Hoofdmap van het USB-station",
+    },
+    "ru": {
+        "可分配总量": "Всего доступно для распределения", "未分配余额": "Нераспределённое место",
+        "正在加载录像": "Загрузка записей", "录像加载失败": "Не удалось загрузить записи",
+        "重试": "Повторить", "存储用量详情": "Сведения об использовании хранилища",
+        "U盘根目录": "Корень USB-накопителя",
+    },
+}.items():
+    LANG_TABLE[language].update(labels)
 # 注入页面用的 JSON (预生成, 避免每次请求都序列化)
-I18N_JS = json.dumps(LANG_TABLE, ensure_ascii=False, separators=(",", ":"))
+LANG_RETRY = {"en":"Language download failed. Please retry.", "de":"Sprachpaket konnte nicht geladen werden. Bitte erneut versuchen.",
+              "es":"No se pudo descargar el idioma. Inténtalo de nuevo.", "fr":"Échec du chargement de la langue. Réessayez.",
+              "it":"Download della lingua non riuscito. Riprova.", "ja":"言語の読み込みに失敗しました。もう一度お試しください。",
+              "ko":"언어를 불러오지 못했습니다. 다시 시도하세요.", "nl":"Taalpakket laden mislukt. Probeer het opnieuw.",
+              "ru":"Не удалось загрузить язык. Попробуйте ещё раз."}
+for language, label in LANG_RETRY.items():
+    LANG_TABLE[language]["语言包加载失败，请重试"] = label
 LANG_JS = json.dumps([[c, n] for c, n in LANG_NAMES], ensure_ascii=False, separators=(",", ":"))
 MAX_UPLOAD = 100 * 1024 * 1024  # 通用文件上传上限 100MB (皮肤/音频有自己的更小限制)
 MAX_JSON = 1024 * 1024          # 普通 JSON 接口请求体上限 1MB (文件管理/改密码/推送配置等)
@@ -254,7 +319,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2.8.46"
+APP_VERSION = "26.0.22"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -1274,27 +1339,138 @@ SPONSOR_IMGS = {
 SPONSOR_BYTES = {k: base64.b64decode(v.split(",", 1)[1]) for k, v in SPONSOR_IMGS.items()}
 
 
-HTML = r"""<!DOCTYPE html>
-<html lang="zh"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>哨兵一剪梅</title>
-<style id="base">
-:root {
+THEME_HEAD = r"""<meta name="color-scheme" content="light dark">
+<script>
+const STYLE_KEY = 'tsf_style';
+const STYLE_LIST = ['default', 'apple', 'claude', 'pixel'];
+const systemDarkTheme = window.matchMedia && matchMedia('(prefers-color-scheme: dark)');
+let themeMode = 'auto', initialStyle = '__DEVICE_STYLE__';
+try {
+  const savedMode = localStorage.getItem('tsf_theme');
+  if (savedMode === 'light' || savedMode === 'dark') themeMode = savedMode;
+  const savedStyle = localStorage.getItem(STYLE_KEY);
+  if (STYLE_LIST.includes(savedStyle)) initialStyle = savedStyle;
+} catch (e) {}
+function paintTheme() {
+  document.documentElement.dataset.theme = themeMode === 'auto'
+    ? (systemDarkTheme && systemDarkTheme.matches ? 'dark' : 'light') : themeMode;
+}
+function cycleTheme() {
+  themeMode = { auto:'light', light:'dark', dark:'auto' }[themeMode];
+  try { localStorage.setItem('tsf_theme', themeMode); } catch (e) {}
+  paintTheme();
+  if (typeof updateThemeButton === 'function') updateThemeButton();
+}
+paintTheme();
+if (initialStyle !== 'default') document.documentElement.dataset.style = initialStyle;
+if (systemDarkTheme) {
+  const followSystem = () => { if (themeMode === 'auto') paintTheme(); };
+  if (systemDarkTheme.addEventListener) systemDarkTheme.addEventListener('change', followSystem);
+  else if (systemDarkTheme.addListener) systemDarkTheme.addListener(followSystem);
+}
+</script><style>
+:root, .stylepick [data-style="default"]:not(.on) .sw {
   color-scheme: dark;
-  --bg:#0e1216; --headbg:#171d24; --panel:#1c232c; --panel2:#232b35; --chipbg:#1e252e;
-  --line:#232b34; --line2:#2a333d; --text:#e8eaed; --muted:#98a4b0; --muted2:#8b96a3;
-  --accent:#e8443f; --blue:#2f6ee0; --shadow:0 4px 14px #00000055; --headline:#ffffff0d;
+  --bg:#151d25; --headbg:#1b2630; --panel:#1b2630; --panel2:#243340; --chipbg:#243340;
+  --line:#344653; --line2:#2a3b48; --text:#e5edf3; --muted:#a4b5c2; --muted2:#96aab9;
+  --accent:#1598ba; --accent-text:#70c6dd; --blue:#53b3d2; --selected:#173d4c; --danger:#db6565; --danger-text:#ffa6a6;
+  --shadow:none; --headline:#ffffff0d;
   /* 播放器子页面专用 */
   --stage:#0d1117;                        /* 视频区域始终深色, 两种主题都不变 */
   --amberbg:rgba(245,158,11,.14); --amber:#eab063; --amberb:#f7c67e; --amberline:rgba(245,158,11,.22);
 }
-html[data-theme="light"] {
+html[data-theme="light"], html[data-theme="light"] .stylepick [data-style="default"]:not(.on) .sw {
   color-scheme: light;
-  --bg:#f2f4f7; --headbg:#ffffff; --panel:#ffffff; --panel2:#eef1f5; --chipbg:#ffffff;
-  --line:#e4e8ee; --line2:#d9dfe6; --text:#17191c; --muted:#5c6773; --muted2:#78838f;
-  --accent:#e8443f; --blue:#2f6ee0; --shadow:0 2px 10px #0f172a14; --headline:#0f172a0d;
+  --bg:#f4f8fb; --headbg:#fff; --panel:#fff; --panel2:#edf4f8; --chipbg:#edf4f8;
+  --line:#dce5eb; --line2:#e8eef2; --text:#1e2933; --muted:#536878; --muted2:#596d7c;
+  --accent:#087fa1; --accent-text:#086782; --blue:#087fa1; --selected:#e6f3f8; --danger:#b33b3b; --danger-text:#9f3039;
+  --shadow:none; --headline:#0f172a0d;
   --amberbg:rgba(245,158,11,.16); --amber:#9a5b00; --amberb:#875000; --amberline:rgba(245,158,11,.34);
 }
+html[data-style="apple"], .stylepick [data-style="apple"]:not(.on) .sw {
+  --bg:#f5f5f7; --headbg:rgba(255,255,255,.78); --panel:#ffffff; --panel2:#f0f0f2; --chipbg:#ffffff;
+  --line:#e6e6eb; --line2:#d6d6dc; --text:#1d1d1f; --muted:#606067; --muted2:#65656a;
+  --accent:#ff3b30; --blue:#0071e3; --shadow:0 1px 2px #00000008, 0 10px 28px #0000000f; --headline:#00000000;
+  --accent-text:#a7302c; --selected:#fceae9;
+}
+html[data-style="apple"][data-theme="dark"], html[data-theme="dark"] .stylepick [data-style="apple"]:not(.on) .sw {
+  --bg:#000000; --headbg:rgba(28,28,30,.78); --panel:#1c1c1e; --panel2:#2c2c2e; --chipbg:#1c1c1e;
+  --line:#2c2c2e; --line2:#3a3a3c; --text:#f5f5f7; --muted:#a1a1a6; --muted2:#a0a0a7;
+  --accent:#ff453a; --blue:#0a84ff; --shadow:0 10px 28px #00000066; --headline:#ffffff00;
+  --accent-text:#ff9b92; --selected:#39282b;
+}
+html[data-style="claude"], .stylepick [data-style="claude"]:not(.on) .sw {
+  --bg:#faf9f5; --headbg:rgba(250,249,245,.86); --panel:#ffffff; --panel2:#f2efe7; --chipbg:#fffdf8;
+  --line:#e8e3d7; --line2:#ddd6c8; --text:#1f1e1d; --muted:#6b6862; --muted2:#67635a;
+  --accent:#c96442; --blue:#b8563a; --shadow:0 1px 0 #00000006; --headline:#00000000;
+  --accent-text:#954127; --selected:#f6e9df;
+}
+html[data-style="claude"][data-theme="dark"], html[data-theme="dark"] .stylepick [data-style="claude"]:not(.on) .sw {
+  --bg:#1f1e1d; --headbg:rgba(31,30,29,.86); --panel:#262521; --panel2:#302e29; --chipbg:#262521;
+  --line:#35322c; --line2:#423e36; --text:#f0eee6; --muted:#a8a49a; --muted2:#a39f94;
+  --accent:#d97757; --blue:#d97757; --shadow:none; --headline:#ffffff00;
+  --accent-text:#efa88d; --selected:#3d3029;
+}
+html[data-style="pixel"], .stylepick [data-style="pixel"]:not(.on) .sw {
+  color-scheme: dark;
+  --bg:#1a1c2c; --headbg:#1a1c2c; --panel:#242947; --panel2:#2d3355; --chipbg:#242947;
+  --line:#414a78; --line2:#525c8f; --text:#f2f3f7; --muted:#a6abcc; --muted2:#a5abcf;
+  --accent:#ff004d; --blue:#29adff; --shadow:4px 4px 0 #0a0b12; --headline:#00000000;
+  --accent-text:#ff87aa; --selected:#382736;
+  --pxshadow:#0a0b12; --pxhi:#ffec27; --pxink:#1a1c2c; --pxdot:#2b3152;
+  --amberbg:rgba(255,236,39,.16); --amber:#ffec27; --amberb:#ffec27; --amberline:#ffec27;
+}
+/* 浅色: 纸白面板 + 深靛硬边框, 像 8-bit 游戏说明书; 蓝在浅底上要压深一档才够对比 */
+html[data-style="pixel"][data-theme="light"], html[data-theme="light"] .stylepick [data-style="pixel"]:not(.on) .sw {
+  color-scheme: light;
+  --bg:#f4f4f4; --headbg:#ffffff; --panel:#ffffff; --panel2:#f2f2f4; --chipbg:#ffffff;
+  --line:#1a1c2c; --line2:#1a1c2c; --text:#1a1c2c; --muted:#5c6284; --muted2:#626783;
+  --accent:#ff004d; --blue:#0074c9; --shadow:4px 4px 0 #1a1c2c; --headline:#00000000;
+  --accent-text:#b00043; --selected:#f8e7ed;
+  --pxshadow:#1a1c2c; --pxhi:#ffec27; --pxink:#1a1c2c; --pxdot:#dfe1ea;
+  --amberbg:rgba(255,236,39,.42); --amber:#7a5f00; --amberb:#5c4700; --amberline:#c2a000;
+}
+html { background-color:var(--bg); }
+</style>"""
+
+
+HTML = r"""<!DOCTYPE html>
+<html lang="zh"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>哨兵一剪梅</title>
+""" + THEME_HEAD + r"""
+<script>
+const LANGS = __LANGS__;
+const supportedLanguage = code => LANGS.some(([c]) => c === code);
+function preferredLanguage() {
+  try {
+    const saved = (localStorage.getItem('tsf_lang') || '').trim();
+    if (supportedLanguage(saved)) return saved;
+  } catch (e) {}
+  const tag = ((navigator.languages || [])[0] || navigator.language || 'zh').toLowerCase().split('-')[0];
+  return supportedLanguage(tag) ? tag : 'en';
+}
+const languagePacks = new Map();
+function fetchLanguage(code) {
+  if (code === 'zh') return Promise.resolve({});
+  if (languagePacks.has(code)) return languagePacks.get(code);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  const pending = fetch('/i18n/' + code + '.json?v=__APP_VER__', {signal:controller.signal})
+    .then(response => {
+      if (!response.ok) throw Error(response.status);
+      return response.json();
+    }).catch(error => { languagePacks.delete(code); throw error; })
+    .finally(() => clearTimeout(timeout));
+  languagePacks.set(code, pending);
+  return pending;
+}
+const initialLanguage = preferredLanguage();
+if (initialLanguage !== 'zh') document.documentElement.classList.add('language-pending');
+const initialDictionary = fetchLanguage(initialLanguage).catch(() => null);
+</script>
+<style id="base">
+.language-pending body { visibility:hidden; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
   transition:background .25s,color .25s; }
@@ -1348,7 +1524,7 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .chip { padding:8px 13px; border-radius:14px; background:var(--chipbg); color:var(--muted); border:1px solid var(--line2);
   font-size:12px; cursor:pointer; white-space:nowrap; flex:0 0 auto; transition:background .15s,color .15s; }
 .chip:hover { color:var(--text); border-color:var(--muted2); }
-.chip.on { background:var(--blue); border-color:var(--blue); color:#fff; }
+.chip.on { background:var(--accent-text); border-color:var(--accent-text); color:var(--panel); }
 .chip .n { opacity:.62; margin-left:4px; font-variant-numeric:tabular-nums; }
 /* 存储卡: 默认只露「虚拟U盘」一行, 右下角小箭头展开归档区/总占用
    (行距刻意压紧, 收起时约 40px, 手机首屏别占太多) */
@@ -1415,8 +1591,6 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
   .pscroll { padding:2px 8px 10px; gap:8px; }
   .tpanel { padding:10px 12px 8px; }
   .tp-spd { font-size:26px; }
-  .tp-date { font-size:12px; } .tp-loc { font-size:11.5px; }
-  .tp-tag { height:20px; font-size:11px; padding:0 8px; }
   .tp-gear { width:22px; height:22px; font-size:12px; }
   .tp-sig svg { width:20px; height:20px; }
   .tp-c { width:28px; height:28px; } .tp-c.st svg { width:16px; height:16px; }
@@ -1466,28 +1640,9 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .pscroll > * { flex:0 0 auto; }
 .vwrap { position:relative; border-radius:14px; overflow:hidden; max-width:980px; width:100%; margin:0 auto; background:var(--stage); }
 /* 行车遥测面板 (视频上方, Tesla App 样式, 不遮挡画面) */
-.tpanel { display:none; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px 18px 10px; max-width:980px; width:100%; margin:0 auto; }
-.tpanel.show { display:block; }
-.tpanel.folded .tp-rows { display:none; }
-/* 无遥测事件(哨兵/停车): 顶部只保留 时间 + 城市·位置 一行, 不留空白块 */
-.tpanel.plain { padding:12px 18px; }
-.tpanel.plain .tp-mid,
-.tpanel.plain .tp-fold,
-.tpanel.plain .tp-rows,
-.tpanel.plain .tp-tr { display:none; }
-.infocard.plain .ic-time { display:none; }
-.infocard.plain .ic-badge { margin-left:0; }
-.tp-top { display:flex; justify-content:space-between; align-items:center; }
-.tp-l { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
-.tp-date { font-size:13.5px; color:var(--text); font-variant-numeric:tabular-nums; }
-.tp-loc { font-size:12.5px; color:var(--muted); }
-/* 哨兵/纪念事件: 触发画面摄像头 (来自 event.json 的 camera 字段) */
-.tp-tag { display:none; align-items:center; gap:4px; height:22px; padding:0 9px; border-radius:11px;
-  background:var(--amberbg); color:var(--amber); font-size:11.5px; font-weight:600;
-  border:1px solid var(--amberline); white-space:nowrap; align-self:center; }
-.tp-tag.show { display:inline-flex; }
-.tp-tag b { color:var(--amberb); font-weight:800; font-variant-numeric:tabular-nums; }
-.tp-tr { display:flex; align-items:center; gap:6px; }
+.tpanel { display:none; position:relative; box-sizing:border-box; height:56px; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:3px 10px; max-width:1200px; width:100%; margin:0 auto; }
+.tpanel.show { display:grid; grid-template-columns:auto auto auto auto auto auto 1fr auto; }
+.tp-tr { display:flex; align-items:center; gap:5px; }
 /* 转向灯: 矢量箭头(圆角方块底 + 白色箭头), 不用 ⬅➡ emoji —— emoji 是彩色字形,
    不认 CSS color, 点亮时颜色不会变, 看起来永远像"静止的图标" */
 .tp-sig { display:inline-flex; align-items:center; color:var(--muted2); line-height:1; opacity:.5; }
@@ -1495,33 +1650,44 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .tp-sig.on { color:#f59e0b; opacity:1; animation:tpBlink 1.15s steps(1,end) infinite; }
 @keyframes tpBlink { 0%, 52% { opacity:1 } 53%, 100% { opacity:.18 } }
 @media (prefers-reduced-motion: reduce) { .tp-sig.on { animation:none } }
-.tp-gear { background:#34c759; color:#fff; font-weight:800; font-size:14px; width:26px; height:26px;
+.tp-gear { background:#34c759; color:#fff; font-weight:800; font-size:12px; width:25px; height:25px;
   border-radius:50%; display:inline-flex; align-items:center; justify-content:center; }
-.tp-mid { display:flex; align-items:center; margin-top:8px; }
-.tp-spd { font-size:34px; font-weight:800; color:var(--text); line-height:1.1; font-variant-numeric:tabular-nums; }
-.tp-unit { font-size:13px; color:var(--muted); font-weight:600; margin-left:6px; }
-.tp-badges { display:flex; align-items:center; gap:10px; margin-left:auto; }
-.tp-c { width:34px; height:34px; border-radius:50%; display:inline-flex; align-items:center;
+.tp-speed-group { display:flex; align-items:baseline; gap:4px; }
+.tp-spd { display:inline-block; min-width:3ch; text-align:right; font-size:22px; font-weight:800; color:var(--text); line-height:1.1; font-variant-numeric:tabular-nums; }
+.tp-unit { font-size:11px; color:var(--muted); font-weight:600; }
+.tp-c { width:50px; height:34px; border-radius:17px; display:inline-flex; align-items:center; gap:3px;
   justify-content:center; font-size:11.5px; font-weight:700; flex:none; }
 .tp-c.t { background:var(--panel2); color:var(--text); font-size:15px; }
-.tp-badge { display:inline-flex; align-items:center; gap:5px; height:30px; padding:0 11px 0 8px;
+.tp-badge { display:inline-flex; align-items:center; gap:4px; height:28px; padding:0 7px;
   border-radius:15px; font-size:12.5px; font-weight:700; font-variant-numeric:tabular-nums; flex:none; }
 .tp-badge svg { width:16px; height:16px; flex:none; }
+#tp-thr-n { display:inline-block; width:4ch; text-align:right; }
+#tp-brk-n { display:inline-block; min-width:2em; text-align:center; }
+#tp-sig-n { display:inline-block; width:1em; text-align:center; }
 .tp-badge.thr { background:#1f7ae0; color:#fff; }
 .tp-badge.brk { background:var(--panel2); color:var(--muted); }
 .tp-badge.brk.on { background:#ff453a; color:#fff; box-shadow:0 0 9px #ff453a66; }
 .tp-c.st { background:var(--panel2); color:var(--muted); }
-.tp-c.st svg { width:20px; height:20px; transition:transform .18s ease-out; }
+.tp-c.st svg { width:20px; height:20px; flex:none; transition:transform .18s ease-out; }
+.tp-c.st b { min-width:2ch; font-size:9px; text-align:center; }
 /* 自动驾驶状态直接挂在方向盘这颗图标上 (AP/EAP/FSD 共用):
    启动时蓝色 (与车机上 AP 图标同色), 未启动时灰底, 不再额外占一个 "AP" 徽标 */
 .tp-c.st.ap-on { background:linear-gradient(135deg,#2f7cf6,#1d5fd0); color:#fff;
   box-shadow:0 0 10px #2f7cf655; }
-.tp-fold { display:block; margin:8px 0 0 auto; background:none; border:none; color:var(--muted);
-  font-size:12px; cursor:pointer; padding:4px 2px; }
+.tp-fold { display:block; min-height:36px; background:var(--panel2); border:1px solid var(--line); border-radius:6px; color:var(--text);
+  grid-column:8; font-size:12px; cursor:pointer; padding:6px 9px; }
 .tp-rows { border-top:1px solid var(--line); margin-top:2px; padding-top:8px; display:grid;
   grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:1px 20px; }
 .tp-rows div { color:var(--text); font-size:13px; padding:3px 0; font-variant-numeric:tabular-nums; }
 .tp-rows .k { color:var(--muted); margin-right:9px; }
+.tp-details-shade { display:none; position:fixed; inset:0; z-index:10020; background:#0009; }
+.tp-details-shade.open { display:block; }
+.tp-details { position:fixed; z-index:10021; display:none; left:50%; top:50%; transform:translate(-50%,-50%); width:min(560px,calc(100vw - 32px)); max-height:min(70vh,520px); overflow:auto; box-sizing:border-box; padding:18px; border:1px solid var(--line); border-radius:12px; background:var(--panel); box-shadow:0 18px 55px #0008; }
+.tp-details.open { display:block; }
+.tp-details-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+.tp-details-head h2 { margin:0; font-size:16px; }
+.tp-details-close { min-height:36px; padding:0 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel2); color:var(--text); cursor:pointer; }
+.tp-details .tp-rows { margin:0; }
 .vgrid { display:grid; gap:3px; background:var(--stage); }
 .vcell { position:relative; overflow:hidden; background:var(--stage); cursor:zoom-in; aspect-ratio:16/9; }
 .vcell.focused { grid-column:1/-1; grid-row:1/-1; cursor:zoom-out; }
@@ -1557,7 +1723,7 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .clipbar.show { display:flex; }
 .clipbar button { background:var(--panel2); color:var(--muted); border:1px solid var(--line2); border-radius:8px;
   font-size:12px; padding:9px 11px; cursor:pointer; font-variant-numeric:tabular-nums; }
-.clipbar button.on { background:var(--blue); border-color:var(--blue); color:#fff; }
+.clipbar button.on { background:var(--accent-text); border-color:var(--accent-text); color:var(--panel); }
 /* 含触发时刻的那一段: 前面点个小圆点, 窄屏也不额外占宽度 */
 .clipbar button.trig::before { content:''; display:inline-block; width:5px; height:5px; border-radius:50%;
   background:#ff453a; margin-right:5px; vertical-align:1px; }
@@ -1598,8 +1764,8 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .langgrid button { padding:10px 6px; border-radius:10px; background:var(--panel2); border:1px solid var(--line2);
   color:var(--text); font-size:13px; cursor:pointer; text-align:center; line-height:1.35; }
 .langgrid button .code { display:block; font-size:10.5px; color:var(--muted2); margin-top:2px; letter-spacing:.5px; }
-.langgrid button.on { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent) inset; color:var(--accent); }
-.langgrid button.on .code { color:var(--accent); opacity:.8; }
+.langgrid button.on { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent) inset; color:var(--accent-text); }
+.langgrid button.on .code { color:inherit; }
 .hint { font-size:11.5px; color:var(--muted2); line-height:1.6; margin-bottom:10px; }
 /* 飞书推送 */
 .ninput { display:block; width:100%; box-sizing:border-box; margin-bottom:8px; padding:9px 11px; border-radius:9px;
@@ -1632,7 +1798,7 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .storage-nested label { font-size:12px; }
 .storage-usage { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; margin:12px 0; font-size:12px; }
 .storage-usage output { text-align:right; font-variant-numeric:tabular-nums; }
-#storage-budget[data-error=true] { color:var(--accent); }
+#storage-budget[data-error=true] { color:var(--danger-text); }
 @media (pointer:coarse) {
   .storage-row { grid-template-columns:minmax(0,1fr) 76px 44px; gap:4px; min-height:44px; }
   .storage-help { width:44px; height:44px; }
@@ -1646,15 +1812,14 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 select.ninput { cursor:pointer; }
 .eyebar { display:flex; align-items:center; gap:8px; margin:0 0 8px; }
 .eyebar .lbl { flex:1; font-size:11.5px; color:var(--muted2); }
-.eyebar .mini { flex:0 0 auto; padding:6px 12px; border-radius:8px; background:var(--panel2);
-  border:1px solid var(--line2); color:var(--text); font-size:12px; cursor:pointer; }
+.eyebar .mini { flex:0 0 auto; }
 .eyebar .mini:hover { border-color:var(--accent); }
 .hint2 { font-size:11.5px; color:var(--muted2); }
 /* 系统更新 (OTA) */
 .updrow { display:flex; align-items:baseline; gap:8px; padding:7px 0; font-size:13px; }
 .updk { color:var(--muted); min-width:64px; flex:0 0 auto; }
 .updtag { font-size:11px; padding:1px 8px; border-radius:9px; background:var(--amberbg); color:var(--amber); border:1px solid var(--amberline); white-space:nowrap; }
-.updtag.new { background:rgba(232,68,63,.14); color:var(--accent); border-color:rgba(232,68,63,.32); }
+.updtag.new { background:rgba(232,68,63,.14); color:var(--accent-text); border-color:rgba(232,68,63,.32); }
 .updnotes { display:none; background:var(--panel2); border-radius:10px; padding:9px 12px; font-size:12.5px; line-height:1.85; color:var(--muted); margin:6px 0 2px; }
 /* 自动更新开关: 一行 + 右侧勾选框, 默认勾上 */
 .updauto { display:flex; align-items:center; gap:8px; margin:10px 0 2px; padding-top:10px;
@@ -1662,35 +1827,39 @@ select.ninput { cursor:pointer; }
 .updauto span { flex:1; }
 .updauto input[type=checkbox] { width:18px; height:18px; margin:0; accent-color:var(--accent); cursor:pointer; }
 .updbtns { display:flex; gap:8px; margin:10px 0 8px; }
-.updbtns .mini { flex:1; padding:9px 0; border-radius:9px; background:var(--panel2); border:none; color:var(--text); font-size:13px; cursor:pointer; }
-.updbtns .mini.logout { background:transparent; border:1px solid var(--accent); color:var(--accent); }
+.updbtns .mini { flex:1; }
+.updbtns .mini.logout { background:transparent; border:1px solid var(--accent); color:var(--accent-text); }
 .updbtns .mini.primary { background:var(--accent); color:#fff; }
 .updbtns .mini:disabled { opacity:.45; cursor:default; }
 #gear { position:relative; }
 #gear.hasupd::after { content:''; position:absolute; top:4px; right:4px; width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px var(--headbg); }
-.upbtn { display:block; width:100%; padding:10px; border:1px dashed var(--line2); border-radius:10px; color:var(--muted); text-align:center; cursor:pointer; font-size:13px; margin-bottom:12px; background:var(--panel2); }
+.upbtn { display:block; width:100%; text-align:center; margin-bottom:12px; }
 .upbtn:hover { border-color:var(--accent); color:var(--text); }
 .item { display:flex; align-items:center; gap:10px; background:var(--panel2); border-radius:10px; padding:9px 12px; margin-bottom:8px; font-size:13px; }
 .item .n { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.item button { background:var(--panel2); border:1px solid var(--line2); color:var(--muted); border-radius:7px; padding:5px 10px; font-size:12px; cursor:pointer; }
-.item button.danger:hover { background:var(--accent); border-color:var(--accent); color:#fff; }
-.item button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+.item button { background:var(--panel2); border:1px solid var(--line2); color:var(--text); border-radius:var(--control-radius); padding:5px 10px; font-size:var(--control-font-size); cursor:pointer; }
+.item button.danger { color:var(--danger-text); }
+.item button.danger:hover { background:var(--danger-text); border-color:var(--danger-text); color:var(--panel); }
 /* 文件管理器: 多选与批量操作 */
 .item .fm-chk { width:17px; height:17px; flex:0 0 auto; accent-color:var(--accent); cursor:pointer; }
 .item.fm-sel { box-shadow:inset 0 0 0 1px var(--accent); }
 .item .fm-mini { padding:7px 10px; min-height:32px; min-width:32px; }
 .fm-bar { background:var(--panel2); border:1px solid var(--line2); border-radius:10px; padding:10px; margin-bottom:10px; }
 .fm-bar .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
-.fm-bar button { background:var(--panel2); border:1px solid var(--line2); color:var(--text); border-radius:8px; padding:7px 10px; font-size:12px; cursor:pointer; }
-.fm-bar button:hover { border-color:var(--accent); color:var(--accent); }
-.fm-bar button.fm-danger { color:var(--accent); border-color:var(--accent); }
-.fm-bar button.fm-go { background:var(--accent); border-color:var(--accent); color:#fff; }
-.fm-bar button.fm-go:hover { color:#fff; }
-.fm-bar .fm-dest-input { flex:1; min-width:130px; background:var(--bg); border:1px solid var(--line2); border-radius:8px; color:var(--text); padding:7px 9px; font-size:12px; outline:none; }
-.fm-count { font-size:12px; color:var(--muted); }
+.fm-bar button { background:var(--panel2); border:1px solid var(--line2); color:var(--text); border-radius:var(--control-radius); padding:7px 10px; font-size:var(--control-font-size); cursor:pointer; }
+.fm-bar button:hover { border-color:var(--accent-text); color:var(--accent-text); }
+.fm-bar button.fm-danger { color:var(--danger-text); border-color:var(--danger-text); }
+.fm-bar .fm-dest-input { flex:1; min-width:130px; margin:0; }
+.file-jump { display:flex; gap:8px; margin-bottom:10px; }
+.file-jump .ninput { flex:1; min-width:0; margin:0; }
+#crumb { color:var(--muted); font-size:12px; margin-bottom:8px; line-height:1.8; }
+#crumb a,.item .folder-link { color:var(--accent-text); text-decoration:underline; cursor:pointer; }
+#dir-nav :is(a,button,input):focus-visible,.usb-management button:focus-visible { outline:2px solid var(--accent-text); outline-offset:2px; }
+#dir-nav input::placeholder { color:var(--muted); opacity:1; }
+.fm-count { font-size:12px; color:var(--text); }
 .fm-purge { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 10px; }
-.fm-purge button { background:transparent; border:1px solid var(--accent); color:var(--accent); border-radius:8px; padding:8px 12px; font-size:12.5px; cursor:pointer; white-space:nowrap; }
-.fm-purge button:hover { background:var(--accent); color:#fff; }
+.fm-purge button { background:var(--panel); border:1px solid var(--danger-text); color:var(--danger-text); border-radius:var(--control-radius); padding:8px 12px; font-size:var(--control-font-size); cursor:pointer; white-space:nowrap; }
+.fm-purge button:hover { background:var(--danger-text); color:var(--panel); }
 .fm-purge .hint { flex:1; min-width:170px; margin:0; }
 /* 赞助 / 交流加群: 位于所有设置子页签之外, 切到任何子菜单都常驻可见 */
 .support-box { margin-top:16px; border-top:1px solid var(--line2); padding-top:12px; }
@@ -1702,17 +1871,33 @@ select.ninput { cursor:pointer; }
 .support-qrs figure { margin:0; flex:1 1 120px; min-width:0; max-width:150px; text-align:center; }
 .support-qrs img { width:100%; aspect-ratio:1; object-fit:contain; border-radius:8px; border:1px solid var(--line2); background:#fff; display:block; }
 .support-qrs figcaption { font-size:10.5px; color:var(--muted); margin-top:5px; line-height:1.4; }
-.item .tag { font-size:10.5px; color:#4cc38a; }
-.toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--accent); color:#fff; padding:9px 20px; border-radius:20px; font-size:13px; z-index:300; display:none; }
+.item .tag { font-size:10.5px; color:var(--success-text); }
+#file-list .tag { color:var(--text); }
+.usb-management { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font-size:var(--control-font-size); line-height:1.6; color:var(--warning-text); }
+.usb-management.attached { color:var(--success-text); }
+.usb-management small { color:var(--text); }
+.usb-management button { margin-top:6px; }
+#wraps-grid .wrap-file { width:110px; text-align:center; }
+#wraps-grid img { width:100px; height:68px; object-fit:contain; background:var(--panel2); border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+#wraps-grid .wrap-name { color:var(--text); font-size:12px; margin:4px 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--accent-text); color:var(--panel); padding:9px 20px; border-radius:20px; font-size:13px; z-index:300; display:none; }
 .expp { display:none; position:fixed; right:14px; bottom:70px; width:min(320px,92vw); background:var(--panel); border:1px solid var(--line2); border-radius:14px; padding:14px; z-index:150; box-shadow:0 10px 30px #00000060; }
 .expp.open { display:block; }
 .expp .expt { font-size:13.5px; font-weight:600; margin-bottom:10px; display:flex; align-items:center; }
 .expp .expt .x { margin-left:auto; background:none; border:none; color:var(--muted); font-size:17px; cursor:pointer; }
 .expitem { display:flex; align-items:center; gap:8px; padding:7px 4px; font-size:13px; color:var(--text); cursor:pointer; }
 .expitem input { accent-color:var(--accent); width:16px; height:16px; }
+.expp .export-note { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
+.expp .hint,.stbox .sthint { color:var(--muted); }
+#expfont-txt { font-size:12px; line-height:1.5; color:var(--muted); }
+.status-success,.panel .hint.status-success { color:var(--success-text); }
+.status-danger { color:var(--danger-text); }
+.status-warning,.panel .hint.status-warning,#expfont-txt.status-warning { color:var(--warning-text); }
+#expq-row > span { flex:0 0 auto; color:var(--text); cursor:default; }
 .expr { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
-.expr .mini { flex:1 1 30%; padding:7px 0; border-radius:9px; background:var(--panel2); border:none; color:var(--text); font-size:12.5px; cursor:pointer; }
-.expr .mini.primary { background:var(--accent); color:#fff; }
+.expp .mini { border-radius:var(--control-radius); background:var(--panel2); border:1px solid var(--line); padding:7px 10px; color:var(--text); font-size:var(--control-font-size); cursor:pointer; }
+.expr .mini { flex:1 1 30%; padding-inline:0; }
+.expr .mini.primary,.expp .qbtn.on { background:var(--accent-text); border-color:var(--accent-text); color:var(--panel); }
 .stitch { display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:260; align-items:center; justify-content:center; }
 .stitch.open { display:flex; }
 .stbox { width:min(340px,88vw); background:var(--panel); border-radius:16px; padding:20px 20px 16px; box-shadow:0 12px 40px #000c; text-align:center; }
@@ -1747,33 +1932,13 @@ body.livemode #grid, body.livemode #empty { display:none !important; }
 .lvgrid .lvcell .clabel { position:absolute; right:6px; bottom:6px; font-size:11px; color:#e8eef4; background:rgba(20,24,29,.72); border-radius:6px; padding:2px 7px; pointer-events:none; }
 .lvrow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .lvbtn { padding:9px 14px; border-radius:9px; border:1px solid var(--line2); background:var(--panel2); color:var(--text); font-size:13px; cursor:pointer; }
-.lvbtn.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.lvbtn.on { background:var(--accent-text); color:var(--panel); border-color:var(--accent-text); }
 .lvrow select { padding:9px 10px; border-radius:9px; border:1px solid var(--line2); background:var(--panel2); color:var(--text); font-size:13px; }
 .lvbody > .hint { margin-top:2px; margin-bottom:0; }
 @media (max-width:640px){ .expp { left:50%; right:auto; transform:translateX(-50%); bottom:78px; } }
 /* ===== 可选界面风格: 默认 / Apple / Claude / 像素 =====
    只覆盖颜色、圆角、阴影与少量排版, 不改布局与 DOM, 与深/浅色主题正交。
    放在基础样式之后, 保证同名选择器 (如 .tab.active) 能盖过默认规则。 */
-html[data-style="apple"] {
-  --bg:#f5f5f7; --headbg:rgba(255,255,255,.78); --panel:#ffffff; --panel2:#f0f0f2; --chipbg:#ffffff;
-  --line:#e6e6eb; --line2:#d6d6dc; --text:#1d1d1f; --muted:#6e6e73; --muted2:#86868b;
-  --accent:#ff3b30; --blue:#0071e3; --shadow:0 1px 2px #00000008, 0 10px 28px #0000000f; --headline:#00000000;
-}
-html[data-style="apple"][data-theme="dark"] {
-  --bg:#000000; --headbg:rgba(28,28,30,.78); --panel:#1c1c1e; --panel2:#2c2c2e; --chipbg:#1c1c1e;
-  --line:#2c2c2e; --line2:#3a3a3c; --text:#f5f5f7; --muted:#a1a1a6; --muted2:#8e8e93;
-  --accent:#ff453a; --blue:#0a84ff; --shadow:0 10px 28px #00000066; --headline:#ffffff00;
-}
-html[data-style="claude"] {
-  --bg:#faf9f5; --headbg:rgba(250,249,245,.86); --panel:#ffffff; --panel2:#f2efe7; --chipbg:#fffdf8;
-  --line:#e8e3d7; --line2:#ddd6c8; --text:#1f1e1d; --muted:#6b6862; --muted2:#8a857c;
-  --accent:#c96442; --blue:#b8563a; --shadow:0 1px 0 #00000006; --headline:#00000000;
-}
-html[data-style="claude"][data-theme="dark"] {
-  --bg:#1f1e1d; --headbg:rgba(31,30,29,.86); --panel:#262521; --panel2:#302e29; --chipbg:#262521;
-  --line:#35322c; --line2:#423e36; --text:#f0eee6; --muted:#a8a49a; --muted2:#8f8b81;
-  --accent:#d97757; --blue:#d97757; --shadow:none; --headline:#ffffff00;
-}
 html[data-style="apple"] header,
 html[data-style="claude"] header {
   box-shadow:none; border-bottom:1px solid var(--line);
@@ -1787,7 +1952,7 @@ html[data-style="apple"] .thumb { border-radius:12px; }
 html[data-style="apple"] .storcard { border-radius:18px; border-color:transparent; }
 html[data-style="apple"] .syscell { border-radius:10px; border-color:transparent; }
 html[data-style="apple"] .chip { border-radius:999px; background:#fff; box-shadow:0 .5px 1px #0000000a; }
-html[data-style="apple"] .chip.on { background:var(--blue); box-shadow:none; }
+html[data-style="apple"] .chip.on { box-shadow:none; }
 /* 页签做成 iOS 分段控件: 灰槽里浮起一块白色选中块, 而不是深色药丸 */
 html[data-style="apple"] .tab { border-radius:999px; background:#e9e9ec; color:#6e6e73; }
 html[data-style="apple"] .tab:hover { color:#1d1d1f; }
@@ -1797,7 +1962,7 @@ html[data-style="apple"][data-theme="dark"] .tab { background:#1c1c1e; color:#a1
 html[data-style="apple"][data-theme="dark"] .tab.active { background:#3a3a3c; color:#fff;
   box-shadow:0 1px 3px #00000066; }
 html[data-style="apple"] .panel { border-radius:20px; box-shadow:0 24px 80px #00000033; }
-html[data-style="apple"] .upbtn { border-radius:14px; }
+html[data-style="apple"] body { --control-radius:14px; }
 html[data-style="claude"] header h1 { font-weight:600; letter-spacing:.1px; }
 html[data-style="claude"] .card { border-radius:14px; box-shadow:none; border-color:var(--line); }
 html[data-style="claude"] .card:hover { transform:none; box-shadow:0 2px 10px #00000009; }
@@ -1807,7 +1972,7 @@ html[data-style="claude"] .chip { border-radius:11px; }
 html[data-style="claude"] .chip.on { border-color:var(--blue); }
 html[data-style="claude"] .tab { border-radius:10px; }
 html[data-style="claude"] .panel { border-radius:16px; border:1px solid var(--line); box-shadow:0 20px 60px #00000026; }
-html[data-style="claude"] .upbtn { border-radius:11px; }
+html[data-style="claude"] body { --control-radius:11px; }
 html[data-style="claude"] .storbar { border-radius:3px; }
 html[data-style="claude"] .toast { border-radius:12px; }
 /* 界面风格选择卡 (设置 → 网页背景 顶部) */
@@ -1822,6 +1987,8 @@ html[data-style="claude"] .toast { border-radius:12px; }
   text-align:center; font-weight:700; }
 .stylepick .sw { display:flex; gap:3px; margin-bottom:7px; }
 .stylepick .sw i { display:block; height:16px; flex:1; border-radius:4px; border:1px solid #00000012; }
+.stylepick .sw i:first-child { background:var(--bg); }
+.stylepick .sw i:last-child { background:var(--accent); }
 @media (max-width:520px){ .stylepick { grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
   .stylepick button { padding:8px 7px; font-size:12px; } }
 /* 标题与图标 (设置 → 品牌) */
@@ -1835,33 +2002,14 @@ html[data-style="claude"] .toast { border-radius:12px; }
 .brandrow { display:flex; gap:8px; margin-bottom:12px; }
 .brandrow .ninput { margin:0; flex:1; padding:10px 12px; }
 .brandrow button { flex:0 0 auto; padding:0 20px; border-radius:9px; border:1px solid var(--accent);
-  background:var(--accent); color:#fff; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; }
+  background:var(--accent-text); color:var(--panel); font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; }
 .brandrow button:hover { filter:brightness(1.07); }
-.brandreset { padding:9px 14px; border-radius:9px; border:1px solid var(--line2); background:var(--panel2);
-  color:var(--muted); font-size:12.5px; cursor:pointer; }
-.brandreset:hover { border-color:var(--accent); color:var(--accent); }
+.panel .brandreset:hover { border-color:var(--accent-text); color:var(--accent-text); }
 html[data-style="pixel"] .brandbox .blogo { border-radius:0; box-shadow:none; border:2px solid var(--line); }
 /* ===== 像素艺术风 (Pixel Art) =====
    参考 StyleKit pixel-art: 零圆角 / 2px 硬边框 / 4px 硬偏移阴影 / 8-bit 调色板。
    灵魂是「没有过渡」—— 像素游戏是状态机不是动画引擎, hover 直接换色、按下真的陷进去,
    所以这里统一 transition:none, 用调色板替换代替淡入淡出。 */
-html[data-style="pixel"] {
-  color-scheme: dark;
-  --bg:#1a1c2c; --headbg:#1a1c2c; --panel:#242947; --panel2:#2d3355; --chipbg:#242947;
-  --line:#414a78; --line2:#525c8f; --text:#f2f3f7; --muted:#a6abcc; --muted2:#8f95bb;
-  --accent:#ff004d; --blue:#29adff; --shadow:4px 4px 0 #0a0b12; --headline:#00000000;
-  --pxshadow:#0a0b12; --pxhi:#ffec27; --pxink:#1a1c2c; --pxdot:#2b3152;
-  --amberbg:rgba(255,236,39,.16); --amber:#ffec27; --amberb:#ffec27; --amberline:#ffec27;
-}
-/* 浅色: 纸白面板 + 深靛硬边框, 像 8-bit 游戏说明书; 蓝在浅底上要压深一档才够对比 */
-html[data-style="pixel"][data-theme="light"] {
-  color-scheme: light;
-  --bg:#f4f4f4; --headbg:#ffffff; --panel:#ffffff; --panel2:#f2f2f4; --chipbg:#ffffff;
-  --line:#1a1c2c; --line2:#1a1c2c; --text:#1a1c2c; --muted:#5c6284; --muted2:#767c9c;
-  --accent:#ff004d; --blue:#0074c9; --shadow:4px 4px 0 #1a1c2c; --headline:#00000000;
-  --pxshadow:#1a1c2c; --pxhi:#ffec27; --pxink:#1a1c2c; --pxdot:#dfe1ea;
-  --amberbg:rgba(255,236,39,.42); --amber:#7a5f00; --amberb:#5c4700; --amberline:#c2a000;
-}
 /* 零圆角 + 零过渡, 一刀切掉所有柔和感 */
 html[data-style="pixel"] *, html[data-style="pixel"] *::before, html[data-style="pixel"] *::after {
   border-radius:0 !important; transition:none !important;
@@ -1898,7 +2046,7 @@ html[data-style="pixel"] .tab.active { background:var(--pxhi); color:var(--pxink
 /* 筛选胶囊: 选中 = 像素红, hover 换像素蓝 */
 html[data-style="pixel"] .chip { border:2px solid var(--line); background:var(--chipbg); font-weight:600; }
 html[data-style="pixel"] .chip:hover { border-color:var(--blue); color:var(--text); }
-html[data-style="pixel"] .chip.on { background:var(--accent); border-color:var(--pxshadow); color:#fff; box-shadow:2px 2px 0 var(--pxshadow); }
+html[data-style="pixel"] .chip.on { background:var(--accent-text); border-color:var(--pxshadow); color:var(--panel); box-shadow:2px 2px 0 var(--pxshadow); }
 /* 存储条: 加粗成血条 (HP bar) */
 html[data-style="pixel"] .storbar { height:9px; border:2px solid var(--line); background:var(--panel2); margin-right:26px; }
 html[data-style="pixel"] .storbar i { border-radius:0 !important; }
@@ -1908,7 +2056,7 @@ html[data-style="pixel"] .ninput, html[data-style="pixel"] .dpick,
 html[data-style="pixel"] .fm-dest-input, html[data-style="pixel"] select {
   border:2px solid var(--line) !important; background:var(--panel2) !important; color:var(--text) !important;
 }
-html[data-style="pixel"] .toast { background:var(--accent); color:#fff; box-shadow:4px 4px 0 var(--pxshadow); }
+html[data-style="pixel"] .toast { box-shadow:4px 4px 0 var(--pxshadow); }
 /* 风格选择卡: 选中 = 黄底 + 硬阴影, 勾选角标变方块 */
 html[data-style="pixel"] .stylepick button { border:2px solid var(--line); background:var(--panel2); }
 html[data-style="pixel"] .stylepick button.on { background:var(--pxhi); color:var(--pxink); border-color:var(--pxink); box-shadow:3px 3px 0 var(--pxshadow); }
@@ -1941,8 +2089,6 @@ body.watching { overflow:hidden; }
 @keyframes show-buffering { from { visibility:hidden; } to { visibility:visible; } }
 .player .cload button { pointer-events:auto; padding:6px; }
 .player .vcell canvas.hold { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; pointer-events:none; }
-.player .tpanel.plain #tp-date { display:none; }
-.player .tpanel.plain:has(.tp-loc:empty):not(:has(.tp-tag.show)) { display:none; }
 .player .cambar { order:1; justify-content:flex-start; flex-wrap:nowrap; overflow-x:auto; padding:2px 0; }
 .player .cambar button { white-space:nowrap; border-radius:6px; padding:7px 13px; min-height:38px; }
 .player .cambar button.on { background:var(--text); color:var(--bg); border-color:var(--text); }
@@ -1954,11 +2100,13 @@ body.watching { overflow:hidden; }
 #trigger-marker { background:transparent; color:var(--text); border:0; font-size:12px; min-height:32px; cursor:pointer; }
 #trigger-marker::first-letter { color:#e65050; }
 .timeline { position:relative; height:36px; display:flex; align-items:center; }
-#track-bands { position:absolute; left:8px; right:8px; height:6px; border-radius:3px; background:linear-gradient(to right,var(--play-accent) var(--played,0%),var(--muted2) var(--played,0%)); pointer-events:none; }
+#track-bands { position:absolute; z-index:0; left:8px; right:8px; height:6px; border-radius:3px; background:var(--line); pointer-events:none; }
+#track-bands::after { content:""; position:absolute; inset:0; z-index:2; border-radius:inherit; background:linear-gradient(to right,var(--play-accent) var(--played,0%),transparent var(--played,0%)); pointer-events:none; }
 #track-bands i { position:absolute; inset-block:0; }
-#track-bands .gap { min-width:1px; background:#fff; }
-#track-bands .trigger { height:13px; top:-4px; width:3px; border-radius:1px; background:#e65050; }
-#seek { position:relative; width:100%; height:36px; margin:0; cursor:pointer; appearance:none; -webkit-appearance:none; background:transparent; }
+#track-bands .buffered { z-index:1; background:var(--muted2); }
+#track-bands .gap { z-index:3; min-width:1px; background:#fff; }
+#track-bands .trigger { z-index:3; height:13px; top:-4px; width:3px; border-radius:1px; background:#e65050; }
+#seek { position:relative; z-index:1; width:100%; height:36px; margin:0; cursor:pointer; appearance:none; -webkit-appearance:none; background:transparent; }
 #seek::-webkit-slider-runnable-track { background:transparent; height:6px; }
 #seek::-moz-range-track { background:transparent; height:6px; }
 #seek::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:var(--text); border:2px solid var(--bg); margin-top:-5px; }
@@ -1976,7 +2124,7 @@ body.watching { overflow:hidden; }
 .watch-live { margin-top:12px; flex-wrap:wrap; font-size:13px; color:var(--muted); }
 .watch-live #lv-status { margin-right:auto; }
 .watch-live :disabled { opacity:.5; cursor:default; }
-.player .tpanel { order:3; box-shadow:none; border-radius:6px; }
+.player .tpanel { order:-1; box-shadow:none; border-radius:6px; }
 .player .infocard { order:4; border:0; padding:0; border-radius:0; background:transparent; box-shadow:none; }
 .player .ic-fold { margin:0; font-size:13px; }
 .player .ic-rows.open + .clipbar { display:flex; }
@@ -2008,9 +2156,10 @@ body.watching { overflow:hidden; }
   .transport { padding:0; } .clockline output { font-size:15px; }
 }
 /* Shared shell for the library, player and settings. Custom skins may override it. */
-:root { --app-header:64px; --accent:#1598ba; --blue:#53b3d2; --bg:#151d25; --headbg:#1b2630; --panel:#1b2630; --panel2:#243340; --chipbg:#243340; --line:#344653; --line2:#2a3b48; --text:#e5edf3; --muted:#a4b5c2; --muted2:#6d8292; --shadow:none; --selected:#173d4c; --danger:#db6565; }
-html[data-theme="light"] { --bg:#f4f8fb; --headbg:#fff; --panel:#fff; --panel2:#edf4f8; --chipbg:#edf4f8; --line:#dce5eb; --line2:#e8eef2; --text:#1e2933; --muted:#617384; --muted2:#9baab5; --accent:#087fa1; --blue:#087fa1; --shadow:none; --selected:#e6f3f8; --danger:#b33b3b; }
-body { font-size:14px; }
+:root { --app-header:64px; --status-strip:28px; --overlay-top:var(--app-header); }
+body { font-size:14px; --control-font-size:13px; --control-radius:6px;
+  --success-text:#81dbae; --warning-text:#ffcf78; }
+html[data-theme="light"] body { --success-text:#176342; --warning-text:#774900; }
 button,input,select { font:inherit; }
 button:focus-visible,input:focus-visible,select:focus-visible,[role="button"]:focus-visible,summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .app-header { height:var(--app-header); box-sizing:border-box; flex-wrap:nowrap; gap:16px; padding:0 28px; z-index:220; background:var(--headbg); box-shadow:none; border-bottom:1px solid var(--line); }
@@ -2023,11 +2172,11 @@ button:focus-visible,input:focus-visible,select:focus-visible,[role="button"]:fo
 #livetxt { overflow:hidden; text-overflow:ellipsis; }
 .app-header .tabs { order:1; align-self:stretch; align-items:stretch; margin:0 auto; gap:14px; background:none; border:0; padding:0; border-radius:0; flex:0 1 auto; min-width:0; }
 .app-header .tab { padding:0 8px; min-height:44px; background:transparent; color:var(--text); border:0; border-bottom:3px solid transparent; border-radius:0; box-shadow:none; font-size:14px; white-space:nowrap; }
-html[data-theme] .app-header .tab.active { background:transparent; color:var(--accent); border-bottom-color:var(--accent); font-weight:600; box-shadow:none; }
+html[data-theme] .app-header .tab.active { background:transparent; color:var(--accent-text); border-bottom-color:var(--accent); font-weight:600; box-shadow:none; }
 body.settings-open .app-header .tab.active { color:var(--text); border-bottom-color:transparent; }
 .app-header .tn { display:none; }
 .app-header #theme,.app-header #gear { order:3; height:44px; min-width:36px; width:auto; display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:0 6px; margin:0; border:0; border-radius:0; color:var(--text); background:transparent; }
-.app-header #gear[aria-expanded="true"] { color:var(--accent); border-bottom:3px solid var(--accent); }
+.app-header #gear[aria-expanded="true"] { color:var(--accent-text); border-bottom:3px solid var(--accent); }
 .app-header .ic { width:19px; height:19px; }
 .library-page { max-width:1440px; margin:auto; padding:26px 32px 40px; }
 body.watching .library-page,body.settings-open .library-page { visibility:hidden; }
@@ -2039,7 +2188,7 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .storrow { font-size:13px; gap:12px; }
 .storval { font-variant-numeric:tabular-nums; }
 .storbar { height:3px; margin:7px 0 0; background:var(--line); }
-.filter-reset { color:var(--accent); background:none; border:0; padding:4px 0; min-height:36px; cursor:pointer; }
+.filter-reset,#library-retry { color:var(--accent-text); background:none; border:0; padding:4px 0; min-height:36px; cursor:pointer; }
 .storextra { width:100%; margin:0; padding-top:14px; border-top:1px solid var(--line); }
 .stortog { right:7px; top:16px; }
 .library-toolbar { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
@@ -2063,18 +2212,18 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .record-reason,.record-location { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .record-reason,.record-size,.record-location { color:var(--muted); }
 .record-play { color:var(--accent); fill:none; stroke:currentColor; width:22px; }
-.player { top:var(--app-header); height:calc(100% - var(--app-header)); --play-accent:var(--accent); background:var(--bg); }
+.player { top:var(--overlay-top); height:calc(100% - var(--overlay-top)); --play-accent:var(--accent); background:var(--bg); }
 .player .ptop { min-height:54px; padding:4px 24px; gap:12px; background:var(--panel); }
 .player .ptitle { text-align:left; font-size:16px; }
 .player .pback { color:var(--muted); font-size:14px; min-height:40px; }
 .player .pscroll { padding:16px 24px max(18px,env(safe-area-inset-bottom)); gap:12px; }
 .player .vwrap,.player .transport,.player .tpanel,.player .infocard,.player .cambar { max-width:1200px; width:100%; margin-inline:auto; }
 .player .vwrap { border-radius:6px; flex:none; }
-.player .cambar { order:-1; gap:0; padding:0; overflow:visible; }
+.player .cambar { order:-2; gap:0; padding:0; overflow:visible; }
 .player .cambar button { border:1px solid var(--line); border-radius:0; margin-left:-1px; min-height:36px; padding:4px 18px; background:var(--panel); color:var(--text); }
 .player .cambar button:first-child { border-radius:6px 0 0 6px; margin-left:0; }
 .player .cambar button:last-child { border-radius:0 6px 6px 0; }
-.player .cambar button.on { color:var(--accent); background:var(--selected); border-color:var(--accent); z-index:1; }
+.player .cambar button.on { color:var(--accent-text); background:var(--selected); border-color:var(--accent); z-index:1; }
 .player .transport { padding:0 0 12px; }
 .clockline output { font-size:17px; font-weight:500; font-style:normal; }
 .playtools { grid-template-columns:1fr auto auto; gap:12px; }
@@ -2083,14 +2232,13 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .playtools .viewtools { grid-column:3; grid-row:1; }
 .playtools button { background:var(--panel); border:1px solid var(--line); min-height:36px; }
 .shuttle #ppbtn { border-radius:6px; background:var(--accent); color:white; border:0; width:40px; height:36px; }
-.playtools .qsel .qbtn { background:var(--panel); color:var(--accent); border:1px solid var(--line); border-radius:6px; }
+.playtools .qsel .qbtn { background:var(--panel); color:var(--accent-text); border:1px solid var(--line); border-radius:6px; }
 .playtools .qmenu { right:0; left:auto; border-radius:6px; }
-.player .tpanel { padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
-.player .tp-spd { font-size:32px; }
-.player .tp-badge { border-radius:5px; padding:5px 8px; font-size:13px; }
-.player .tp-gear { width:25px; height:25px; font-size:15px; }
-.player .tp-date { font-size:13px; }
-.player .tp-fold { padding:5px 0 0; }
+.player .tpanel { height:56px; padding:6px 12px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.player .tp-spd { font-size:22px; }
+.player .tp-badge { border-radius:5px; padding:0 7px; font-size:12px; }
+.player .tp-gear { width:25px; height:25px; font-size:12px; }
+.player .tp-fold { padding:6px 9px; }
 .watch-list { width:248px; padding:20px 12px; }
 .watch-list h2 { margin:0 10px 14px; font-size:16px; }
 #watch-items { overflow:auto; }
@@ -2103,7 +2251,7 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .player.library-collapsed .watch-list { display:none; }
 body.settings-open { overflow:hidden; }
 .mask.open { display:none; }
-.panel { top:var(--app-header); left:0; right:0; bottom:0; transform:none; width:100%; max-width:none; max-height:none; height:calc(100% - var(--app-header)); padding:0; border:0; border-radius:0; box-shadow:none; overflow:hidden; background:var(--bg); z-index:210; }
+.panel { top:var(--overlay-top); left:0; right:0; bottom:0; transform:none; width:100%; max-width:none; max-height:none; height:calc(100% - var(--overlay-top)); padding:0; border:0; border-radius:0; box-shadow:none; overflow:hidden; background:var(--bg); z-index:210; }
 .panel.open { display:flex; }
 .settings-nav { width:220px; flex-shrink:0; padding:22px 12px; overflow:auto; background:var(--panel); border-right:1px solid var(--line); }
 .settings-nav h2 { font-size:20px; padding:0 10px; margin:0 0 24px; }
@@ -2113,15 +2261,16 @@ body.settings-open { overflow:hidden; }
 .stabs h3:first-child { margin-top:0; }
 .panel .stabs .stab { display:flex; align-items:center; justify-content:flex-start; gap:9px; min-height:40px; padding:8px 12px; border:0; border-left:3px solid transparent; border-radius:4px; background:transparent; color:var(--text); font-size:14px; text-align:left; }
 .panel .stabs .stab .ic { width:16px; height:16px; color:var(--muted); }
-.panel .stabs .stab.active { color:var(--accent); background:var(--selected); border-left-color:var(--accent); }
+.panel .stabs .stab.active { color:var(--accent-text); background:var(--selected); border-left-color:var(--accent); }
 .settings-content { flex:1; min-width:0; overflow:auto; padding:28px clamp(20px,3vw,48px) 40px; }
 .settings-content > h2 { font-size:23px; margin:0 0 12px; }
 .settings-content > div[id^="tab-"] { max-width:1200px; }
 .settings-content h3 { font-size:17px; margin:0 0 18px; }
 .settings-back { display:none; }
 .panel .ninput,.panel select,.panel input:not([type="checkbox"]):not([type="file"]):not([type="radio"]):not([type="range"]) { border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--text); min-height:36px; padding:6px 10px; box-sizing:border-box; max-width:100%; }
-.panel .mini,.panel button.primary,.panel .upbtn { border:1px solid var(--line); border-radius:6px; min-height:36px; padding:7px 14px; background:var(--panel); color:var(--text); box-shadow:none; font-size:13px; }
-.panel .mini.primary,.panel button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+.panel .mini,.panel button.primary,.panel .upbtn { border:1px solid var(--line); border-radius:var(--control-radius); min-height:36px; padding:7px 14px; background:var(--panel); color:var(--text); box-shadow:none; font-size:var(--control-font-size); cursor:pointer; }
+.panel .mini.primary,.panel button.primary { background:var(--accent-text); border-color:var(--accent-text); color:var(--panel); }
+.panel .mini.danger { color:var(--danger-text); border-color:var(--danger-text); }
 .panel .hint { color:var(--muted); font-size:12px; line-height:1.6; }
 #storage-plan { background:var(--selected); border:1px solid var(--line); border-radius:8px; padding:18px; margin:14px 0 8px; }
 .storage-bar { height:20px; border-radius:4px; }
@@ -2158,8 +2307,10 @@ body.settings-open { overflow:hidden; }
 .support-box > summary { color:var(--muted); font-size:13px; cursor:pointer; }
 .support-sec { margin-top:18px; }
 .storage-tip { z-index:240; }
-:root:fullscreen .app-header,body:has(.player.expanded) .app-header { display:none; }
-:root:fullscreen .player,.player.expanded { top:0; height:100%; }
+:is(:root:fullscreen,body:has(.player.expanded)) .app-header { position:fixed; inset:0 0 auto; height:auto; min-height:var(--status-strip); justify-content:center; align-content:center; }
+:is(:root:fullscreen,body:has(.player.expanded)) .app-header > :is(h1,#stat,#tabs,#theme,#gear) { display:none; }
+:is(:root:fullscreen,body:has(.player.expanded)) .system-status { flex:0 1 auto; height:auto; flex-flow:row wrap; align-items:center; justify-content:center; gap:2px 12px; }
+:root:fullscreen,:root:has(.player.expanded) { --overlay-top:var(--status-strip); }
 @media (max-width:1199px) {
   .app-header { padding-inline:18px; gap:10px; }
   .app-header .tabs { gap:6px; }
@@ -2195,16 +2346,21 @@ body.settings-open { overflow:hidden; }
   .app-header .tab { font-size:12px; min-width:0; }
   .app-header #gear span { display:none; }
   .library-page { padding:16px 12px 28px; }
-  .storwrap { margin-bottom:20px; }
-  .storcard { gap:12px; padding:12px 36px 12px 12px; }
-  .storcard #live { flex-basis:100%; max-width:none; }
-  .storage-brief { width:100%; }
-  .stortog { top:8px; }
+  .storwrap { margin-bottom:12px; }
+  .storcard { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 12px; padding:8px 44px 8px 10px; }
+  .storcard #live { grid-column:1 / -1; justify-self:start; min-width:0; max-width:100%; }
+  .storage-brief { width:auto; }
+  .storcard .storrow { flex-wrap:wrap; justify-content:flex-start; gap:1px 6px; margin:0; }
+  .storcard .storval { white-space:normal; overflow-wrap:anywhere; }
+  .storcard:not(.open) .storage-brief .storbar { display:none; }
+  .storcard .storextra { grid-column:1 / -1; padding-top:6px; }
+  .storcard .storbar { margin-right:0; }
+  .stortog { top:0; right:0; bottom:auto; width:44px; height:44px; }
   .library-toolbar h2 { font-size:20px; }
   .library-filters { gap:8px; flex-wrap:wrap; }
   .library-filters .filters.show { display:block; flex:1; min-width:0; }
   .filters select { min-height:44px; width:100%; padding:0 8px; font-size:12px; max-width:none; }
-  .filter-reset { min-height:44px; font-size:12px; }
+  .filter-reset,#library-retry { min-height:44px; font-size:12px; }
   #grid .dhead { padding:9px 12px; }
   #grid .card { grid-template-columns:100px minmax(0,1fr) 18px; padding:12px; gap:12px; }
   #grid .thumb { width:100px; height:66px; }
@@ -2226,16 +2382,29 @@ body.settings-open { overflow:hidden; }
   .playtools .viewtools { gap:3px; }
   .shuttle #ppbtn { width:44px; height:44px; }
   .viewtools #screenbtn { width:44px; padding:0; }
-  .player .tpanel { padding:12px; }
-  .player .tp-spd { font-size:28px; }
-  .player .tp-badge { font-size:12px; padding:4px 6px; }
+  .player .tpanel { height:76px; padding:1px 7px; gap:1px 5px; grid-template-columns:auto auto auto auto 1fr; grid-template-areas:"speed gear signals signals signals" "brake throttle steer steer details"; }
+  .player .tp-speed-group { grid-area:speed; }
+  .player .tp-gear { grid-area:gear; }
+  .player .tp-tr { grid-area:signals; }
+  .player #tp-brk { grid-area:brake; }
+  .player #tp-thr { grid-area:throttle; }
+  .player #tp-st { grid-area:steer; }
+  .player .tp-fold { grid-area:details; }
+  .player .tp-spd { font-size:20px; }
+  .player .tp-badge { font-size:11px; padding:0 5px; }
+  .player .tp-badge svg { width:14px; height:14px; }
+  .player .tp-c.st { width:50px; height:34px; }
+  .player .tp-fold { min-height:44px; padding:5px 7px; font-size:11px; }
+  .tp-details-close { min-height:44px; min-width:44px; }
+  .tp-details { left:0; right:0; top:auto; bottom:0; transform:none; width:100%; max-height:70vh; padding:18px 14px max(18px,env(safe-area-inset-bottom)); border-radius:14px 14px 0 0; }
   .settings-nav { width:100%; border:0; box-sizing:border-box; padding:18px 12px; }
   .settings-content { display:none; padding:16px 12px 32px; }
   .panel.settings-detail .settings-nav { display:none; }
   .panel.settings-detail .settings-content { display:block; }
-  .settings-back { display:block; border:0; background:transparent; color:var(--accent); min-height:44px; padding:0; margin-bottom:8px; }
+  .settings-back { display:block; border:0; background:transparent; color:var(--accent-text); min-height:44px; padding:0; margin-bottom:8px; }
   .settings-content > h2 { font-size:20px; }
   .panel .stabs .stab { min-height:48px; }
+  .storage-row + #storage-budget { margin:0 0 4px; }
   .storage-columns { gap:14px; margin-top:14px; }
   .storage-quota,#storage-usage { padding:16px 12px; }
   #storage-plan { padding:14px 12px; }
@@ -2257,8 +2426,15 @@ body.settings-open { overflow:hidden; }
   .app-header #theme,.app-header #gear { order:2; height:48px; }
   .app-header #gear span { display:none; }
   .player .pscroll { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(260px,1fr); padding:6px 10px; gap:6px 12px; }
-  .player .cambar { grid-row:1; }
+  .player .tpanel { grid-column:1; grid-row:1; }
+  .player .vwrap { grid-row:2 / span 4; }
+  .player:not(.has-telemetry) .vwrap { grid-row:1 / span 4; }
+  .player .cambar { grid-row:1; align-self:start; }
   .player .transport { grid-row:2; }
+  .playtools { grid-template-columns:1fr auto; }
+  .playtools .shuttle { grid-column:1 / -1; }
+  .playtools .qsel { grid-column:1; grid-row:2; }
+  .playtools .viewtools { grid-column:2; grid-row:2; }
   .player .cambar button { padding:3px 8px; min-height:36px; }
   .player .ptop { min-height:36px; }
 }
@@ -2271,9 +2447,23 @@ body.settings-open { overflow:hidden; }
   .app-header .tab { font-size:11px; padding-inline:0; }
   .record-time { font-size:14px; overflow-wrap:anywhere; }
 }
-.system-status { order:2; display:flex; align-items:center; gap:12px; color:var(--muted); font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
-.system-status strong { color:var(--text); font-weight:500; }
-.system-status .hot { color:var(--danger); }
+.system-status { order:2; display:flex; align-items:center; gap:12px; color:var(--muted); font:12px -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; white-space:nowrap; letter-spacing:normal; font-variant-numeric:tabular-nums; }
+.system-status strong { display:inline-grid; grid-template-columns:var(--number-width) max-content; color:var(--text); font-weight:500; }
+.system-status strong > :first-child { min-width:0; text-align:right; }
+.system-status strong > :last-child { text-align:left; }
+.system-readings { --number-width:3.5ch; --fraction-width:1.5ch; --compact-digits:2.34; font-kerning:none; }
+.system-readings strong > :first-child { margin-inline-start:-.5ch; }
+.system-status .reading-fraction:not(:empty) { display:inline-block; width:var(--fraction-width); text-align:left; }
+#sys-mem { --number-width:2ch; }
+/* 只收紧较长的整数，小数点和单位各自对齐。 */
+.system-status .long-integer { display:inline-block; margin-inline-start:calc((var(--compact-digits) - var(--integer-digits)) * 1ch); transform:scaleX(calc(var(--compact-digits) / var(--integer-digits))); transform-origin:right; }
+.play-traffic { --number-width:4.5ch; --fraction-width:2.5ch; --compact-digits:2.12; font-kerning:none; }
+.play-traffic > span { display:inline-flex; align-items:baseline; column-gap:.15em; }
+.play-traffic strong { column-gap:.25em; }
+.play-traffic strong > :first-child { margin-inline-start:-.3ch; }
+.system-status .hot { color:var(--danger-text); }
+.system-readings,.play-traffic { display:inline-flex; align-items:center; gap:10px; }
+.visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 /* 依赖缺失提示条: 安装时没配好 ffmpeg 才出现, 不要等到用户点开视频/等缩略图才发现 */
 .ffwarn { display:flex; align-items:center; gap:8px; flex:1 0 100%; order:9; margin:0 0 6px;
   padding:7px 10px; border:1px solid var(--danger); border-radius:8px; background:color-mix(in srgb, var(--danger) 12%, transparent);
@@ -2282,31 +2472,48 @@ body.settings-open { overflow:hidden; }
 .ffwarn b { color:var(--danger); font-weight:600; }
 .ffwarn code { font-size:11px; background:var(--panel2); border-radius:4px; padding:1px 4px; }
 .player-actions { display:flex; gap:4px; flex:none; }
-.player-actions button { display:inline-flex; align-items:center; justify-content:center; gap:5px; min-height:40px; padding:0 10px; background:transparent; border:1px solid var(--line); border-radius:4px; color:var(--text); cursor:pointer; }
+.player-actions button { display:inline-flex; align-items:center; justify-content:center; width:40px; height:36px; padding:0; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--muted); cursor:pointer; }
 .player-actions button:disabled { opacity:.5; cursor:default; }
 .player-actions button[aria-disabled="true"] { opacity:.5; }
-.player-actions button[aria-pressed="true"] { color:var(--accent); background:var(--selected); }
-.player-actions .ic { width:17px; height:17px; }
+.player-actions button[aria-pressed="true"] { color:var(--danger); }
+.player-actions .ic { width:20px; height:20px; }
 @media (min-width:1000px) { .app-header { gap:12px; } .app-header h1 { flex-basis:170px; } .app-header .tabs { gap:4px; } }
 @media (max-width:1199px) and (min-width:1000px) { .system-status { gap:6px; font-size:11px; } .app-header h1 { flex-basis:140px; font-size:16px; } }
+@media (min-width:601px) and (max-width:1299px) { .system-status { flex-direction:column; align-items:flex-start; gap:2px; } }
 @media (max-width:999px) { .system-status { order:0; } }
 @media (max-width:600px) {
   :root { --app-header:132px; }
-  .app-header { --app-header:132px; height:132px; }
-  .system-status { order:1; flex:1 0 100%; height:28px; justify-content:flex-end; gap:16px; }
-  .player .ptop { flex-wrap:wrap; }
-  .player .ptitle { flex-basis:calc(100% - 100px); }
-  .player-actions { margin-left:auto; }
-  .player-actions button { min-height:44px; }
+  .app-header { height:auto; }
+  .system-status { order:1; flex:1 0 100%; min-width:0; min-height:28px; flex-wrap:wrap; align-content:center; justify-content:flex-start; gap:2px 8px; }
+  .system-readings,.play-traffic { max-width:100%; flex-wrap:wrap; gap:2px 5px; }
+  .play-traffic { gap:9px; }
+  :is(:root:fullscreen,body:has(.player.expanded)) .app-header { padding-inline:6px; }
+  .player .ptop { flex-wrap:nowrap; }
+  .player .ptitle { min-width:0; }
+  .player-actions { gap:3px; }
+  .player-actions button { height:44px; min-height:44px; }
+}
+@media (min-width:381px) and (max-width:429px) {
+  .system-status { font-size:11px; }
+}
+@media (max-width:380px) {
+  :root { --app-header:144px; --status-strip:40px; }
+  .system-status { min-height:40px; flex-direction:column; align-items:flex-start; align-content:flex-start; justify-content:center; gap:2px; }
+  .playtools { gap:3px; }
+  .shuttle #skip-back,.shuttle #skip-next { width:30px; padding:0; }
+  .shuttle #ppbtn { width:36px; }
+  .player-actions button { width:32px; }
+  .playtools .qsel .qbtn { width:52px; padding:0 3px; }
+  .viewtools #spdbtn { width:28px; padding:0; }
+  .viewtools #screenbtn { width:32px; }
 }
 @media (orientation:landscape) and (max-height:550px) {
-  :root { --app-header:76px; }
-  .app-header { --app-header:76px; height:76px; flex-wrap:wrap; row-gap:0; }
-  .system-status { order:4; flex:1 0 100%; height:28px; justify-content:flex-end; }
+  :root { --app-header:calc(48px + var(--status-strip)); }
+  .app-header { height:auto; flex-wrap:wrap; row-gap:0; }
+  .system-status { order:4; flex:1 0 100%; min-width:0; min-height:var(--status-strip); flex-flow:row wrap; align-items:center; justify-content:flex-end; gap:2px 14px; }
   .app-header .tabs { flex:1; }
   .player .ptop { flex-wrap:nowrap; }
   .player .ptitle { flex:1; }
-  .player-actions button { min-height:32px; }
 }
 </style><script>
 /* 版本自检: 服务端升级后, 若当前页面仍是旧版本就自动重载 (看片时不打断, 最多 2 次防死循环) */
@@ -2350,6 +2557,7 @@ body.settings-open { overflow:hidden; }
 <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.8" cy="15.8" r="3.6"/><path d="M10.4 13.2 20 3.6"/><path d="M17.2 6.4 19.6 8.8"/><path d="M14.6 9 17 11.4"/></symbol>
 <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M3.4 12h17.2"/><path d="M12 3.4c2.5 2.6 3.6 5.5 3.6 8.6S14.5 18 12 20.6C9.5 18 8.4 15.1 8.4 12S9.5 6 12 3.4z"/></symbol>
 <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.4" y="4.4" width="17.2" height="15.2" rx="2"/><circle cx="8.6" cy="9.4" r="1.5"/><path d="m4.2 17.4 4.9-4.6a2 2 0 0 1 2.7 0l3.1 2.9 2-1.9a2 2 0 0 1 2.7 0l2.2 2.1"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 5.5 5.5"/></symbol>
 <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20.2 4.2v5h-5"/></symbol>
 <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3.4" y="4.2" width="17.2" height="4.2" rx="1"/><path d="M5.2 8.4v9.2a2 2 0 0 0 2 2h9.6a2 2 0 0 0 2-2V8.4"/><path d="M10.2 12.4h3.6"/></symbol>
 <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.4 7h15.2"/><path d="M9.6 7V5.3A1.3 1.3 0 0 1 10.9 4h2.2a1.3 1.3 0 0 1 1.3 1.3V7"/><path d="M6.4 7v11.7A1.6 1.6 0 0 0 8 20.3h8a1.6 1.6 0 0 0 1.6-1.6V7"/><path d="M10.4 10.8v6M13.6 10.8v6"/></symbol>
@@ -2360,11 +2568,22 @@ body.settings-open { overflow:hidden; }
 <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4.2 20 20"/><path d="M9.7 5.9A9.4 9.4 0 0 1 12 5.6c5.9 0 9.4 6.4 9.4 6.4a17 17 0 0 1-2.5 3.4"/><path d="M6.4 7.3A16.6 16.6 0 0 0 2.6 12S6.1 18.4 12 18.4c1.3 0 2.5-.28 3.6-.76"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
 <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.8v11.4"/><path d="m7.4 10.8 4.6 4.6 4.6-4.6"/><path d="M4.4 20h15.2"/></symbol>
 <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></symbol>
+<symbol id="i-unlock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.5-2M12 14v3"/></symbol>
 <symbol id="i-link" viewBox="0 0 24 24"><path d="M9.6 14.4a4.2 4.2 0 0 0 6 0l2.6-2.6a4.2 4.2 0 0 0-6-6l-1.5 1.5"/><path d="M14.4 9.6a4.2 4.2 0 0 0-6 0L5.8 12.2a4.2 4.2 0 0 0 6 6l1.5-1.5"/></symbol>
 <symbol id="i-brand" viewBox="0 0 24 24"><path d="M12 3.6l2.35 4.05 4.55.7-3.3 3.2.8 4.55L12 13.95 7.6 16.1l.8-4.55-3.3-3.2 4.55-.7z"/></symbol>
 </defs></svg>
 <header class="app-header"><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">哨兵一剪梅</span></h1><span class="sub" id="stat"></span>
-<div class="system-status" aria-label="系统状态"><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
+<div class="system-status" aria-label="系统状态">
+  <div class="system-readings">
+    <span>温度 <strong id="sys-temp"><span><span>—</span><span class="reading-fraction"></span></span><span>°C</span></strong></span>
+    <span>CPU <strong id="sys-cpu"><span><span>—</span><span class="reading-fraction"></span></span><span>%</span></strong></span>
+    <span id="sys-memory">内存 <strong id="sys-mem"><span><span>—</span></span><span>%</span></strong></span>
+  </div>
+  <div class="play-traffic">
+    <span title="视频接收速度"><span aria-hidden="true">↓</span><span class="visually-hidden">视频接收速度</span> <strong id="play-rate"><span><span>0</span><span class="reading-fraction">.00</span></span><span> MB/s</span></strong></span>
+    <span title="本次累计"><span aria-hidden="true">Σ</span><span class="visually-hidden">本次累计</span> <strong id="play-bytes"><span><span>0</span><span class="reading-fraction">.00</span></span><span> GB</span></strong></span>
+  </div>
+</div>
 <div class="ffwarn" id="ffwarn" role="status" hidden><b>FFmpeg 未配置</b><span>列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。请在设备上执行 <code>install-f50.sh --apply --install-deps</code> 补齐依赖，或用 <code>--ffmpeg /opt/mu300/ffmpeg/ffmpeg</code> 指定路径。</span></div>
 <nav class="tabs" id="tabs" aria-label="录像分类"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button><button id="gear" title="设置" aria-expanded="false" aria-controls="panel"><svg class="ic"><use href="#i-gear"/></svg><span>设置</span></button></header>
 <main class="library-page">
@@ -2372,15 +2591,15 @@ body.settings-open { overflow:hidden; }
   <div class="storcard" id="storcard">
 <span id="live" title="车机在线只读同步状态" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:4px 10px;white-space:nowrap"><span id="livedot" style="width:7px;height:7px;border-radius:50%;background:#5f6b76"></span><span id="livetxt">同步状态</span></span>
 <div class="storage-brief"><div class="storrow"><span class="storlab">车机 U 盘</span><span class="storval" id="storvusb"></span></div>
-<div class="storbar"><i id="storvusbbar"></i></div>
+<div class="storbar" id="storage-usb-bar"><i id="storvusbbar"></i></div>
 </div><div class="storage-brief"><div class="storrow"><span class="storlab">盒子归档</span><span class="storval" id="storarc"></span></div>
-<div class="storbar"><i id="storarcbar"></i></div>
+<div class="storbar" id="storage-archive-bar"><i id="storarcbar"></i></div>
 </div>
 <div class="storextra" id="storextra">
 <div class="storrow"><span class="storlab">总占用</span><span class="storval" id="stortot"></span></div>
 <div class="storbar"><i id="stortotbar"></i></div>
 </div>
-<button class="stortog" id="stortog" onclick="toggleStor()" title="展开总占用" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+<button type="button" class="stortog" id="stortog" onclick="toggleStor()" title="存储用量详情" aria-expanded="false" aria-controls="storage-usb-bar storage-archive-bar storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
 </nav>
 <div class="library-toolbar"><h2 id="library-title">录像</h2><span id="library-count"></span><div class="library-filters">
@@ -2390,7 +2609,11 @@ body.settings-open { overflow:hidden; }
 </div></div>
 <input type="date" id="dpick" class="dpick" onchange="if(this.value) setDate(this.value)">
 <div class="grid-wrap" id="grid"></div>
-<div class="empty" id="empty" style="display:none"><div class="big">📹</div>
+<div class="empty" id="library-status">
+  <span id="library-status-text" role="status">正在加载录像</span>
+  <button type="button" id="library-retry" onclick="load()" hidden>重试</button>
+</div>
+<div class="empty" id="empty" style="display:none"><div class="big"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-archive"/></svg></div>
 <div>暂无归档视频<br><small style="font-size:12px">车机录制后, 归档同步任务会自动把视频收进来 (镜像需空闲10分钟)</small></div></div>
 </main>
 
@@ -2402,29 +2625,25 @@ body.settings-open { overflow:hidden; }
     <button class="list-toggle" onclick="toggleLibrary()" aria-label="录像列表" aria-controls="watch-list" aria-expanded="true"><svg class="ic"><use href="#i-folder"/></svg></button>
     <button class="pback" onclick="closePlayer()">‹ 返回</button>
     <span class="ptitle" id="ptitle"></span>
-    <div class="player-actions">
-      <button id="record-lock" disabled onclick="manageRecording('lock')" aria-pressed="false"><svg class="ic"><use href="#i-lock"/></svg><span>锁定</span></button>
-      <button id="record-delete" disabled onclick="manageRecording('delete')"><svg class="ic"><use href="#i-trash"/></svg><span>删除</span></button>
-    </div>
     <button class="pdl" onclick="openExport()" title="导出"><svg class="ic"><use href="#i-download"/></svg></button>
   </div>
   <div class="pscroll">
     <div class="tpanel" id="tpanel">
-        <div class="tp-top">
-          <span class="tp-l"><span class="tp-date" id="tp-date">—</span><span class="tp-loc" id="tp-loc"></span><span class="tp-tag" id="tp-tag"></span></span>
-          <span class="tp-tr"><span class="tp-sig" id="tp-bl" title="左转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M17 12H8.2M12.2 7.3 7.5 12l4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="tp-sig" id="tp-br" title="右转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M7 12h8.8M11.8 7.3 16.5 12l-4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="tp-gear" id="tp-gear">D</span></span>
-        </div>
-        <div class="tp-mid">
-          <span class="tp-spd" id="tp-spd">0</span><span class="tp-unit">km/h</span>
-          <span class="tp-badges">
-            <span class="tp-badge brk" id="tp-brk" title="刹车 (数据源只有踩下/未踩, 无踏板开度)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="7.6"/><circle cx="12" cy="12" r="2.5"/><path d="M17.4 6.6l2.7-2.7"/></svg><b>刹车</b></span>
-            <span class="tp-badge thr" id="tp-thr" title="油门"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M9.4 3.6h5.2a1.7 1.7 0 0 1 1.68 1.93l-1.35 12.3a1.8 1.8 0 0 1-1.79 1.6h-2.28a1.8 1.8 0 0 1-1.79-1.6L7.72 5.53A1.7 1.7 0 0 1 9.4 3.6z"/><path d="M8.6 15.1h6.8"/></svg><b id="tp-thr-n">0%</b></span>
-            <span class="tp-c st" id="tp-st" title="方向盘角度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/><path d="M3.2 10.5h6M14.8 10.5h6M12 14.6V21"/></svg></span>
-          </span>
-        </div>
-        <button class="tp-fold" id="tp-fold" onclick="toggleTelRows()">收起详细数据 ⌃</button>
-        <div class="tp-rows" id="tp-rows"></div>
+        <span class="tp-speed-group">
+          <span class="tp-spd" id="tp-spd">—</span><span class="tp-unit">km/h</span>
+        </span>
+        <span class="tp-gear" id="tp-gear">—</span>
+        <span class="tp-tr"><span class="tp-sig" id="tp-bl" title="左转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M17 12H8.2M12.2 7.3 7.5 12l4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="tp-sig" id="tp-br" title="右转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M7 12h8.8M11.8 7.3 16.5 12l-4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span id="tp-sig-n">—</span></span>
+        <span class="tp-badge brk" id="tp-brk" title="刹车"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="7.6"/><circle cx="12" cy="12" r="2.5"/><path d="M17.4 6.6l2.7-2.7"/></svg><b id="tp-brk-n">—</b></span>
+        <span class="tp-badge thr" id="tp-thr" title="油门"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M9.4 3.6h5.2a1.7 1.7 0 0 1 1.68 1.93l-1.35 12.3a1.8 1.8 0 0 1-1.79 1.6h-2.28a1.8 1.8 0 0 1-1.79-1.6L7.72 5.53A1.7 1.7 0 0 1 9.4 3.6z"/><path d="M8.6 15.1h6.8"/></svg><b id="tp-thr-n">—</b></span>
+        <span class="tp-c st" id="tp-st" title="方向盘角度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/><path d="M3.2 10.5h6M14.8 10.5h6M12 14.6V21"/></svg><b id="tp-ap-n">—</b></span>
+        <button class="tp-fold" id="tp-fold" type="button" aria-controls="tp-details" aria-expanded="false" onclick="toggleTelRows()">详情</button>
     </div>
+    <div class="tp-details-shade" id="tp-details-shade" onclick="closeTelDetails()"></div>
+    <section class="tp-details" id="tp-details" role="dialog" aria-modal="true" aria-labelledby="tp-details-title" tabindex="-1">
+      <div class="tp-details-head"><h2 id="tp-details-title">详情</h2><button class="tp-details-close" id="tp-details-close" type="button" onclick="closeTelDetails()">关闭</button></div>
+      <div class="tp-rows" id="tp-rows"></div>
+    </section>
     <div class="vwrap">
       <button type="button" class="startmask" id="startmask">▶ 轻触开始同步播放</button>
       <div class="vgrid" id="vgrid"></div>
@@ -2435,7 +2654,13 @@ body.settings-open { overflow:hidden; }
       <div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"></div>
       <div class="playtools">
         <div class="qsel" id="qsel"></div>
-        <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
+        <div class="shuttle">
+          <button id="skip-back" aria-label="回退十秒">−10s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next" aria-label="前进十秒">+10s</button>
+          <div class="player-actions">
+            <button id="record-lock" disabled onclick="manageRecording('lock')" aria-label="锁定" aria-pressed="false"><svg class="ic" aria-hidden="true"><use href="#i-unlock"/></svg></button>
+            <button id="record-delete" disabled onclick="manageRecording('delete')" aria-label="删除"><svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg></button>
+          </div>
+        </div>
         <div class="viewtools"><button id="spdbtn" onclick="cycleSpeed()">1×</button><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
       </div>
       <div id="livep" class="watch-live" hidden>
@@ -2457,10 +2682,10 @@ body.settings-open { overflow:hidden; }
   <div id="expchks"></div>
   <label class="expitem" id="expwm-row" style="border-top:1px solid var(--line2);margin-top:6px;align-items:flex-start">
     <input type="checkbox" id="expwm" style="margin-top:2px">
-    <span style="line-height:1.45">叠加行车信息水印<small style="display:block;color:#7d8894;font-size:11px;margin-top:2px">半透明单行: 时间/位置/车速/挡位/油门/刹车, 基本不挡画面</small></span>
+    <span style="line-height:1.45">叠加行车信息水印<small class="export-note">半透明单行: 时间/位置/车速/挡位/油门/刹车, 基本不挡画面</small></span>
   </label>
   <div class="expitem" id="expfont-row" style="border-top:1px solid var(--line2);margin-top:6px;flex-direction:column;align-items:stretch;gap:7px">
-    <span id="expfont-txt" style="font-size:12px;line-height:1.5;color:#7d8894">水印字体: 检查中…</span>
+    <span id="expfont-txt">水印字体: 检查中…</span>
     <div id="expfont-btns" style="display:none;gap:8px">
       <button class="mini" id="expfont-btn" onclick="installFont()">安装字体</button>
       <button class="mini" id="expfont-up" onclick="document.getElementById('fontfile').click()">上传字体</button>
@@ -2468,7 +2693,7 @@ body.settings-open { overflow:hidden; }
     <input type="file" id="fontfile" accept=".ttf,.otf,.ttc" style="display:none" onchange="uploadFont(this)">
   </div>
   <div class="expitem" id="expq-row" style="border-top:1px solid var(--line2);margin-top:6px">
-    <span style="flex:0 0 auto;color:#c6cdd4;cursor:default">下载清晰度</span>
+    <span>下载清晰度</span>
     <div class="qsel" id="expq" style="flex:1;display:flex;justify-content:flex-end"></div>
   </div>
   <div class="expr">
@@ -2506,7 +2731,7 @@ body.settings-open { overflow:hidden; }
     <div class="hint">容量单位：GiB</div>
     <div id="storage-plan" hidden>
       <div class="storage-total-row"><span>存储卡实际容量</span><output id="storage-total">—</output><span>GiB</span><button class="storage-help" type="button" aria-label="存储卡实际容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="total">?</button></div>
-      <div class="storage-summary"><span>分配预览</span><span>可分配 <output id="storage-available">—</output> GiB</span></div>
+      <div class="storage-summary"><span>分配预览</span><span>可分配总量 <output id="storage-available">—</output> GiB</span></div>
       <div class="storage-bar" id="storage-bar" role="img" aria-label="容量分配">
         <span class="storage-usb-color" data-storage-segment="usb"></span><span class="storage-archive-color" data-storage-segment="archive"></span><span class="storage-reserve-color" data-storage-segment="reserve"></span><span class="storage-cache-color" data-storage-segment="cache"></span><span class="storage-free-color" data-storage-segment="free"></span>
       </div>
@@ -2518,20 +2743,20 @@ body.settings-open { overflow:hidden; }
         <div><i class="storage-free-color"></i>未分配<output data-storage-value="free"></output></div>
       </div>
     </div>
-    <div class="hint" id="storage-budget" role="status"></div>
+    <div id="storage-budget-home"><div class="hint" id="storage-budget" role="status"></div></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
-    <div class="storage-row"><label for="storage-archive">盒子归档总上限</label><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
-    <div class="storage-nested"><div class="storage-row"><label for="storage-drive">其中：行车记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="行车记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div></div>
-    <div class="storage-row"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
+    <div class="storage-row"><label for="storage-archive">盒子归档总上限</label><input class="ninput" id="storage-archive" type="number" aria-describedby="storage-budget" min="0" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
+    <div class="storage-nested"><div class="storage-row"><label for="storage-drive">其中：行车记录上限</label><input class="ninput" id="storage-drive" type="number" aria-describedby="storage-budget" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="行车记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div></div>
+    <div class="storage-row"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" aria-describedby="storage-budget" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
     <details class="storage-advanced"><summary>高级保护</summary>
-      <div class="storage-row"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
+      <div class="storage-row"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" aria-describedby="storage-budget" min="1" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
     </details>
     <div class="updbtns"><button class="mini primary" id="storage-save" onclick="storageSave()" disabled>保存归档设置</button><button class="mini" onclick="storageLoad()">重新加载</button></div>
     <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
     </section><details class="storage-advanced" id="storage-usage" open><summary>实际用量 · 已用／上限</summary>
       <div class="storage-usage"><div class="usage-row"><span>车机 U 盘</span><output id="storage-used-usb">—</output><meter id="storage-meter-usb" min="0" max="100" value="0" aria-label="车机 U 盘用量"></meter></div><div class="usage-row"><span>盒子归档</span><output id="storage-used-archive">—</output><meter id="storage-meter-archive" min="0" max="100" value="0" aria-label="盒子归档用量"></meter></div><div class="usage-row nested"><span>其中：行车记录</span><output id="storage-used-drive">—</output><meter id="storage-meter-drive" min="0" max="100" value="0" aria-label="行车记录用量"></meter></div><div class="usage-row free"><span>存储卡当前空闲</span><output id="storage-used-free">—</output></div></div>
     </details></div>
-    <section class="storage-danger"><h3>调整车机 U 盘容量</h3><div class="storage-row"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
+    <section class="storage-danger"><h3>调整车机 U 盘容量</h3><div class="storage-row"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" aria-describedby="storage-budget" min="1" max="128" step="1" inputmode="numeric"><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
     <div class="hint">调整会清空车机 U 盘全部内容，盒子归档保留。</div><button class="mini" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button><div id="storage-resize-status"></div></section>
   </div>
   <div id="tab-brand" style="display:none">
@@ -2545,15 +2770,15 @@ body.settings-open { overflow:hidden; }
       <button class="primary" onclick="saveBrandName()">保存</button>
     </div>
     <label class="upbtn">＋ 上传图标 (png/jpg/webp, ≤3MB)<input type="file" id="brand-file" accept=".png,.jpg,.jpeg,.webp" hidden></label>
-    <div style="margin-top:4px"><button class="brandreset" onclick="resetBrand()">恢复默认图标与名称</button></div>
+    <div style="margin-top:4px"><button class="mini brandreset" onclick="resetBrand()">恢复默认图标与名称</button></div>
   </div>
   <div id="tab-skin" style="display:none">
     <div class="hint">界面风格 · 只换配色、圆角与阴影, 不动功能; 选完即时生效并记住</div>
     <div class="stylepick" id="style-pick">
-      <button data-style="default" onclick="setStyle('default')"><span class="sw"><i style="background:#0e1216"></i><i style="background:#e8443f"></i></span>默认</button>
-      <button data-style="apple" onclick="setStyle('apple')"><span class="sw"><i style="background:#ffffff"></i><i style="background:#0071e3"></i></span>Apple</button>
-      <button data-style="claude" onclick="setStyle('claude')"><span class="sw"><i style="background:#faf9f5"></i><i style="background:#c96442"></i></span>Claude</button>
-      <button data-style="pixel" onclick="setStyle('pixel')"><span class="sw"><i style="background:#1a1c2c"></i><i style="background:#ff004d"></i></span>像素</button>
+      <button data-style="default" onclick="setStyle('default')"><span class="sw"><i></i><i></i></span>默认</button>
+      <button data-style="apple" onclick="setStyle('apple')"><span class="sw"><i></i><i></i></span>Apple</button>
+      <button data-style="claude" onclick="setStyle('claude')"><span class="sw"><i></i><i></i></span>Claude</button>
+      <button data-style="pixel" onclick="setStyle('pixel')"><span class="sw"><i></i><i></i></span>像素</button>
     </div>
     <div class="hint">上传 CSS 皮肤文件或背景图 (jpg/png/webp)。CSS 中引用图片请用 /skin-media/文件名。</div>
     <div class="hint"><code>body{background:url(/skin-media/bg.jpg) center/cover}</code></div>
@@ -2563,9 +2788,9 @@ body.settings-open { overflow:hidden; }
   <div id="tab-audio" style="display:none">
     <div class="hint">上传的音频 (wav/mp3, &lt;1MB) 会直接写入车机U盘根目录；文件名为 LockChime.wav 的即锁车音 (特斯拉只认根目录这个文件名)。文件在归档同步时写入车机U盘。</div>
     <label class="upbtn">＋ 上传音频 (wav/mp3, &lt;1MB)<input type="file" id="audio-file" accept=".wav,.mp3" hidden></label>
-    <div class="hint" style="color:#4cc38a">⏳ 待写入车机U盘:</div>
+    <div class="hint status-warning">⏳ 待写入车机U盘:</div>
     <div id="audio-list"></div>
-    <div class="hint" style="color:#4cc38a">✅ 已写入:</div>
+    <div class="hint status-success">✅ 已写入:</div>
     <div id="audio-done"></div>
   </div>
   <div id="tab-wraps" style="display:none">
@@ -2587,11 +2812,11 @@ body.settings-open { overflow:hidden; }
       <span class="hint">仅删除 TeslaCam/ 内所有视频与事件文件夹，保留目录结构；Boombox、Wraps 等其他根目录不受影响。需先连接 U 盘。</span>
     </div>
     <div id="dir-nav" style="display:none">
-      <div style="display:flex;gap:8px;margin-bottom:10px">
-        <input id="dest-dir" placeholder="/" style="flex:1;background:#161c22;border:1px solid #3a4652;border-radius:8px;color:#e8eaed;padding:8px 10px;font-size:12px;outline:none">
-        <button onclick="goDir(document.getElementById('dest-dir').value)" style="background:#e8443f;border:none;color:#fff;border-radius:8px;padding:0 14px;font-size:12px;cursor:pointer">跳转</button>
+      <div class="file-jump">
+        <input id="dest-dir" class="ninput" placeholder="/">
+        <button class="mini primary" onclick="goDir(document.getElementById('dest-dir').value)">跳转</button>
       </div>
-      <div id="crumb" style="font-size:12px;color:#5ea9ff;margin-bottom:8px;line-height:1.8"></div>
+      <div id="crumb"></div>
       <label class="upbtn" id="upbtn">＋ 上传文件到当前目录 (任意类型, ≤100MB)<input type="file" id="anyfile-file" hidden></label>
       <div id="fm-bar" class="fm-bar">
         <div class="row" style="justify-content:space-between;margin-bottom:8px">
@@ -2607,8 +2832,8 @@ body.settings-open { overflow:hidden; }
           <button onclick="fmOp('rename')"><svg class="ic"><use href="#i-pen"/></svg>重命名</button>
         </div>
         <div class="row" id="fm-dest" style="display:none;margin-top:8px">
-          <input class="fm-dest-input" id="fm-dest-input" placeholder="目标目录">
-          <button class="fm-go" onclick="fmDestGo()">执行</button>
+          <input class="ninput fm-dest-input" id="fm-dest-input" placeholder="目标目录">
+          <button class="fm-go primary" onclick="fmDestGo()">执行</button>
           <button onclick="fmDestCancel()">取消</button>
         </div>
       </div>
@@ -2714,7 +2939,6 @@ body.settings-open { overflow:hidden; }
   </div>
 </div>
 
-<script>window.__I18N=__I18N__;window.__LANGS=__LANGS__;</script>
 <script>
 let data = {}, cur = null, syncTimer = null, currentCat = 'SentryClips', lastSig = '', reasonFilter = 'all', dateFilter = 'all';
 let curClips = [], curClipIx = 0, TEL = null;
@@ -2722,29 +2946,18 @@ let curClips = [], curClipIx = 0, TEL = null;
 /* ---------- 多语言 ----------
    字典以中文原文为 key; 静态文案由 applyLang() 遍历 DOM 替换, 动态文案在生成时用 t() 包一层。
    切回中文时从节点上保存的原文还原, 不会叠加翻译。 */
-const I18N = window.__I18N || {};
-const LANGS = window.__LANGS || [['zh', '中文']];
-const UI_LABEL_ALIASES = {'哨兵录像':'哨兵告警', '车机 U 盘文件':'车机U盘', '盒子归档':'归档区', '外观与背景':'网页背景'};
-let LANG = (localStorage.getItem('tsf_lang') || '').trim();
-if (!LANGS.some(l => l[0] === LANG)) {
-  const nav = String((navigator.languages && navigator.languages[0]) || navigator.language || 'zh').toLowerCase();
-  const hit = LANGS.find(l => nav === l[0] || nav.indexOf(l[0] + '-') === 0);
-  LANG = hit ? hit[0] : 'en';
-}
+let LANG = 'zh', dictionary = {}, languageRequest = 0;
 function t(s) {
   if (!s || LANG === 'zh') return s;
-  const m = I18N[LANG] || {};
-  const key = UI_LABEL_ALIASES[s] || s;
-  return m[s] || m[key] || (I18N.en || {})[key] || s;
+  return dictionary[s] || s;
 }
 function langName(code) {
   const l = LANGS.find(x => x[0] === code);
   return l ? l[1] : code;
 }
 const ZH_TXT = '__zh', ZH_TV = '__tv', ZH_ATTR = '__zha';
-function applyLang() {
-  document.documentElement.lang = (LANG === 'zh') ? 'zh-CN' : LANG;
-  const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+function translateContent(root) {
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
   const nodes = [];
   while (w.nextNode()) nodes.push(w.currentNode);
   for (const n of nodes) {
@@ -2752,6 +2965,7 @@ function applyLang() {
     if (!p) continue;
     const tag = p.nodeName;
     if (tag === 'SCRIPT' || tag === 'STYLE') continue;
+    if (p.translate === false) continue;
     if (p.id === 'bname' || p.id === 'brand-prevname') continue;   // 品牌名由 applyBrand 单独管, 不参与翻译
     const cur = n.nodeValue;
     if (n[ZH_TXT] !== undefined && cur !== n[ZH_TV] && cur !== n[ZH_TXT]) n[ZH_TXT] = cur;
@@ -2759,10 +2973,15 @@ function applyLang() {
     const raw = n[ZH_TXT], key = (raw || '').trim();
     if (!key) continue;
     const val = t(key);
-    n.nodeValue = (val === key) ? raw : raw.replace(key, val);
-    n[ZH_TV] = n.nodeValue;
+    const translated = (val === key) ? raw : raw.replace(key, val);
+    if (n.nodeValue !== translated) n.nodeValue = translated;
+    n[ZH_TV] = translated;
   }
-  document.querySelectorAll('[placeholder],[title]').forEach(el => {
+  root.querySelectorAll('[placeholder],[title]').forEach(el => {
+    if (el.hasAttribute('data-file-action')) {
+      localizeFileAction(el);
+      return;
+    }
     ['placeholder', 'title'].forEach(a => {
       if (!el.hasAttribute(a)) return;
       el[ZH_ATTR] = el[ZH_ATTR] || {};
@@ -2773,8 +2992,11 @@ function applyLang() {
       el.setAttribute(a, val === key ? raw : raw.replace(key, val));
     });
   });
-  const g = document.getElementById('lang-grid');
-  if (g) renderLangGrid();
+}
+function applyLang() {
+  document.documentElement.lang = (LANG === 'zh') ? 'zh-CN' : LANG;
+  translateContent(document.body);
+  renderLangGrid();
   applyBrand();
 }
 function renderLangGrid() {
@@ -2784,42 +3006,37 @@ function renderLangGrid() {
     '<button class="' + (c === LANG ? 'on' : '') + '" onclick="setLang(\'' + c + '\')">' +
     n + '<span class="code">' + c.toUpperCase() + '</span></button>').join('');
 }
-function setLang(code) {
-  if (!LANGS.some(l => l[0] === code)) return;
-  LANG = code;
-  localStorage.setItem('tsf_lang', code);
+async function setLang(code) {
+  if (!supportedLanguage(code)) return;
+  const request = ++languageRequest;
+  let pack;
+  try { pack = await fetchLanguage(code); }
+  catch {
+    if (request === languageRequest) toast('语言包加载失败，请重试');
+    return;
+  }
+  if (request !== languageRequest) return;
+  LANG = code; dictionary = pack;
+  try { localStorage.setItem('tsf_lang', code); } catch (e) {}
+  recordingRows = new WeakMap();
   applyLang();
-  const th = localStorage.getItem('tsf_theme') || 'auto';
-  const b = document.getElementById('theme');
-  if (b) b.title = t('主题') + ': ' + t(th === 'auto' ? '自动' : th === 'light' ? '浅色' : '深色');
-  if (typeof data !== 'undefined' && data && document.getElementById('tabs')) { try { load(); } catch (e) {} }
+  updateThemeButton();
+  updateRecordingActions();
+  if (libraryReady) renderLibrary();
 }
 
 /* ---------- 主题: 自动(跟系统) / 浅色 / 深色, 手动循环切换并记住 ---------- */
 const THEME_ICONS = { auto: 'i-theme', light: 'i-sun', dark: 'i-moon' };
-const THEME_NEXT = { auto: 'light', light: 'dark', dark: 'auto' };
-function applyTheme(mode) {
-  let eff = mode;
-  if (mode === 'auto') {
-    eff = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  }
-  document.documentElement.dataset.theme = eff;
+function updateThemeButton() {
+  const mode = themeMode;
   const b = document.getElementById('theme');
   if (b) { b.innerHTML = '<svg class="ic"><use href="#' + (THEME_ICONS[mode] || 'i-theme') + '"/></svg>';
     b.title = t('主题') + ': ' + t(mode === 'auto' ? '自动' : mode === 'light' ? '浅色' : '深色'); }
 }
-function cycleTheme() {
-  const cur = localStorage.getItem('tsf_theme') || 'auto';
-  const nxt = THEME_NEXT[cur] || 'auto';
-  localStorage.setItem('tsf_theme', nxt);
-  applyTheme(nxt);
-}
-applyTheme(localStorage.getItem('tsf_theme') || 'auto');
+updateThemeButton();
 /* ---------- 可选界面风格: 默认 / Apple / Claude / 像素 ----------
    只切换 html[data-style], 配色与圆角交给 CSS; 选择存本地并同步到服务端,
    换手机/浏览器也能保持一致。和深/浅色主题互不影响 */
-const STYLE_KEY = 'tsf_style';
-const STYLE_LIST = ['default', 'apple', 'claude', 'pixel'];
 function applyStyle(s) {
   if (STYLE_LIST.indexOf(s) < 0) s = 'default';
   if (s === 'default') delete document.documentElement.dataset.style;
@@ -2836,29 +3053,16 @@ function setStyle(s) {
       body: JSON.stringify({ style: s }) }).catch(() => {});
   } catch (e) {}
 }
-applyStyle(localStorage.getItem(STYLE_KEY) || 'default');
-/* 本地没选过时跟随服务端保存的风格 (在别的设备上设过) */
-(function () {
-  try { if (localStorage.getItem(STYLE_KEY)) return; } catch (e) { return; }
-  fetch('/api/settings', { cache: 'no-store' }).then(r => r.json()).then(j => {
-    if (j && j.ui_style) applyStyle(j.ui_style);
-  }).catch(() => {});
-})();
-/* ---------- 存储卡展开/收起 ----------
-   默认只显示「虚拟U盘」一行; 点卡片右下角小箭头才展开「归档区 / 总占用」 */
+applyStyle(initialStyle);
 function toggleStor() {
   const c = document.getElementById('storcard'), b = document.getElementById('stortog');
   if (!c || !b) return;
   const open = c.classList.toggle('open');
-  b.title = open ? '收起归档区、总占用与系统状态' : '展开归档区、总占用与系统状态';
   b.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
-if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-  if ((localStorage.getItem('tsf_theme') || 'auto') === 'auto') applyTheme('auto');
-});
 /* 清晰度偏好按播放入口保存。 */
 const Q_LIST = [['orig', '原画'], ['720p', '720p'], ['480p', '480p'], ['360p', '360p']];
-const localAddress = /^(localhost$|127\.|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.|\[::1\]$)/i.test(location.hostname);
+const localAddress = /^(localhost$|127\.|192\.168\.|10\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|172\.(1[6-9]|2\d|3[01])\.|\[::1\]$)/i.test(location.hostname);
 const defaultQuality = localAddress ? 'orig' : '480p';
 let curQ = localStorage.getItem('tsfq3') || defaultQuality;
 /* 苹果设备: 合成改走设备端 (Safari 的 MediaRecorder 只能出 webm, 微信不认) */
@@ -2911,6 +3115,7 @@ function reasonLabel(r) {
   return r;
 }
 const EMPTY_HTML = document.getElementById('empty').innerHTML;
+const THUMB_PLACEHOLDER = '<div class="ph"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-image"/></svg></div>';
 /* Model 3/Y (HW3) 只有 4 路: front / back / left_repeater / right_repeater
    Model S/X 与 HW4 车型才有 6 路 (含 left_pillar / right_pillar)
    页面按每个事件实际的文件数自适应, 不写死路数 */
@@ -2982,8 +3187,36 @@ function gridDims(n) {
   return [c, Math.ceil(n / c)];
 }
 
+let libraryReady = false, libraryLoadPending = false;
 async function load() {
-  data = await (await fetch('/api/events')).json();
+  if (libraryLoadPending) return;
+  libraryLoadPending = true;
+  if (!libraryReady) {
+    byId('library-status-text').textContent = t('正在加载录像');
+    byId('library-retry').hidden = true;
+  }
+  try {
+    const response = await fetch('/api/events');
+    if (!response.ok) throw Error(response.status);
+    const events = await response.json();
+    if (!events || !Array.isArray(events[currentCat])) throw Error('Invalid event list');
+    lastSig = sigOf(events);
+    data = events;
+  } catch {
+    if (!libraryReady) {
+      byId('library-status-text').textContent = t('录像加载失败');
+      byId('library-retry').hidden = false;
+    }
+    return;
+  } finally {
+    libraryLoadPending = false;
+  }
+  libraryReady = true;
+  byId('library-status').hidden = true;
+  renderLibrary();
+  openDeepLink();
+}
+function renderLibrary() {
   const tabs = document.getElementById('tabs');
   tabs.innerHTML = '';
   const liveOpen = liveMode;
@@ -3003,10 +3236,8 @@ async function load() {
   lv.onclick = () => { closePanel(); document.querySelectorAll('.tab').forEach(x => x.classList.remove('active')); lv.classList.add('active'); openLive(); };
   tabs.appendChild(lv);
   document.getElementById('stat').textContent = `${t('归档')} ${Object.values(data).reduce((a, v) => a + v.length, 0)} ${t('条')}`;
-  lastSig = sigOf(data);
   renderQSel();
   render(currentCat);
-  openDeepLink();
 }
 
 /* 支持 ?ev=SentryClips/2026-11-04_12-30-00 直接打开某个事件 */
@@ -3057,21 +3288,40 @@ function storColor(pct) {
 }
 
 /* 实时同步状态 + 新片段自动出现 */
+function setTrafficValue(id, bytes) {
+  const bytesPerUnit = id === 'play-rate' ? 1024 ** 2 : 1024 ** 3;
+  setReading(id, Number.isFinite(bytes) ? bytes / bytesPerUnit : null, 2);
+}
+function setReading(id, value, decimals) {
+  const cell = byId(id).firstElementChild;
+  const text = Number.isFinite(value) ? value.toFixed(decimals) : '—';
+  if (cell.textContent === text) return;
+  const [integer, fraction] = text.split('.');
+  const whole = cell.firstElementChild;
+  whole.textContent = integer;
+  whole.classList.toggle('long-integer', integer.length > 2);
+  if (integer.length > 2) whole.style.setProperty('--integer-digits', integer.length);
+  if (decimals) cell.lastElementChild.textContent = fraction ? '.' + fraction : '';
+}
 function updateSystemStatus(sys) {
-  const temp = sys && sys.cpu_temp != null ? sys.cpu_temp : null;
-  byId('sys-temp').textContent = temp == null ? '—' : temp + '°C';
+  const temp = sys?.cpu_temp, cpu = sys?.cpu_pct;
+  setReading('sys-temp', temp, 1);
   byId('sys-temp').classList.toggle('hot', temp > 70);
-  byId('sys-cpu').textContent = sys && sys.cpu_pct != null ? sys.cpu_pct + '%' : '—';
+  setReading('sys-cpu', cpu, 1);
   const validMemory = sys && sys.mem_total > 0;
-  byId('sys-mem').textContent = validMemory ? Math.round(sys.mem_used / sys.mem_total * 100) + '%' : '—';
+  setReading('sys-mem', validMemory ? sys.mem_used / sys.mem_total * 100 : null, 0);
   byId('sys-memory').title = validMemory ? Math.round(sys.mem_used / 1048576) + ' / ' + Math.round(sys.mem_total / 1048576) + ' MB' : '';
   const ffwarn = byId('ffwarn');
   if (ffwarn) ffwarn.hidden = !(sys && sys.ffmpeg === false);
 }
+let liveRefreshId = 0, appliedLiveRefreshId = 0;
 async function refreshLive() {
+  const refreshId = ++liveRefreshId;
+  const refreshEvents = libraryReady && !libraryLoadPending;
   let live = null;
-  try { live = await (await fetch('/api/live')).json(); } catch (e) { updateSystemStatus(null); return; }
-  updateSystemStatus(live.sys);
+  try { live = await (await fetch('/api/live')).json(); } catch (e) { return; }
+  if (refreshId < appliedLiveRefreshId) return;
+  appliedLiveRefreshId = refreshId;
   const dot = document.getElementById('livedot'), txt = document.getElementById('livetxt');
   if (live.running) {
     dot.style.background = '#4cc38a';
@@ -3113,10 +3363,13 @@ async function refreshLive() {
     tset('stortot', dk.disk_used, dk.disk_total, 'stortotbar');
   }
   // 实时预览单独检查 RecentClips，避免全量归档请求与视频争用连接。
-  if (liveMode) return;
+  if (!refreshEvents || liveMode || libraryLoadPending) return;
   // 事件有变化时无缝重绘 (不打断播放器)
   try {
-    const d = await (await fetch('/api/events')).json();
+    const response = await fetch('/api/events');
+    if (!response.ok) return;
+    const d = await response.json();
+    if (refreshId < appliedLiveRefreshId || !d || !Array.isArray(d[currentCat])) return;
     const s = sigOf(d);
     if (s !== lastSig) {
       lastSig = s; data = d;
@@ -3137,6 +3390,51 @@ async function refreshLive() {
 }
 refreshLive();
 setInterval(refreshLive, 10000);
+
+let watchId = '', trafficSample = null, systemTimer, systemRequest;
+async function refreshSystemStatus() {
+  if (document.hidden || systemRequest) return;
+  const watch = watchId;
+  const request = systemRequest = new AbortController();
+  const timeout = setTimeout(() => request.abort(), 6000);
+  try {
+    const response = await fetch('/api/system-status' + (watch ? '?watch=' + watch : ''), {cache:'no-store',signal:request.signal});
+    if (!response.ok) throw Error('status');
+    const data = await response.json();
+    if (request.signal.aborted) return;
+    updateSystemStatus(data.sys);
+    if (watch && watch === watchId) {
+      const bytes = data.video_bytes, now = performance.now();
+      const previous = trafficSample;
+      setTrafficValue('play-bytes', bytes);
+      setTrafficValue('play-rate', previous && bytes >= previous.bytes && now > previous.time
+        ? Math.round((bytes - previous.bytes) * 1000 / (now - previous.time)) : null);
+      trafficSample = {time:now, bytes};
+    }
+  } catch {
+    if (!document.hidden) {
+      updateSystemStatus(null);
+      if (watch && watch === watchId) { setTrafficValue('play-rate', null); trafficSample = null; }
+    }
+  } finally {
+    clearTimeout(timeout);
+    systemRequest = null;
+    if (!document.hidden) systemTimer = setTimeout(refreshSystemStatus, watch !== watchId ? 0 : 2000);
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  clearTimeout(systemTimer);
+  trafficSample = null;
+  if (document.hidden) { if (systemRequest) systemRequest.abort(); }
+  else {
+    refreshSystemStatus();
+    if (curClips.length && wantedPlay && !atEnd) {
+      if (camSel !== 'all') activeVideos().forEach(v => { if (v.paused && !v.ended && !v.dataset.positioning) tryPlay(v); });
+      tick();
+    }
+  }
+});
+refreshSystemStatus();
 
 /* 缩略图: 服务端抽帧的静态图, 原生懒加载; 不再用 <video> 预览 (会把设备和解码器一起拖死) */
 function reasonOf(ev) {
@@ -3190,58 +3488,70 @@ function matchReason(cat, ev) {
 }
 /* 日期和事件互相筛选，计数仍按另一项的筛选结果计算。 */
 function filterSelect(box, label, items, value, change) {
-  box.replaceChildren();
   box.className = 'filters show';
-  const select = document.createElement('select');
-  select.setAttribute('aria-label', label);
-  for (const [key, title, count] of items) {
-    const option = document.createElement('option');
-    option.value = key;
-    option.textContent = title + (count == null ? '' : ' · ' + count);
-    select.append(option);
+  let select = box.firstElementChild;
+  if (!select) {
+    select = document.createElement('select');
+    box.append(select);
   }
-  select.value = value;
+  select.setAttribute('aria-label', label);
+  let position = 0;
+  for (const [key, title, count] of items) {
+    const label = title + (count == null ? '' : ' · ' + count);
+    const option = select.options[position++];
+    if (!option) select.add(new Option(label, key));
+    else {
+      if (option.value !== key) option.value = key;
+      if (option.text !== label) option.text = label;
+    }
+  }
+  while (select.options.length > position) select.remove(select.options.length - 1);
+  if (select.value !== value) select.value = value;
   select.onchange = () => change(select.value);
-  box.append(select);
 }
 function renderFilters(cat) {
   const evs = data[cat] || [];
   const rbox = document.getElementById('filters'), dbox = document.getElementById('dfilters');
   // 只有动态生成的筛选项才可能因录像变动而消失。
   if (cat !== 'SentryClips' && reasonFilter !== 'all' && !evs.some(ev => matchReason(cat, ev))) reasonFilter = 'all';
-  const byDate = dateFilter === 'all' ? evs : evs.filter(ev => dateOf(ev) === dateFilter);
-  const byReason = reasonFilter === 'all' ? evs : evs.filter(ev => matchReason(cat, ev));
-
-  if (cat === 'SentryClips') {
-    const cnt = { all: byDate.length };
-    byDate.forEach(ev => { const t = reasonTab(reasonOf(ev)); cnt[t] = (cnt[t] || 0) + 1; });
-    filterSelect(rbox, t('原因'), SENTRY_TABS.map(([k, label]) => [k, t(label), cnt[k] || 0]), reasonFilter, setReason);
-  } else {
-    const rcnt = {};
-    byDate.forEach(ev => { const r = reasonOf(ev); rcnt[r] = (rcnt[r] || 0) + 1; });
-    const rkeys = Object.keys(rcnt).sort((a, b) => rcnt[b] - rcnt[a]);
-    if (rkeys.length < 2) { rbox.className = 'filters'; rbox.innerHTML = ''; }
-    else {
-      const items = [['all', t('全部'), byDate.length]].concat(
-        rkeys.map(k => [k, reasonLabel(k) !== k ? reasonLabel(k) : t('未标注原因'), rcnt[k]]));
-      filterSelect(rbox, t('原因'), items, reasonFilter, setReason);
-    }
-  }
-
-  const dcnt = {};
-  byReason.forEach(ev => { const d = dateOf(ev); if (d) dcnt[d] = (dcnt[d] || 0) + 1; });
   if (dateFilter !== 'all' && !/^\d{4}-\d{2}-\d{2}$/.test(dateFilter)) dateFilter = 'all';
-  const alldays = [...new Set(evs.map(dateOf).filter(Boolean))].sort().reverse();
-  let days = alldays.filter(d => dcnt[d] > 0 || d === dateFilter);
-  // 自选日期可能当天没有事件, 仍然把选中的那天显示出来, 方便点回「全部日期」
-  if (dateFilter !== 'all' && !days.includes(dateFilter)) days = [dateFilter].concat(days);
-  if (!alldays.length && dateFilter === 'all') { dbox.className = 'filters'; dbox.innerHTML = ''; return; }
-  const items = [['all', t('全部日期'), byReason.length]].concat(
-    days.map(d => [d, d.replaceAll('-', '/'), dcnt[d] || 0]), [['pick', t('选择日期…'), null]]);
-  filterSelect(dbox, t('日期'), items, dateFilter, value => {
-    if (value === 'pick') { dbox.querySelector('select').value = dateFilter; pickDate(); }
-    else setDate(value);
-  });
+  const dayCounts = new Map(), reasonCounts = new Map(), allDays = new Set(), visible = [];
+  let dateTotal = 0, reasonTotal = 0;
+  for (const ev of evs) {
+    const day = dateOf(ev);
+    if (day) allDays.add(day);
+    const dateMatches = dateFilter === 'all' || day === dateFilter;
+    if (dateMatches) {
+      const reason = cat === 'SentryClips' ? reasonTab(reasonOf(ev)) : reasonOf(ev);
+      reasonCounts.set(reason, (reasonCounts.get(reason) || 0) + 1);
+      dateTotal++;
+    }
+    if (!matchReason(cat, ev)) continue;
+    reasonTotal++;
+    if (day) dayCounts.set(day, (dayCounts.get(day) || 0) + 1);
+    if (dateMatches) visible.push([ev, day]);
+  }
+  if (cat === 'SentryClips') {
+    const items = SENTRY_TABS.map(([key, label]) => [key, t(label), key === 'all' ? dateTotal : reasonCounts.get(key) || 0]);
+    filterSelect(rbox, t('原因'), items, reasonFilter, setReason);
+  } else if (reasonCounts.size >= 2) {
+    const counts = [...reasonCounts].sort((a,b) => b[1] - a[1]);
+    const items = [['all', t('全部'), dateTotal]].concat(counts.map(([key, count]) =>
+      [key, reasonLabel(key) !== key ? reasonLabel(key) : t('未标注原因'), count]));
+    filterSelect(rbox, t('原因'), items, reasonFilter, setReason);
+  } else { rbox.className = 'filters'; rbox.replaceChildren(); }
+
+  if (allDays.size || dateFilter !== 'all') {
+    const days = [...allDays].filter(d => dayCounts.has(d) || d === dateFilter).sort().reverse();
+    if (dateFilter !== 'all' && !allDays.has(dateFilter)) days.unshift(dateFilter);
+    const items = [['all', t('全部日期'), reasonTotal]].concat(
+      days.map(d => [d, d.replaceAll('-', '/'), dayCounts.get(d) || 0]), [['pick', t('选择日期…'), null]]);
+    filterSelect(dbox, t('日期'), items, dateFilter, value => {
+      if (value === 'pick') { dbox.querySelector('select').value = dateFilter; pickDate(); }
+      else setDate(value);
+    });
+  } else { dbox.className = 'filters'; dbox.replaceChildren(); }
+  return {visible, dayCounts};
 }
 /* 原生日期选择器: 分类里只有一天时也能翻到别的日期 */
 function pickDate() {
@@ -3270,89 +3580,123 @@ function thumbErr(img) {
     setTimeout(() => { img.src = img.src.split('?')[0] + '?r=' + (n + 1); }, n ? 8000 : 2500);
     return;
   }
-  img.parentNode.innerHTML = '<div class="ph">🎞</div>';
+  img.parentNode.innerHTML = THUMB_PLACEHOLDER;
 }
 /* 日期分组小标题: 今天/昨天/M月D日 */
-function dheadLabel(d) {
-  const now = new Date(), today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
-  const y = new Date(now.getTime() - 864e5), yd = y.getFullYear() + '-' + String(y.getMonth() + 1).padStart(2, '0') + '-' + String(y.getDate()).padStart(2, '0');
+function localDayKey(date) {
+  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+}
+const dayFormatters = new Map();
+function dheadLabel(d, today, yesterday) {
   const m = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return d;
   if (d === today) return t('今天');
-  if (d === yd) return t('昨天');
+  if (d === yesterday) return t('昨天');
   if (LANG === 'zh') return (+m[2]) + '月' + (+m[3]) + '日';
-  try { return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString(LANG, { month: 'short', day: 'numeric' }); }
+  try {
+    if (!dayFormatters.has(LANG)) dayFormatters.set(LANG, new Intl.DateTimeFormat(LANG, {month:'short', day:'numeric'}));
+    return dayFormatters.get(LANG).format(new Date(+m[1], +m[2] - 1, +m[3]));
+  }
   catch (e) { return d.slice(5); }
 }
-function render(cat) {
-  const g = document.getElementById('grid'), e = document.getElementById('empty');
-  g.innerHTML = '';
-  renderFilters(cat);
-  let evs = data[cat] || [];
-  evs = evs.filter(ev => matchReason(cat, ev));
-  if (dateFilter !== 'all') evs = evs.filter(ev => dateOf(ev) === dateFilter);
-  document.getElementById('library-title').textContent = t(CATS_NAME[cat] || cat);
-  document.getElementById('library-count').textContent = evs.length + ' ' + t('条');
-  e.style.display = evs.length ? 'none' : 'block';
-  if (!evs.length) {
-    e.innerHTML = (reasonFilter !== 'all' || dateFilter !== 'all')
-      ? '<div class="big">🔍</div><div>' + t('该筛选下暂无事件') + '<br><small style="font-size:12px">' + t('换个日期或点「全部」查看本分类所有事件') + '</small></div>'
-      : EMPTY_HTML;
+let recordingRows = new WeakMap();
+function recordingCard(ev, cat) {
+  const card = document.createElement('div'); card.className = 'card';
+  const groups = groupVideos(ev.videos);
+  const vids = camSort(groups.length ? groups[groups.length - 1].vids : []);
+  let th;
+  if (vids.length) {
+    /* 哨兵事件: 用触发摄像头在触发那一帧当封面; 其他/回落: 前摄像头第1秒 */
+    const src = sentryThumbSrc(ev, groups) ||
+      (vids.find(v => v.cam === 'front') || vids[0]).url.replace('/media/', '/thumb/');
+    th = `<div class="thumb"><img loading="lazy" decoding="async" src="${src}" alt="" onerror="thumbErr(this)"><span class="cnum">${vids.length} ${t('路')}</span></div>`;
+  } else {
+    th = `<div class="thumb">${THUMB_PLACEHOLDER}</div>`;
   }
+  const mm = ev.meta || {};
+  /* 标题: 触发原因·触发摄像头 (哨兵), 否则分类名 */
+  let title = t(CATS_NAME[cat] || cat);
+  if (mm.reason) {
+    title = reasonLabel(mm.reason) || mm.reason;
+    if (isSentryEv(mm) && mm.camera) {
+      const ck = CAM_IDX[+mm.camera];
+      if (ck) title += ' · ' + camLabel(ck);
+    }
+  }
+  /* 列表时间优先用 event.json 的触发时刻, 与点进去后播放器标题一致
+     (目录名是录制收尾时间, 常比触发晚几十秒) */
+  const tmTxt = evTime(ev).replace(/^\d{4}\/\d{2}\/\d{2} /, '');
+  const locationText = [mm.city, mm.street].filter(Boolean).join(' · ');
+  card.innerHTML = th + '<div class="meta"><strong class="record-time">' + esc(tmTxt) +
+    '</strong><span class="record-reason">' + esc(title) + '</span></div><span class="record-size">' +
+    esc(fmtSize(ev.size || 0)) + '</span><span class="record-cameras">' + vids.length + ' ' + t('路') +
+    '</span><span class="record-location">' + esc(locationText || '—') +
+    '</span><svg class="ic record-play" aria-hidden="true"><use href="#i-play"/></svg>';
+  card.tabIndex = 0; card.setAttribute('role', 'button');
+  card.onclick = () => openPlayer(ev);
+  card.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPlayer(ev); } };
+  return card;
+}
+function render(cat) {
+  if (!libraryReady) return;
+  const g = document.getElementById('grid'), e = document.getElementById('empty');
+  const {visible, dayCounts} = renderFilters(cat);
+  document.getElementById('library-title').textContent = t(CATS_NAME[cat] || cat);
+  document.getElementById('library-count').textContent = visible.length + ' ' + t('条');
+  e.style.display = visible.length ? 'none' : 'block';
+  if (!visible.length) {
+    e.innerHTML = (reasonFilter !== 'all' || dateFilter !== 'all')
+      ? '<div class="big"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-search"/></svg></div><div>该筛选下暂无事件<br><small style="font-size:12px">换个日期或点「全部」查看本分类所有事件</small></div>'
+      : EMPTY_HTML;
+    if (LANG !== 'zh') translateContent(e);
+  }
+  const rows = [];
+  const now = new Date(), today = localDayKey(now);
+  now.setDate(now.getDate() - 1);
+  const yesterday = localDayKey(now);
   let prevDay = null;
-  for (const ev of evs) {
-    const day = dateOf(ev);
-    if (day && day !== prevDay) {           // 日期分组小标题 (像官方App的"下午 14:00-17:59 · 3条")
-      const n = evs.filter(x => dateOf(x) === day).length;
-      const h = document.createElement('div'); h.className = 'dhead';
-      h.innerHTML = '<b>' + dheadLabel(day) + '</b><span class="n">' + n + ' ' + t('条') + '</span>';
-      g.appendChild(h);
+  for (const [ev, day] of visible) {
+    let row = recordingRows.get(ev);
+    if (!row) {
+      row = {card:recordingCard(ev, cat)};
+      recordingRows.set(ev, row);
+    }
+    if (day && day !== prevDay) {
+      if (!row.heading) {
+        row.heading = document.createElement('div');
+        row.heading.className = 'dhead';
+        row.heading.innerHTML = '<b></b><span class="n"></span>';
+      }
+      const title = dheadLabel(day, today, yesterday), count = dayCounts.get(day) + ' ' + t('条');
+      const heading = row.heading;
+      if (heading.firstChild.textContent !== title) heading.firstChild.textContent = title;
+      if (heading.lastChild.textContent !== count) heading.lastChild.textContent = count;
+      rows.push(heading);
       prevDay = day;
     }
-    const card = document.createElement('div'); card.className = 'card';
-    const groups = groupVideos(ev.videos);
-    const vids = camSort(groups.length ? groups[groups.length - 1].vids : []);
-    let th;
-    if (vids.length) {
-      /* 哨兵事件: 用触发摄像头在触发那一帧当封面; 其他/回落: 前摄像头第1秒 */
-      const src = sentryThumbSrc(ev, groups) ||
-        (vids.find(v => v.cam === 'front') || vids[0]).url.replace('/media/', '/thumb/');
-      th = `<div class="thumb"><img loading="lazy" decoding="async" src="${src}" alt="" onerror="thumbErr(this)"><span class="cnum">${vids.length} ${t('路')}</span></div>`;
-    } else {
-      th = `<div class="thumb"><div class="ph">🎞</div></div>`;
-    }
-    const mm = ev.meta || {};
-    /* 标题: 触发原因·触发摄像头 (哨兵), 否则分类名 */
-    let title = t(CATS_NAME[cat] || cat);
-    if (mm.reason) {
-      title = reasonLabel(mm.reason) || mm.reason;
-      if (isSentryEv(mm) && mm.camera) {
-        const ck = CAM_IDX[+mm.camera];
-        if (ck) title += ' · ' + camLabel(ck);
-      }
-    }
-    /* 列表时间优先用 event.json 的触发时刻, 与点进去后播放器标题一致
-       (目录名是录制收尾时间, 常比触发晚几十秒) */
-    const tmTxt = evTime(ev).replace(/^\d{4}\/\d{2}\/\d{2} /, '');
-    const locationText = [mm.city, mm.street].filter(Boolean).join(' · ');
-    card.innerHTML = th + '<div class="meta"><strong class="record-time">' + esc(tmTxt) +
-      '</strong><span class="record-reason">' + esc(title) + '</span></div><span class="record-size">' +
-      esc(fmtSize(ev.size || 0)) + '</span><span class="record-cameras">' + vids.length + ' ' + t('路') +
-      '</span><span class="record-location">' + esc(locationText || '—') +
-      '</span><svg class="ic record-play" aria-hidden="true"><use href="#i-play"/></svg>';
-    card.tabIndex = 0; card.setAttribute('role', 'button');
-    card.onclick = () => openPlayer(ev);
-    card.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPlayer(ev); } };
-    g.appendChild(card);
+    rows.push(row.card);
   }
-  applyLang();
+
+  const keep = new Set(rows);
+  for (const node of Array.from(g.children)) if (!keep.has(node)) node.remove();
+  let next = g.firstElementChild;
+  for (const node of rows) {
+    if (node === next) next = next.nextElementSibling;
+    else g.insertBefore(node, next);
+  }
 }
 
 const byId = id => document.getElementById(id);
+if (window.ResizeObserver) {
+  new ResizeObserver(([entry]) => {
+    document.documentElement.style.setProperty('--overlay-top', entry.target.getBoundingClientRect().height + 'px');
+  }).observe(document.querySelector('.app-header'), {box:'border-box'});
+}
 let camSel = 'front', baseRate = 1, wantedPlay = false, clipOffset = 0;
 let sessionId = 0, renderId = 0, lastTick = 0, editingSeek = false;
 let seekPointerStart = null;
 let prefetch = null, triggerTime = null, triggerSource = null, libraryCat = '', listScroll = 0;
+let bufferedTimelineSignature = null;
 let liveMode = false, followLatest = false, atEnd = false;
 let overviewPosition = null;
 let clockVideo = null, videoTimes = new WeakMap();
@@ -3447,6 +3791,8 @@ function bufferedPosition(video, time) {
 }
 
 function releaseVideo(v) {
+  if (v._streamAbort) { v._streamAbort.abort(); v._streamAbort = null; }
+  v._onStreamFail = null;
   v.pause();
   v.removeAttribute('src');
   v.load();
@@ -3454,6 +3800,7 @@ function releaseVideo(v) {
 
 function dropPrefetch() {
   if (prefetch?.controller) prefetch.controller.abort();
+  if (prefetch?.videos) prefetch.videos.forEach(releaseVideo);
   if (prefetch && prefetch.video) releaseVideo(prefetch.video);
   prefetch = null;
 }
@@ -3473,11 +3820,17 @@ function layoutPlayer() {
   const immersive = !!document.fullscreenElement || byId('player').classList.contains('expanded');
   const top = document.querySelector('.player .ptop').getBoundingClientRect().bottom;
   const controls = document.querySelector('.transport').offsetHeight + byId('cambar').offsetHeight;
-  const available = innerHeight - top - controls - 55;
-  const limit = landscapePhone ? Math.max(100, innerHeight - top - 16) :
+  const telemetryHeight = byId('tpanel').offsetHeight;
+  player.classList.toggle('has-telemetry', telemetryHeight > 0);
+  const available = innerHeight - top - controls - telemetryHeight - 55;
+  const limit = landscapePhone ? Math.max(100, innerHeight - top - telemetryHeight - 22) :
     immersive ? Math.max(160, available) : Math.max(160, Math.min(innerHeight * .58, available));
   grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0,1fr))';
-  grid.style.gridAutoRows = Math.max(1, Math.min(width / cols * ratio, limit / rows)) + 'px';
+  const rowGaps = Math.max(0, rows - 1) * 3;
+  const rowHeight = rows === 2
+    ? (Math.min(width / cols * ratio * rows, limit) - rowGaps) / rows
+    : Math.min(width / cols * ratio, Math.max(1, limit - rowGaps) / rows);
+  grid.style.gridAutoRows = Math.max(1, rowHeight) + 'px';
 }
 
 function toggleLibrary(show) {
@@ -3573,7 +3926,9 @@ function updateRecordingActions() {
   remove.setAttribute('aria-disabled', String(!!reason || remove.disabled));
   lock.dataset.reason = remove.dataset.reason = reason;
   lock.setAttribute('aria-pressed', String(!!record?.locked));
-  lock.querySelector('span').textContent = record?.locked ? '解锁' : '锁定';
+  lock.setAttribute('aria-label', t(record?.locked ? '解锁' : '锁定'));
+  remove.setAttribute('aria-label', t('删除'));
+  lock.querySelector('use').setAttribute('href', record?.locked ? '#i-lock' : '#i-unlock');
   lock.title = reason || (record.locked ? '解除自动清理保护' : '锁定后不参与自动清理');
   remove.title = reason || (record.locked ? '请先解锁录像' : '删除整条录像的所有视角');
 }
@@ -3604,10 +3959,15 @@ async function openPlayer(ev, live = false, camera = '', clipName = '') {
   const firstOpen = !byId('player').classList.contains('open');
   if (firstOpen) listScroll = window.scrollY;
   closePlayback();
+  watchId = newClientId();
+  trafficSample = {time:performance.now(), bytes:0};
+  setTrafficValue('play-rate', null); setTrafficValue('play-bytes', 0);
   const ticket = sessionId;
   liveMode = live;
   followLatest = live;
   libraryCat = live ? 'RecentClips' : currentCat;
+  byId('tpanel').classList.toggle('show', libraryCat !== 'SentryClips');
+  resetHud();
   playerRecording = ev ? {cat:libraryCat, name:ev.name, clips:ev.clips || [ev.name], locked:!!ev.locked, lock_unknown:!!ev.lock_unknown, label:evTime(ev)} : null;
   updateRecordingActions();
   curQ = localStorage.getItem(live ? 'tsfliveq' : 'tsfq3') || (live && localStorage.getItem('tsfq3')) || defaultQuality;
@@ -3638,17 +3998,21 @@ async function openPlayer(ev, live = false, camera = '', clipName = '') {
       return false;
     }
     updateCameras();
-    const initial = live ? curClips[curClips.length - 1] : curClips.find(c => c.event.name === (clipName || ev.name)) || curClips[0];
-    const stamp = live ? '' : (ev.meta || {}).timestamp;
-    const seconds = stamp && clipEpoch(String(stamp).replace('T', '_').slice(0, 19).replace(/:(\d\d)/g, '-$1')) / 1000;
-    const matches = seconds ? curClips.filter(c => seconds >= c.sourceStart && seconds < c.sourceStart + c.length) : [];
-    triggerSource = matches.length === 1 ? {key:matches[0].key, offset:seconds-matches[0].sourceStart} : null;
-    triggerTime = matches.length === 1 ? matches[0].start + seconds - matches[0].sourceStart : null;
-    const target = locateWall(triggerTime === null ? initial.start : triggerTime - 5);
-    const preferred = camera || (live && localStorage.getItem('tsflivecam')) || triggerCam(ev);
-    camSel = preferred === '__all' || preferred === 'all' ? 'all'
-      : allCameras.includes(preferred) ? preferred : (curClips[target.ix].vids.find(v => v.cam === 'front') || curClips[target.ix].vids[0]).cam;
-    showClip(target.ix, target.offset);
+    if (live) {
+      startLivePreview();
+    } else {
+      const initial = curClips.find(c => c.event.name === (clipName || ev.name)) || curClips[0];
+      const stamp = (ev.meta || {}).timestamp;
+      const seconds = stamp && clipEpoch(String(stamp).replace('T', '_').slice(0, 19).replace(/:(\d\d)/g, '-$1')) / 1000;
+      const matches = seconds ? curClips.filter(c => seconds >= c.sourceStart && seconds < c.sourceStart + c.length) : [];
+      triggerSource = matches.length === 1 ? {key:matches[0].key, offset:seconds-matches[0].sourceStart} : null;
+      triggerTime = matches.length === 1 ? matches[0].start + seconds - matches[0].sourceStart : null;
+      const target = locateWall(triggerTime === null ? initial.start : triggerTime - 5);
+      const preferred = camera || triggerCam(ev);
+      camSel = preferred === '__all' || preferred === 'all' ? 'all'
+        : allCameras.includes(preferred) ? preferred : (curClips[target.ix].vids.find(v => v.cam === 'front') || curClips[target.ix].vids[0]).cam;
+      showClip(target.ix, target.offset);
+    }
     loadGapEvidence();
     syncTimer = setInterval(tick, 100);
     return true;
@@ -3685,19 +4049,21 @@ function setCam(cam) {
   const position = playbackOffset();
   camSel = cam;
   if (liveMode) localStorage.setItem('tsflivecam', cam);
-  showClip(curClipIx, position);
+  showClip(curClipIx, position, false, false, true);
 }
 
 const hlsPreview = document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
 const PREVIEW_START_SECONDS = 1.5;
 const PREVIEW_HD_START_SECONDS = 2;
-const PREVIEW_HD_RECOVERY_SECONDS = 4;
-const PREVIEW_HD_READ_AHEAD_SECONDS = 12;
+const PREVIEW_HD_RECOVERY_SECONDS = 2;
+const PREVIEW_HD_READ_AHEAD_SECONDS = 18;
 function previewMime(quality) {
   return quality === '720p' ? 'video/mp4; codecs="avc1.42C01F"' : 'video/mp4; codecs="avc1.42C01E"';
 }
 function supportsPreviewMse(quality) {
-  return window.MediaSource && MediaSource.isTypeSupported(previewMime(quality));
+  const Ctor = (typeof window !== 'undefined' && (window.MediaSource || window.ManagedMediaSource)) ||
+    (typeof MediaSource !== 'undefined' ? MediaSource : (typeof ManagedMediaSource !== 'undefined' ? ManagedMediaSource : null));
+  return !!(Ctor && typeof Ctor.isTypeSupported === 'function' && Ctor.isTypeSupported(previewMime(quality)));
 }
 function usesPreviewParts(file) {
   return curQ !== 'orig' && videoDuration(file) &&
@@ -3721,21 +4087,44 @@ function previewReadyToPlay(video) {
 }
 
 async function readySource(file, quality, signal, openParts) {
-  if (quality === 'orig') return file.url;
+  if (quality === 'orig') return file.url + '?watch=' + watchId;
   const params = new URLSearchParams({file: file.url, q: quality});
   if (openParts) params.set('parts', '1');
-  const response = await fetch('/api/playback-source?' + params, {signal, cache: 'no-store'});
-  if (!response.ok) throw Error('source');
-  const {state, seconds} = await response.json();
+  const deadline = performance.now() + 30000;
+  let info;
+  while (!signal.aborted) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw Error('source timeout');
+    const request = new AbortController();
+    const abort = () => request.abort();
+    signal.addEventListener('abort', abort, {once:true});
+    const timeout = setTimeout(abort, remaining);
+    try {
+      const response = await fetch('/api/playback-source?' + params, {signal:request.signal, cache:'no-store'});
+      if (response.status !== 503) {
+        if (!response.ok) throw Error('source');
+        info = await response.json();
+        break;
+      }
+    } catch (e) {
+      if (!(e instanceof TypeError) || request.signal.aborted || signal.aborted) throw e;
+    } finally {
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', abort);
+    }
+    await new Promise(resolve => setTimeout(resolve, Math.min(500, Math.max(0, deadline - performance.now()))));
+  }
+  if (signal.aborted) return null;
+  const {state, seconds} = info;
   if (state === 'parts' && openParts && !signal.aborted) return openParts(seconds, quality);
   if (state === 'pending' || state === 'cooling') return null;
   if (state !== 'ready') throw Error('quality');
-  return file.url + '?q=' + quality + '&exact=1';
+  return file.url + '?q=' + quality + '&exact=1&watch=' + watchId;
 }
 
 function previewStream(video, file, seconds, quality, signal, failed) {
   video.dataset.parts = '1';
-  const params = new URLSearchParams({file:file.url, q:quality});
+  const params = new URLSearchParams({file:file.url, q:quality, watch:watchId});
   const mime = previewMime(quality);
   if (!supportsPreviewMse(quality)) {
     params.set('at', String(clipOffset));
@@ -3744,9 +4133,16 @@ function previewStream(video, file, seconds, quality, signal, failed) {
   video.dataset.mse = '1';
   video.dataset.startBuffer = '1';
   video.dataset.previewLead = String(quality === '720p' ? PREVIEW_HD_START_SECONDS : PREVIEW_START_SECONDS);
-  const readAhead = quality === '720p' ? PREVIEW_HD_READ_AHEAD_SECONDS : 5;
-  const source = new MediaSource(), url = URL.createObjectURL(source);
-  let buffer, timer, fetching = null, stopped = false;
+  const readAhead = quality === '720p' ? PREVIEW_HD_READ_AHEAD_SECONDS : 20;
+  const hasStdMse = typeof window !== 'undefined' ? !!window.MediaSource : typeof MediaSource !== 'undefined';
+  const MediaSourceCtor = (typeof window !== 'undefined' && (window.MediaSource || window.ManagedMediaSource)) ||
+    (typeof MediaSource !== 'undefined' ? MediaSource : (typeof ManagedMediaSource !== 'undefined' ? ManagedMediaSource : null));
+  const managed = !!(!hasStdMse && MediaSourceCtor);
+  // Apple WebKit ManagedMediaSource (iOS 17.1+ Edge/Safari/Chrome) silently refuses to fire
+  // sourceopen unless remote playback is disabled before attaching the object URL.
+  if (managed) video.disableRemotePlayback = true;
+  const source = new MediaSourceCtor(), url = URL.createObjectURL(source);
+  let buffer, timer, fetching = null, stopped = false, retryAt = 0;
   let fetchingIndex = -1, fetchingPriority = 2, fetchingSeekRevision = 0;
   let waitingIndex = -1, waitingSeekRevision = -1, waitingSince = 0;
   let finalPartEnd = 0;
@@ -3761,7 +4157,7 @@ function previewStream(video, file, seconds, quality, signal, failed) {
   };
   signal.addEventListener('abort', stop, {once:true});
   async function fill() {
-    if (stopped || !buffer) return;
+    if (stopped || !buffer || performance.now() < retryAt) return;
     if (editingSeek) {
       waitingIndex = -1;
       if (fetching) fetching.abort();
@@ -3775,6 +4171,15 @@ function previewStream(video, file, seconds, quality, signal, failed) {
       source.endOfStream();
     }
     const at = position();
+    // On iOS ManagedMediaSource, proactively evict far-behind played frames to stay inside mobile quota.
+    if (managed && buffer.buffered.length && at - buffer.buffered.start(0) > 25 &&
+        typeof buffer.remove === 'function') {
+      try {
+        buffer.remove(0, Math.max(0, at - 10));
+        buffer.addEventListener('updateend', () => { if (!signal.aborted) fill(); }, {once:true});
+        return;
+      } catch (e) {}
+    }
     const synchronizing = camSel === 'all' && overviewPosition !== null;
     if (wantedPlay && synchronizing && hasPreviewLead(video, at)) {
       // Let the lagging cameras finish the shared recovery before reading farther.
@@ -3785,11 +4190,13 @@ function previewStream(video, file, seconds, quality, signal, failed) {
     if (finalPartEnd && at >= finalPartEnd && buffer.buffered.length &&
         buffer.buffered.end(buffer.buffered.length - 1) >= finalPartEnd - .001) return;
     let index = indexAt(at);
+    let bufferedEnd = at;
     for (let i = 0; i < buffer.buffered.length; ++i) {
       const end = buffer.buffered.end(i);
       // The buffered end is exclusive. A paused seek onto that boundary needs
       // the next part, even when it is within the normal timestamp tolerance.
       if (buffer.buffered.start(i) > bufferedPosition(video, at) || end <= at) continue;
+      bufferedEnd = end;
       if (!wantedPlay || end - at >= readAhead * baseRate || end >= file.duration - .045) {
         waitingIndex = -1;
         if (fetching) fetching.abort();
@@ -3800,8 +4207,41 @@ function previewStream(video, file, seconds, quality, signal, failed) {
     }
     if (index >= total) return;
     const ahead = index > indexAt(at);
+    const bufferedLead = Math.max(0, bufferedEnd - at);
     const recovering = !!video.dataset.startBuffer || synchronizing;
-    const prime = wantedPlay && recovering && !hasPreviewLead(video, at);
+    // Respect ManagedMediaSource backpressure once a comfortable runway is already buffered.
+    if (managed && source.streaming === false && !recovering && ahead && bufferedLead >= 3.5 * baseRate) {
+      if (fetching && fetchingPriority >= 2) fetching.abort();
+      return;
+    }
+    // In four-view playback, let cameras with a noticeable lead pause ordinary read-ahead so
+    // the lagging camera always gets the encoder first and the shared buffer grows evenly.
+    if (wantedPlay && camSel === 'all' && !synchronizing && ahead && bufferedLead >= 3.5 * baseRate &&
+        typeof activeVideos === 'function') {
+      const peers = activeVideos().filter(v => v !== video && v.dataset.mse && !v.ended && !v.error && !v.dataset.loadFailed && !v.dataset.outside);
+      let minPeerLead = Infinity;
+      for (const peer of peers) {
+        const pt = peer.dataset.positioning || peer.seeking ? Number(peer.dataset.seekTarget) : peer.currentTime;
+        const pDur = Number.isFinite(peer.duration) && peer.duration > 0 ? peer.duration : file.duration;
+        if (pDur - pt <= 1) continue;
+        let pEnd = pt;
+        for (let i = 0; i < peer.buffered.length; ++i) {
+          if (peer.buffered.start(i) <= bufferedPosition(peer, pt) && peer.buffered.end(i) > pt) {
+            pEnd = peer.buffered.end(i);
+            break;
+          }
+        }
+        if (pEnd >= pDur - .5) continue;
+        minPeerLead = Math.min(minPeerLead, Math.max(0, pEnd - pt));
+      }
+      if (minPeerLead < readAhead * baseRate && bufferedLead - minPeerLead >= 2 * baseRate) {
+        if (fetching && fetchingPriority >= 2) fetching.abort();
+        return;
+      }
+    }
+    const lowWater = wantedPlay && camSel === 'all' && ahead && !synchronizing &&
+      bufferedLead < 3.5 * baseRate && bufferedEnd < file.duration - .5;
+    const prime = wantedPlay && ((recovering && !hasPreviewLead(video, at)) || lowWater);
     const priority = !ahead ? 0 : prime ? 1 : 2;
     const seekRevision = Number(video.dataset.seekRevision) || 0;
     if (fetching) {
@@ -3815,6 +4255,7 @@ function previewStream(video, file, seconds, quality, signal, failed) {
       waitingIndex = index; waitingSeekRevision = seekRevision; waitingSince = performance.now();
     }
     let timedOut = false;
+    let readingPart = true;
     const remaining = Math.max(0, 30000 - (performance.now() - waitingSince));
     const timeout = setTimeout(() => { timedOut = true; request.abort(); }, remaining);
     try {
@@ -3822,19 +4263,37 @@ function previewStream(video, file, seconds, quality, signal, failed) {
       params.set('ahead', ahead ? '1' : '0');
       if (prime) params.set('prime', '1');
       else params.delete('prime');
+      if (camSel === 'all' && ahead) params.set('lead', String(Math.min(999, Math.round(bufferedLead * 10))));
+      else params.delete('lead');
       const response = await fetch('/api/playback-preview/part.mp4?' + params, {signal:request.signal});
       if (response.status === 503) {
         if (performance.now() - waitingSince > 30000) throw Error('preview timeout');
+        retryAt = performance.now() + 500;
         return;
       }
       if (!response.ok) throw Error('preview part');
       const data = await response.arrayBuffer();
+      readingPart = false;
       if (request.signal.aborted || signal.aborted) return;
       buffer.timestampOffset = index * seconds;
-      buffer.appendBuffer(data);
+      try {
+        buffer.appendBuffer(data);
+      } catch (appendErr) {
+        if (appendErr && appendErr.name === 'QuotaExceededError') {
+          const trimEnd = Math.max(0, position() - 6);
+          if (!buffer.updating && buffer.buffered.length && buffer.buffered.start(0) < trimEnd - 1 &&
+              typeof buffer.remove === 'function') {
+            try { buffer.remove(0, trimEnd); } catch (e) {}
+          }
+          retryAt = performance.now() + 250;
+          return;
+        }
+        throw appendErr;
+      }
       waitingIndex = -1;
       buffer.addEventListener('updateend', () => {
         if (signal.aborted) return;
+        updateBufferedTimeline();
         const target = position(), playable = bufferedPosition(video, target);
         if (playable > target && !video.dataset.positioning) {
           video.dataset.seekTarget = String(playable);
@@ -3846,6 +4305,13 @@ function previewStream(video, file, seconds, quality, signal, failed) {
         fill();
       }, {once:true});
     } catch (e) {
+      // A reset while changing cameras is recoverable. Keep the same part's
+      // original deadline; decoder/append errors and explicit HTTP errors fail.
+      if (readingPart && e instanceof TypeError && !request.signal.aborted && !signal.aborted &&
+          performance.now() - waitingSince < 30000) {
+        retryAt = performance.now() + 500;
+        return;
+      }
       if (request.signal.aborted && !timedOut) waitingIndex = -1;
       if ((!request.signal.aborted || timedOut) && !signal.aborted) { stop(); failed(); }
     } finally {
@@ -3860,6 +4326,23 @@ function previewStream(video, file, seconds, quality, signal, failed) {
       source.duration = file.duration;
       video.addEventListener('seeking', fill, {signal});
       video.addEventListener('play', fill, {signal});
+      if (managed) {
+        source.addEventListener('startstreaming', () => { retryAt = 0; fill(); }, {signal});
+        source.addEventListener('endstreaming', () => {}, {signal});
+      }
+      if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+        document.addEventListener('visibilitychange', () => {
+          if (stopped || document.hidden) return;
+          retryAt = 0;
+          if (fetching) {
+            const cur = indexAt(position());
+            if (fetchingIndex < cur || fetchingIndex > cur + Math.ceil(readAhead * baseRate / seconds) + 2) {
+              fetching.abort();
+            }
+          }
+          fill();
+        }, {signal});
+      }
       timer = setInterval(fill, 120);
       fill();
     } catch (e) { stop(); failed(); }
@@ -3884,22 +4367,29 @@ async function prepareNext() {
     return;
   }
   const remaining = currentClip().length - clipOffset;
-  if (camSel === 'all' || remaining >= Math.max(curQ === 'orig' ? 4 : 20, baseRate * 2)) return;
-  const file = files[0];
-  const slot = {file, video: null, quality: curQ};
+  if (remaining >= Math.max(curQ === 'orig' ? 15 : 20, baseRate * 6)) return;
+  const slot = {file: files[0], video: null, videos: new Map(), quality: curQ, nextKey: next.key, done: false};
   prefetch = slot;
-  updateDemand(file);
+  if (curQ !== 'orig') updateDemand(files[0]);
   try {
-    let url;
-    while (slot === prefetch && wantedPlay) {
-      url = await readySource(file, slot.quality, clipRequest.signal);
-      if (url || slot !== prefetch) break;
-      await new Promise(resolve => setTimeout(resolve, 1500));
+    for (const file of files) {
+      if (slot !== prefetch || !wantedPlay) return;
+      let url;
+      while (slot === prefetch && wantedPlay) {
+        url = await readySource(file, slot.quality, clipRequest.signal);
+        if (url || slot !== prefetch) break;
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+      if (slot !== prefetch || !url) return;
+      const v = makeVideo(); v.src = url;
+      v.load();
+      slot.videos.set(file.url, v);
+      if (file === files[0]) slot.video = v;
     }
-    if (slot !== prefetch || !url) return;
-    slot.video = makeVideo(); slot.video.src = url;
-    slot.video.load();
   } catch (e) { /* 正式切段时重试。 */ }
+  finally {
+    slot.done = true;
+  }
 }
 
 async function prepareNextParts(next, files) {
@@ -3940,13 +4430,17 @@ async function cachePreviewFiles(files, slot, offset, nextClip) {
     const end = Math.max(1, Math.ceil((file.duration - .08) / source));
     const start = Math.min(end, Math.max(1, Math.ceil(previewLeadForQuality() * baseRate / source)));
     const index = Math.floor(offset / source);
-    jobs.push({file, end, start, index});
+    jobs.push({file, end, start, index, seconds: source});
   }
   // 先给下一段的每路攒够起播缓存，再轮流补到片尾。
   for (const limit of (nextClip ? ['start', 'end'] : ['end'])) {
     while (!signal.aborted && jobs.some(job => job.index < job[limit])) {
       for (const job of jobs) {
         if (signal.aborted) return;
+        if (!nextClip) {
+          const floor = Math.floor(playbackOffset() / job.seconds);
+          if (job.index < floor) job.index = floor;
+        }
         if (job.index >= job[limit]) continue;
         const query = new URLSearchParams({file: job.file.url, q: quality, part: job.index, ahead: '1', cache_only: '1'});
         if (limit === 'start') query.set('warm', '1');
@@ -3971,7 +4465,7 @@ function holdOverview() {
   if (camSel !== 'all' || !wantedPlay) return;
   const videos = activeVideos();
   if (overviewPosition === null) {
-    const times = videos.filter(v => !v.ended && !v.dataset.positioning && v.readyState >= 1).map(v => v.currentTime);
+    const times = videos.filter(v => !v.ended && !v.error && !v.dataset.loadFailed && !v.dataset.positioning && v.readyState >= 1).map(v => v.currentTime);
     overviewPosition = times.length ? Math.min(...times) : clipOffset;
     clipOffset = overviewPosition;
     resetPlaybackClock();
@@ -3980,12 +4474,19 @@ function holdOverview() {
 }
 
 function syncOverview(videos) {
-  const playing = videos.filter(v => !v.ended && !v.dataset.outside);
+  // Keep healthy buffering cameras synchronized together, while excluding terminal failures
+  // so one failed camera never permanently freezes the remaining three views.
+  const playing = videos.filter(v => !v.ended && !v.dataset.outside && !v.error && !v.dataset.loadFailed);
   if (!playing.length) return true;
+  // When the browser hides the tab it suspends muted video decoding (readyState drops to 2)
+  // and throttles timers. Avoid thrashing holdOverview() while hidden so MSE read-ahead keeps
+  // running cleanly; visibilitychange will re-sync immediately on return to foreground.
+  if (typeof document !== 'undefined' && document.hidden) return overviewPosition === null;
   const times = playing.map(v => v.currentTime);
-  if (playing.some(v => v.paused || v.seeking || v.dataset.positioning || v.dataset.startBuffer ||
-      v.error || v.dataset.loadFailed || (v.readyState < 3 && v.duration - v.currentTime > .08)) ||
-      Math.max(...times) - Math.min(...times) > .15) holdOverview();
+  const needsHold = v => v.paused || v.seeking || v.dataset.positioning || v.dataset.startBuffer ||
+    (v.dataset.mse ? (v.readyState < 2 || (v.readyState < 3 && !hasPreviewLead(v)))
+      : (v.readyState < 3 && v.duration - v.currentTime > .08));
+  if (playing.some(needsHold) || Math.max(...times) - Math.min(...times) > .15) holdOverview();
   if (overviewPosition === null) return true;
   for (const v of playing) {
     const target = bufferedPosition(v, overviewPosition);
@@ -3995,7 +4496,7 @@ function syncOverview(videos) {
       v.currentTime = target;
     }
   }
-  if (playing.some(v => v.error || v.dataset.loadFailed || v.seeking || v.dataset.positioning ||
+  if (playing.some(v => v.seeking || v.dataset.positioning ||
       v.readyState < 2 || (v.dataset.mse ? !hasPreviewLead(v) :
         v.readyState < 3 && v.duration - v.currentTime > .08))) return false;
   overviewPosition = null;
@@ -4023,7 +4524,31 @@ function tryPlay(v, synchronized = false) {
   });
 }
 
-function mountCell(cam, file, prepared, offset, generation, seekStartup = false) {
+function retryCamera(cam) {
+  if (!curClips.length) return;
+  const grid = byId('vgrid');
+  const cell = [...grid.children].find(el => el.dataset.cam === cam);
+  if (camSel !== 'all' || !cell) {
+    showClip(curClipIx, playbackOffset());
+    return;
+  }
+  const oldVideo = cell.querySelector('video');
+  if (oldVideo) { oldVideo.onerror = oldVideo.onended = null; releaseVideo(oldVideo); }
+  const group = currentClip();
+  const file = group.vids.find(v => v.cam === cam);
+  const offset = playbackOffset();
+  const replacement = mountCell(cam, file, null, offset, renderId, true);
+  cell.replaceWith(replacement);
+  if (wantedPlay && file) {
+    overviewPosition = offset;
+    activeVideos().forEach(v => v.pause());
+  }
+  updateBufferedTimeline();
+  layoutPlayer();
+  updateDemand();
+}
+
+function mountCell(cam, file, prepared, offset, generation, seekStartup = false, reused = null) {
   const cell = document.createElement('div');
   cell.className = 'vcell';
   cell.dataset.cam = cam;
@@ -4036,15 +4561,26 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false)
     status.textContent = '此时段无画面';
     return cell;
   }
-  const v = prepared || makeVideo();
+  const v = reused || prepared || makeVideo();
   v.dataset.cam = cam;
+  v.dataset.fileUrl = file.url;
+  v.dataset.quality = curQ;
   if (seekStartup) v.dataset.previewLead = String(previewLeadForQuality());
-  v.dataset.seekTarget = String(offset);
-  v.dataset.positioning = '1';
+  if (!reused) {
+    v.dataset.seekTarget = String(offset);
+    v.dataset.positioning = '1';
+  }
   cell.prepend(v);
   status.classList.add('buffering');
   status.textContent = '缓冲中…';
-  const signal = clipRequest.signal;
+  if (!reused) {
+    const controller = new AbortController();
+    v._streamAbort = controller;
+    for (const type of ['progress', 'loadedmetadata', 'emptied', 'error']) {
+      v.addEventListener(type, updateBufferedTimeline);
+    }
+  }
+  const signal = v._streamAbort ? v._streamAbort.signal : clipRequest.signal;
   const position = () => {
     if (generation !== renderId) return;
     const length = videoDuration(v);
@@ -4055,8 +4591,9 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false)
         arrangeTimeline(curClips, group);
         drawTimeline();
       }
-      // A pending camera may have been scrubbed backwards since it was mounted.
-      const pos = Math.min(clipOffset, Math.max(0, length - 0.001));
+      // A pending camera may have been scrubbed backwards since it was mounted,
+      // or a late live camera may arrive while healthy peers have advanced past the last tick.
+      const pos = Math.min(playbackOffset(), Math.max(0, length - 0.001));
       if (Math.abs(v.currentTime - pos) > 0.025) v.currentTime = pos;
     }
     delete v.dataset.positioning;
@@ -4064,8 +4601,9 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false)
     layoutPlayer();
     if (wantedPlay) tryPlay(v);
   };
-  v.addEventListener('loadedmetadata', position, {once: true});
+  if (!reused) v.addEventListener('loadedmetadata', position, {once: true});
   v.onloadeddata = v.oncanplay = v.onplaying = () => {
+    if (generation !== renderId) return;
     if (!v.dataset.outside && (!v.dataset.startBuffer || !wantedPlay)) status.hidden = true;
   };
   v.onwaiting = () => {
@@ -4090,11 +4628,12 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false)
   const failed = () => {
     if (generation !== renderId) return;
     v.dataset.loadFailed = '1';
+    updateBufferedTimeline();
     status.classList.remove('buffering');
     status.hidden = false;
     status.textContent = curQ === 'orig' ? '画面加载失败' : curQ + ' 暂不可用';
     const retry = document.createElement('button'); retry.textContent = '重试';
-    retry.onclick = e => { e.stopPropagation(); showClip(curClipIx, playbackOffset()); };
+    retry.onclick = e => { e.stopPropagation(); retryCamera(cam); };
     status.append(retry);
     if (curQ !== 'orig') {
       const original = document.createElement('button'); original.textContent = '播放原画';
@@ -4103,30 +4642,38 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false)
     }
   };
   v.onerror = failed;
-  if (prepared) {
+  v._onStreamFail = failed;
+  if (reused) {
+    v.playbackRate = baseRate;
+    status.hidden = v.readyState >= 2 && (!v.dataset.startBuffer || !wantedPlay);
+    if (camSel === 'all' && wantedPlay) v.pause();
+    else if (wantedPlay && camSel !== 'all') tryPlay(v);
+  } else if (prepared) {
     if (v.readyState >= 1) { v.removeEventListener('loadedmetadata', position); position(); }
     status.hidden = v.readyState >= 2;
   } else if (curQ === 'orig') {
-    v.src = file.url;
+    v.src = file.url + '?watch=' + watchId;
   } else {
+    const streamFailed = () => { if (v._onStreamFail) v._onStreamFail(); };
     const resolve = async () => {
       try {
-        const openParts = usesPreviewParts(file) ? (seconds, quality) => previewStream(v, file, seconds, quality, signal, failed) : null;
+        const openParts = usesPreviewParts(file) ? (seconds, quality) => previewStream(v, file, seconds, quality, signal, streamFailed) : null;
         const url = await readySource(file, curQ, signal, openParts);
         if (signal.aborted) return;
         if (url) v.src = url;
         else setTimeout(() => { if (!signal.aborted) resolve(); }, 1500);
-      } catch (e) { if (!signal.aborted) failed(); }
+      } catch (e) { if (!signal.aborted) streamFailed(); }
     };
     resolve();
   }
   return cell;
 }
 
-function showClip(ix, offset, continuous = false, seekStartup = false) {
+function showClip(ix, offset, continuous = false, seekStartup = false, reuseExisting = false) {
   if (clipRequest) clipRequest.abort();
   clipRequest = new AbortController();
   const generation = ++renderId;
+  const previousIx = curClipIx;
   const group = curClips[ix];
   const eventName = group.event.trip || group.event.name;
   if (!cur || (cur.trip || cur.name) !== eventName) {
@@ -4141,15 +4688,32 @@ function showClip(ix, offset, continuous = false, seekStartup = false) {
   const channels = camSel === 'all' ? allCameras : [camSel];
   const old = activeVideos();
   const previous = new Map(old.map(v => [v.dataset.cam, v]));
+  const reusedVideos = new Set();
   const cells = channels.map(cam => {
     const file = group.vids.find(v => v.cam === cam);
-    let prepared = null;
-    if (file && prefetch?.file?.url === file.url && prefetch.quality === curQ) {
-      prepared = prefetch.video; prefetch = null;
+    const last = previous.get(cam);
+    let reused = null;
+    if (reuseExisting && ix === previousIx && file && last && !last.error && !last.dataset.loadFailed &&
+        !last.dataset.positioning && last.readyState >= 1 &&
+        last.dataset.fileUrl === file.url && last.dataset.quality === curQ &&
+        (!file.duration || offset < file.duration)) {
+      reused = last;
+      reusedVideos.add(last);
     }
-    const cell = mountCell(cam, file, prepared, offset, generation, seekStartup);
-    const last = previous.get(cam), incoming = cell.querySelector('video');
-    if (continuous && last && last.videoWidth && incoming && incoming.readyState < 2) {
+    let prepared = null;
+    if (!reused && file && prefetch?.quality === curQ) {
+      if (prefetch.videos?.has(file.url)) {
+        prepared = prefetch.videos.get(file.url);
+        prefetch.videos.delete(file.url);
+        if (prefetch.video === prepared) prefetch.video = null;
+      } else if (prefetch.file?.url === file.url && prefetch.video) {
+        prepared = prefetch.video;
+        prefetch.video = null;
+      }
+    }
+    const cell = mountCell(cam, file, prepared, offset, generation, seekStartup, reused);
+    const incoming = cell.querySelector('video');
+    if (continuous && !reused && last && last.videoWidth && incoming && incoming.readyState < 2) {
       const still = document.createElement('canvas');
       still.className = 'hold'; still.width = Math.min(640, last.videoWidth);
       still.height = Math.round(still.width * last.videoHeight / last.videoWidth);
@@ -4160,8 +4724,12 @@ function showClip(ix, offset, continuous = false, seekStartup = false) {
     }
     return cell;
   });
-  if (!continuous || prefetch?.nextKey !== group.key || prefetch.done) dropPrefetch();
-  old.forEach(v => { v.onerror = v.onended = null; releaseVideo(v); });
+  if (!continuous || prefetch?.nextKey !== group.key || prefetch.done || prefetch?.videos) dropPrefetch();
+  old.forEach(v => {
+    if (reusedVideos.has(v)) return;
+    v.onerror = v.onended = null;
+    releaseVideo(v);
+  });
   grid.replaceChildren(...cells);
   grid.classList.remove('loading');
   grid.classList.toggle('one', cells.length === 1);
@@ -4170,7 +4738,7 @@ function showClip(ix, offset, continuous = false, seekStartup = false) {
   renderInfo();
   drawTimeline();
   updateControls();
-  const metaFile = group.vids.find(v => v.cam === camSel) || group.vids[0];
+  const metaFile = group.vids.find(v => v.cam === 'front') || group.vids[0];
   loadTelemetry(metaFile.url, cur.meta);
   byId('startmask').classList.remove('show');
 }
@@ -4252,12 +4820,75 @@ function timelineGapSummary(group) {
   return timelineGaps().find(gap => Math.abs(gap.end - group.start) < .001) || null;
 }
 
+function intersectBufferedRanges(rangeSets) {
+  if (!rangeSets.length || rangeSets.some(ranges => !ranges.length)) return [];
+  return rangeSets.slice(1).reduce((shared, ranges) => {
+    const intersections = [];
+    let left = 0, right = 0;
+    while (left < shared.length && right < ranges.length) {
+      const start = Math.max(shared[left][0], ranges[right][0]);
+      const end = Math.min(shared[left][1], ranges[right][1]);
+      if (end > start) intersections.push([start, end]);
+      if (shared[left][1] < ranges[right][1]) left += 1;
+      else right += 1;
+    }
+    return intersections;
+  }, rangeSets[0]);
+}
+
+function bufferedTimelineRanges(clips, clipIndex, camera, videos) {
+  const clip = clips[clipIndex];
+  if (!clip || !clips.length) return [];
+  const files = clip.vids.filter(file => camera === 'all' || file.cam === camera);
+  if (!files.length) return [];
+  const byCamera = new Map(videos.map(video => [video.dataset.cam, video]));
+  const rangeSets = [];
+  for (const file of files) {
+    const video = byCamera.get(file.cam);
+    if (!video || video.error || video.dataset.loadFailed) return [];
+    const ranges = [];
+    try {
+      for (let i = 0; i < video.buffered.length; ++i) {
+        const start = Math.max(0, video.buffered.start(i));
+        const end = Math.min(video.buffered.end(i), clip.length,
+          Number(file.duration) > 0 ? Number(file.duration) : Infinity);
+        if (end > start) ranges.push([start, end]);
+      }
+    } catch (e) { return []; }
+    rangeSets.push(ranges);
+  }
+  const timelineStart = clips[0].start;
+  const offset = clip.start - timelineStart;
+  return intersectBufferedRanges(rangeSets).map(([start, end]) => [offset + start, offset + end]);
+}
+
+function updateBufferedTimeline() {
+  if (!curClips.length) return;
+  const ranges = bufferedTimelineRanges(curClips, curClipIx, camSel, activeVideos());
+  const signature = ranges.map(([start, end]) => start.toFixed(3) + ':' + end.toFixed(3)).join('|');
+  if (signature === bufferedTimelineSignature) return;
+  bufferedTimelineSignature = signature;
+  const bands = byId('track-bands');
+  bands.querySelectorAll('.buffered').forEach(band => band.remove());
+  const start = curClips[0].start;
+  const last = curClips[curClips.length - 1];
+  const span = last.start + last.length - start;
+  if (!(span > 0)) return;
+  for (const [left, right] of ranges) {
+    const band = document.createElement('i');
+    band.className = 'buffered';
+    band.style.left = left / span * 100 + '%';
+    band.style.width = (right - left) / span * 100 + '%';
+    bands.append(band);
+  }
+}
+
 function drawTimeline() {
   if (!curClips.length) return;
   const start = curClips[0].start, last = curClips[curClips.length - 1];
   const span = last.start + last.length - start;
   const range = byId('seek'); range.disabled = false; range.max = span; range.removeAttribute('title');
-  const bands = byId('track-bands'); bands.replaceChildren();
+  const bands = byId('track-bands'); bands.replaceChildren(); bufferedTimelineSignature = null;
   const mark = (left, width, cls, label = '') => {
     const band = document.createElement('i'); band.className = cls;
     if (cls === 'gap') band.style.right = (start + span - left - width) / span * 100 + '%';
@@ -4278,6 +4909,7 @@ function drawTimeline() {
     mark(triggerTime, 0, 'trigger');
   }
   byId('track-end').textContent = wallLabel(last.sourceStart + last.length);
+  updateBufferedTimeline();
 }
 
 function timelineGapAt(clientX) {
@@ -4288,64 +4920,76 @@ function timelineGapAt(clientX) {
 }
 
 /* ---------- 行车遥测面板 (SEI, 视频上方) ---------- */
-let telT0 = null, TEL_META = {};
+let telT0 = null, TEL_META = {}, TEL_KEY = '', telRequestId = 0;
+function renderTelDetails(frame, telemetry) {
+  const md = TEL_META || {};
+  const timestamp = frame && telT0 ? fmtTelDate(new Date(telT0.getTime() + frame[0] * 1000))
+    : md.timestamp ? String(md.timestamp).replace('T', ' ').replace(/Z$/, '')
+    : (telT0 ? fmtTelDate(telT0) : '—');
+  const location = [md.city, md.street].filter(Boolean).join(' · ') || '—';
+  const coordinates = md.est_lat != null && md.est_lon != null ? md.est_lat + ', ' + md.est_lon : '—';
+  const apNames = {1:'FSD', 2:'AP', 3:'TACC'};
+  const rows = [
+    [t('时间'), timestamp], [t('位置'), location], [t('坐标'), coordinates],
+    [t('触发原因'), md.reason ? (reasonLabel(md.reason) || t('未知')) : '—'],
+    [t('触发画面'), md.camera && isSentryEv(md) ? (CAM_IDX[+md.camera] ? camLabel(CAM_IDX[+md.camera]) : t('摄像头')) + ' #' + md.camera : '—'],
+    [t('车速'), frame ? Math.max(0, Math.round(frame[2])) + ' km/h' : '—'],
+    [t('挡位'), frame ? frame[1] : '—'],
+    [t('刹车'), frame ? (frame[5] ? t('踩下') : t('未踩')) : '—'],
+    [t('油门'), frame ? frame[3] + '%' : '—'],
+    [t('方向盘角度'), frame ? frame[4] + '°' : '—'],
+    [t('自动驾驶'), frame ? (frame[7] ? (apNames[frame[7] | 0] || 'AP') : t('未启动')) : '—'],
+    [t('横向加速度 Ax'), frame ? frame[11].toFixed(2) + ' m/s²' : '—'],
+    [t('前后加速度 Ay'), frame ? frame[12].toFixed(2) + ' m/s²' : '—'],
+    [t('垂直加速度 Az'), frame ? frame[13].toFixed(2) + ' m/s²' : '—'],
+    [t('刹车占比'), telemetry ? telemetry.brake_ratio + '%' : '—'],
+    [t('遥测'), telemetry ? 'SEI · ' + telemetry.count + ' 帧 @ ' + telemetry.fps + 'fps' : '—']
+  ];
+  const container = byId('tp-rows');
+  container.replaceChildren(...rows.map(([label, value]) => {
+    const row = document.createElement('div'), name = document.createElement('span');
+    name.className = 'k'; name.textContent = label; row.append(name, document.createTextNode(String(value)));
+    return row;
+  }));
+}
+function resetHud() {
+  const q = id => document.getElementById(id);
+  TEL = null; telT0 = null;
+  q('tp-spd').textContent = '—'; q('tp-gear').textContent = '—';
+  q('tp-thr-n').textContent = '—'; q('tp-brk-n').textContent = '—';
+  q('tp-sig-n').textContent = '—'; q('tp-ap-n').textContent = '—';
+  q('tp-brk').classList.remove('on');
+  q('tp-bl').classList.remove('on'); q('tp-br').classList.remove('on');
+  q('tp-st').classList.remove('ap-on');
+  q('tp-st').title = '—'; q('tp-st').querySelector('svg').style.transform = '';
+  renderTelDetails(null, null);
+}
 function loadTelemetry(url, meta) {
-  const generation = renderId;
-  TEL = null;
+  const current = currentClip();
+  const source = current?.vids.find(v => v.cam === 'front') || current?.vids[0];
+  const key = [libraryCat, current?.key || '', source?.url || '', source?.revision || '', cur?.trip || cur?.name || ''].join('|');
+  if (key === TEL_KEY) return;
+  TEL_KEY = key;
+  const requestId = ++telRequestId;
   TEL_META = meta || {};
-  const p = document.getElementById('tpanel'), card = document.getElementById('infocard');
-  p.classList.remove('show', 'plain');
-  if (card) card.classList.remove('plain');
-  p.classList.add('folded');   // 详细数据默认折叠
-  document.getElementById('tp-fold').textContent = '展开详细数据 ⌄';
-  document.getElementById('tp-loc').textContent =
-    [TEL_META.city, TEL_META.street].filter(Boolean).join(' · ');
-  // 触发画面摄像头: 只有哨兵事件显示 (手动保存等也会带无意义的 camera:"0")
-  const camTag = document.getElementById('tp-tag');
-  if (TEL_META.camera && isSentryEv(TEL_META)) {
-    const cn = CAM_IDX[+TEL_META.camera];
-    camTag.innerHTML = '触发画面 <b>' + (cn ? camLabel(cn) : '摄像头') + ' #' + TEL_META.camera + '</b>';
-    camTag.classList.add('show');
-  } else {
-    camTag.classList.remove('show');
-    camTag.innerHTML = '';
-  }
-  telT0 = null;
+  const p = document.getElementById('tpanel');
+  const enabled = libraryCat !== 'SentryClips';
+  p.classList.toggle('show', enabled);
+  if (!byId('tp-details').classList.contains('open')) byId('tp-fold').setAttribute('aria-expanded', 'false');
+  resetHud();
+  layoutPlayer();
   if (!url) return;
   const m = url.split('/').pop().match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);
   if (m) telT0 = new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
-  // 顶部时间: 优先 event.json 的 timestamp, 否则退回片段文件名里的时间
-  const ts = String(TEL_META.timestamp || '').replace('T', ' ').replace(/\.\d+/, '').replace(/Z$/, '').slice(0, 19);
-  document.getElementById('tp-date').textContent = ts || (telT0 ? fmtTelDate(telT0) : '—');
-  const fp = url.replace('/media/', '/archive/');
-  fetch('/api/telemetry?path=' + encodeURIComponent(fp))
+  renderTelDetails(null, null);
+  fetch('/api/telemetry?path=' + encodeURIComponent(url.replace('/media/', '/archive/')))
     .then(r => r.json())
     .then(d => {
-      if (generation !== renderId) return;
-      if (!d.ok || !d.frames || !d.frames.length) { showPlainPanel(); return; }
+      if (requestId !== telRequestId || key !== TEL_KEY) return;
+      if (!d.ok || !d.frames || !d.frames.length) return;
       TEL = d;
-      p.classList.add('show');
-      renderHud(d.frames[0]);
-      // 事件信息已搬到上方遥测面板, 下方卡片去掉重复项
-      ['time', 'city', 'street', 'coord', 'camera'].forEach(k => {
-        const el = document.querySelector('#ic-rows > div[data-k="' + k + '"]');
-        if (el) el.remove();
-      });
-      document.getElementById('ic-rows').insertAdjacentHTML('beforeend',
-        '<div><span class="ick">刹车占比</span>' + d.brake_ratio + '%</div>' +
-        '<div><span class="ick">遥测</span>SEI 元数据 · ' + d.count + ' 帧 @ ' + d.fps + 'fps</div>');
-    }).catch(() => { if (generation === renderId) showPlainPanel(); });
-}
-/* 哨兵/停车片段没有 SEI 遥测: 顶部仍然显示 时间 + 城市·位置, 只是不带车速/挡位 */
-function showPlainPanel() {
-  const p = document.getElementById('tpanel'), card = document.getElementById('infocard');
-  p.classList.add('show', 'plain');
-  if (card) card.classList.add('plain');
-  ['time', 'city', 'street', 'camera'].forEach(k => {
-    const el = document.querySelector('#ic-rows > div[data-k="' + k + '"]');
-    if (el) el.remove();
-  });
-  layoutPlayer();
+      updateHud(playbackOffset());
+    }).catch(() => {});
 }
 function fmtTelDate(dt) {
   const z = n => (n < 10 ? '0' : '') + n;
@@ -4357,33 +5001,35 @@ function renderHud(f) {
   const q = id => document.getElementById(id);
   q('tp-gear').textContent = f[1];
   q('tp-spd').textContent = Math.max(0, Math.round(f[2]));   // 停车时 SEI 可能给微负值
-  q('tp-date').textContent = telT0 ? fmtTelDate(new Date(telT0.getTime() + f[0]*1000)) : '—';
   q('tp-thr-n').textContent = f[3] + '%';
+  q('tp-brk-n').textContent = f[5] ? t('踩下') : t('未踩');
   q('tp-brk').classList.toggle('on', !!f[5]);   // 刹车只有布尔量, 不给百分比
   // 转向灯: HUD 由 CSS 的 tpBlink 动画负责闪 (.on 只表示"打了哪边的灯")
   q('tp-bl').classList.toggle('on', f[6] === 1);
   q('tp-br').classList.toggle('on', f[6] === 2);
+  q('tp-sig-n').textContent = f[6] === 1 ? '左' : f[6] === 2 ? '右' : '—';
   const apNames = { 1: 'FSD', 2: 'AP', 3: 'TACC' };
   // 自动驾驶状态就挂在方向盘那颗图标上 (AP/EAP/FSD 共用同一个方向盘, 不再单独占一个 "AP" 徽标);
   // 启动时橙红渐变, 未启动时灰底, 图标本身按方向盘角度旋转
   const apv = f[7] | 0, st = q('tp-st');
   st.classList.toggle('ap-on', !!apv);
-  st.title = '方向盘角度 ' + f[4] + '° · ' + (apv ? ((apNames[apv] || 'AP') + ' 已启动') : '自动驾驶未启动');
+  q('tp-ap-n').textContent = apv ? (apNames[apv] || 'AP') : t('关');
+  st.title = t('方向盘角度') + ' ' + f[4] + '° · ' + (apv ? ((apNames[apv] || 'AP') + ' ' + t('已启动')) : t('自动驾驶未启动'));
   const ang = Math.max(-400, Math.min(400, Number(f[4]) || 0));
   st.querySelector('svg').style.transform = 'rotate(' + ang + 'deg)';
-  const md = TEL_META || {};
-  q('tp-rows').innerHTML =
-    (md.est_lat && md.est_lon ? '<div><span class="k">坐标</span>' + md.est_lat + ', ' + md.est_lon + '</div>' : '') +
-    '<div><span class="k">方向盘角度</span>' + f[4] + '°</div>' +
-    '<div><span class="k">横向加速度 Ax</span>' + f[11].toFixed(2) + ' m/s²</div>' +
-    '<div><span class="k">前后加速度 Ay</span>' + f[12].toFixed(2) + ' m/s²</div>' +
-    '<div><span class="k">垂直加速度 Az</span>' + f[13].toFixed(2) + ' m/s²</div>';
+  if (byId('tp-details').classList.contains('open')) renderTelDetails(f, TEL);
 }
 function toggleTelRows() {
-  const p = document.getElementById('tpanel'), b = document.getElementById('tp-fold');
-  p.classList.toggle('folded');
-  b.textContent = p.classList.contains('folded') ? '展开详细数据 ⌄' : '收起详细数据 ⌃';
-  layoutPlayer();
+  const details = byId('tp-details'), b = byId('tp-fold');
+  if (details.classList.contains('open')) { closeTelDetails(); return; }
+  renderTelDetails(TEL && TEL.frames.length ? telFrameAt(playbackOffset()) : null, TEL);
+  details.classList.add('open'); byId('tp-details-shade').classList.add('open');
+  b.setAttribute('aria-expanded', 'true'); byId('tp-details-close').focus();
+}
+function closeTelDetails() {
+  byId('tp-details').classList.remove('open'); byId('tp-details-shade').classList.remove('open');
+  byId('tp-fold').setAttribute('aria-expanded', 'false');
+  if (byId('player').classList.contains('open')) byId('tp-fold').focus();
 }
 
 /* ---------- 导出视频水印 (与遥测面板同款) ---------- */
@@ -4528,7 +5174,10 @@ function updateHud(t) {
 window.addEventListener('resize', () => { if (document.getElementById('player').classList.contains('open')) layoutPlayer(); });
 
 let liveTimer = null, liveReading = false, liveStream = null, liveDirty = false, liveSignature = '';
-const demandClient = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, '0')).join('');
+function newClientId() {
+  return Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, '0')).join('');
+}
+const demandClient = newClientId();
 let demandRevision = 0, demandTimer = null, activeDemand = null;
 function postDemand(body, closing = false) {
   return fetch('/api/live/demand', {method:'POST', headers:{'Content-Type':'application/json'},
@@ -4555,6 +5204,15 @@ window.addEventListener('pageshow', e => {
 
 function openLive() {
   openPlayer(null, true);
+}
+
+function startLivePreview() {
+  const ix = curClips.length - 1, files = curClips[ix].vids;
+  const preferred = localStorage.getItem('tsflivecam');
+  const all = preferred === 'all' || preferred === '__all';
+  const camera = files.find(v => v.cam === preferred) || files.find(v => v.cam === 'front') || files[0];
+  camSel = all ? 'all' : camera.cam;
+  showClip(ix, 0);
 }
 
 function backToLatest() {
@@ -4617,8 +5275,7 @@ async function liveTick(force = true) {
     showLibrary(cur);
     if (!curClips.length) {
       curClips = groups; updateCameras();
-      if (!allCameras.includes(camSel) && camSel !== 'all') camSel = allCameras[0];
-      showClip(groups.length - 1, 0);
+      startLivePreview();
       syncTimer = setInterval(tick, 100);
       return;
     }
@@ -4722,19 +5379,20 @@ let fontReady = null, fontInfo = null;
 function paintFont() {
   const txt = document.getElementById('expfont-txt'), btns = document.getElementById('expfont-btns');
   if (!txt) return;
+  txt.classList.remove('status-warning');
   if (fontReady === null) {
     txt.textContent = '水印字体: 状态未知 (不影响其它功能)';
     if (btns) btns.style.display = 'none';
     return;
   }
   if (fontReady) {
-    txt.innerHTML = '<span style="color:#34c759">✓ 水印字体已就绪</span> ' +
-      '<span style="color:#5b646d">' + ((fontInfo || {}).name || '') + ' · ' +
+    txt.innerHTML = '<span class="status-success">✓ 水印字体已就绪</span> ' +
+      '<span>' + esc((fontInfo || {}).name || '') + ' · ' +
       (Math.round(((fontInfo || {}).size || 0) / 1048576 * 10) / 10) + 'MB</span>';
     if (btns) btns.style.display = 'none';
   } else {
-    txt.innerHTML = '<span style="color:#ff453a">✕ 缺少中文字体, 水印烧不进去</span><br>' +
-      '<span style="color:#5b646d;font-size:11px">点「安装字体」自动下载 (约17MB), 也可上传本地 ttf/otf</span>';
+    txt.innerHTML = '<span class="status-danger">✕ 缺少中文字体, 水印烧不进去</span><br>' +
+      '<span>点「安装字体」自动下载 (约17MB), 也可上传本地 ttf/otf</span>';
     if (btns) btns.style.display = 'flex';
   }
 }
@@ -4763,7 +5421,8 @@ function installFont() {
   const b = document.getElementById('expfont-btn'), txt = document.getElementById('expfont-txt');
   const old = b.textContent;
   b.disabled = true; b.textContent = '下载中…';
-  txt.innerHTML = '<span style="color:#ffb340">正在从镜像下载字体 (约17MB, 可能 1~3 分钟)…</span>';
+  txt.classList.add('status-warning');
+  txt.textContent = '正在从镜像下载字体 (约17MB, 可能 1~3 分钟)…';
   fetch('/api/font/dl', { method: 'POST' }).then(r => r.json()).then(d => {
     toast(d.msg || (d.ok ? '字体已安装' : '安装失败'));
   }).catch(() => toast('安装失败: 网络不通? 试试「上传」本地字体'))
@@ -4773,7 +5432,9 @@ function uploadFont(inp) {
   const f = inp.files && inp.files[0];
   if (!f) return;
   const fd = new FormData(); fd.append('file', f);
-  document.getElementById('expfont-txt').textContent = '正在上传字体…';
+  const txt = document.getElementById('expfont-txt');
+  txt.classList.add('status-warning');
+  txt.textContent = '正在上传字体…';
   fetch('/api/font/upload', { method: 'POST', body: fd }).then(r => r.json()).then(d => {
     toast(d.msg || (d.ok ? '字体已安装' : '上传失败'));
   }).catch(() => toast('上传失败')).finally(() => { inp.value = ''; loadFontInfo(true).then(paintFont); });
@@ -5009,6 +5670,7 @@ function updateControls() {
     byId('ptime').textContent = label;
     byId('seek').setAttribute('aria-valuetext', label);
   }
+  updateBufferedTimeline();
   if (liveMode) {
     byId('lv-status').textContent = followLatest ? (atEnd ? '等待新录像' : '跟随最新') : '回看中';
     byId('lv-back').disabled = followLatest && curClipIx === curClips.length - 1;
@@ -5112,14 +5774,14 @@ function tick() {
           v.dataset.seekTarget = String(target);
         }
       }
-      v.playbackRate = baseRate * (Math.abs(diff) > 0.06 && Math.abs(diff) <= 0.45 ? 1 - diff * 0.2 : 1);
+      v.playbackRate = baseRate * (Math.abs(diff) > 0.06 && Math.abs(diff) <= 0.45 ? Math.max(0.85, Math.min(1.15, 1 - diff * 0.45)) : 1);
     }
   } else if (wantedPlay) {
     const ended = videos.filter(v => v.ended);
     const endedAt = ended.reduce((pos, v) => Math.max(pos, v.currentTime), 0);
     // The source and its 24 fps preview can end on different frames. A camera
-    // still waiting for its URL must not pin the clock at that last frame.
-    const onlyWaiting = videos.every(v => v.ended || v.error || v.dataset.positioning);
+    // still waiting for its URL or permanently failed must not pin the clock at that last frame.
+    const onlyWaiting = videos.every(v => v.ended || v.error || v.dataset.loadFailed || v.dataset.positioning);
     if (ended.length === videos.length || (onlyWaiting && ended.length && currentClip().length - endedAt <= 0.1)) {
       clipOffset = Math.max(endedAt, clipOffset + elapsed * baseRate);
     }
@@ -5166,7 +5828,7 @@ function fmtSec(x) {
 }
 
 function closePlayback() {
-  ++sessionId; ++renderId;
+  ++sessionId; ++renderId; ++telRequestId; TEL_KEY = ''; TEL_META = {};
   releaseDemand();
   if (liveStream) liveStream.close();
   liveStream = null; liveDirty = false; liveSignature = '';
@@ -5183,9 +5845,10 @@ function closePlayback() {
   playerRecording = null;
   updateRecordingActions();
   seekPointerStart = null; byId('seek').removeAttribute('title');
-  byId('cambar').replaceChildren(); byId('track-bands').replaceChildren();
+  byId('cambar').replaceChildren(); byId('track-bands').replaceChildren(); bufferedTimelineSignature = null;
   byId('ic-rows').replaceChildren(); byId('ic-rows').classList.remove('open');
-  byId('tpanel').classList.remove('show'); byId('clipbar').replaceChildren();
+  closeTelDetails();
+  byId('tpanel').classList.remove('show'); resetHud(); byId('clipbar').replaceChildren();
   byId('ptime').textContent = '--:--:--'; byId('track-end').textContent = '';
   byId('ic-fold').textContent = '片段详情';
   byId('startmask').classList.remove('show');
@@ -5196,6 +5859,8 @@ function closePlayback() {
 function closePlayer() {
   closeExport(); closeQ();
   if (!byId('player').classList.contains('open')) return;
+  watchId = ''; trafficSample = null;
+  setTrafficValue('play-rate', 0); setTrafficValue('play-bytes', 0);
   if (document.fullscreenElement === document.documentElement) document.exitFullscreen().catch(() => {});
   closePlayback(); liveMode = false;
   byId('vgrid').replaceChildren();
@@ -5263,7 +5928,15 @@ byId('screenbtn').onclick = async () => {
   player.classList.toggle('expanded'); layoutPlayer();
 };
 document.addEventListener('keydown', e => {
+  if (byId('tp-details').classList.contains('open') && e.key === 'Tab') {
+    const buttons = [...byId('tp-details').querySelectorAll('button:not([disabled])')];
+    const first = buttons[0], last = buttons[buttons.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    return;
+  }
   if (e.key !== 'Escape') return;
+  if (byId('tp-details').classList.contains('open')) { closeTelDetails(); return; }
   if (storageHelpButton) { const button = storageHelpButton; storageHelpClose(); button.focus(); return; }
   if (byId('expp').classList.contains('open')) { closeExport(); return; }
   if (document.fullscreenElement) return;
@@ -5298,8 +5971,8 @@ function stab(which) {
   if (which === 'auth') pwLoad();
   if (which === 'wraps') refreshWraps();
   if (which === 'brand') refreshBrand();
-  if (which === 'skin') { applyStyle(localStorage.getItem(STYLE_KEY) || 'default'); refreshSkins(); }
-  if (which === 'storage') storageLoad();
+  if (which === 'skin') refreshSkins();
+  if (which === 'storage') { positionStorageBudget(null); storageLoad(); }
 }
 
 const STORAGE_HELP = {
@@ -5388,7 +6061,7 @@ function storageRenderAllocation() {
   budgetText.dataset.error = String(Boolean(message));
   budgetText.textContent = message || (unlimited
     ? t('归档不设上限') + '，' + t('仅受磁盘空闲保护') + '（' + values.free.toFixed(1) + ' GiB ' + t('未分配') + '）'
-    : '还可分配 ' + values.free.toFixed(1) + ' GiB');
+    : t('未分配余额') + ' ' + values.free.toFixed(1) + ' GiB');
 }
 function storageRenderUsage() {
   const {disk, values, usb_gib} = storageData;
@@ -5401,7 +6074,27 @@ function storageRenderUsage() {
   }
   document.getElementById('storage-used-free').textContent = (disk.free_bytes / 1073741824).toFixed(1) + ' GiB';
 }
-document.querySelectorAll('#tab-storage input').forEach(input => input.addEventListener('input', storageRenderAllocation));
+const mobileStorage = matchMedia('(max-width:600px)');
+function positionStorageBudget(field) {
+  const budget = document.getElementById('storage-budget');
+  if (mobileStorage.matches && field && field.matches('#tab-storage .storage-row input')) {
+    const row = field.closest('.storage-row');
+    if (row.nextElementSibling !== budget) row.after(budget);
+  } else {
+    const home = document.getElementById('storage-budget-home');
+    if (budget.parentNode !== home) home.appendChild(budget);
+  }
+}
+document.querySelectorAll('#tab-storage input').forEach(input => {
+  input.addEventListener('focus', () => positionStorageBudget(input));
+  input.addEventListener('input', storageRenderAllocation);
+});
+const repositionBudget = () => positionStorageBudget(document.activeElement);
+if (mobileStorage.addEventListener) mobileStorage.addEventListener('change', repositionBudget);
+else mobileStorage.addListener(repositionBudget);
+document.querySelector('#storage-minimum').closest('details').addEventListener('toggle', event => {
+  if (!event.target.open && event.target.contains(document.getElementById('storage-budget'))) positionStorageBudget(null);
+});
 async function storageLoad() {
   const request = ++storageRequest;
   clearTimeout(storageTimer);
@@ -5541,10 +6234,10 @@ async function ntLoad() {
     const m = document.getElementById('nt-msg');
     if (j.last && j.last.msg) {
       m.textContent = t('最近一次') + ': ' + (j.last.ok ? '✅ ' : '❌ ') + j.last.msg + ' (' + new Date(j.last.at * 1000).toLocaleString() + ')';
-      m.style.color = j.last.ok ? '#4cc38a' : 'var(--accent)';
+      m.style.color = j.last.ok ? 'var(--success-text)' : 'var(--danger-text)';
     } else if (!j.enabled) { m.textContent = t('未启用'); m.style.color = ''; }
     else if (j.dm_ready) { m.textContent = t('已启用私聊推送, 等下一个哨兵事件'); m.style.color = ''; }
-    else { m.textContent = t('已启用, 但接收人/应用凭据未配全'); m.style.color = 'var(--accent)'; }
+    else { m.textContent = t('已启用, 但接收人/应用凭据未配全'); m.style.color = 'var(--warning-text)'; }
   } catch (e) { document.getElementById('nt-msg').textContent = t('读取设置失败') + ': ' + e; }
 }
 async function ntSave() {
@@ -5573,9 +6266,9 @@ async function ntSave() {
   try {
     const j = await (await fetch('/api/notify/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
     m.textContent = (j.ok ? '✅ ' + t('已保存') : '❌ ' + j.msg) + (j.warn ? ' · ' + j.warn : '');
-    m.style.color = j.ok ? '#4cc38a' : 'var(--accent)';
+    m.style.color = j.ok ? 'var(--success-text)' : 'var(--danger-text)';
     if (j.ok) ntLoad();
-  } catch (e) { m.textContent = t('保存失败') + ': ' + e; m.style.color = 'var(--accent)'; }
+  } catch (e) { m.textContent = t('保存失败') + ': ' + e; m.style.color = 'var(--danger-text)'; }
 }
 async function ntTest() {
   const m = document.getElementById('nt-msg');
@@ -5583,8 +6276,8 @@ async function ntTest() {
   try {
     const j = await (await fetch('/api/notify/test', { method: 'POST' })).json();
     m.textContent = (j.ok ? '✅ ' : '❌ ') + j.msg;
-    m.style.color = j.ok ? '#4cc38a' : 'var(--accent)';
-  } catch (e) { m.textContent = t('发送失败') + ': ' + e; m.style.color = 'var(--accent)'; }
+    m.style.color = j.ok ? 'var(--success-text)' : 'var(--danger-text)';
+  } catch (e) { m.textContent = t('发送失败') + ': ' + e; m.style.color = 'var(--danger-text)'; }
 }
 
 function ntMediaUI() {
@@ -5606,13 +6299,13 @@ async function pwSave() {
   const o = document.getElementById('pw-old').value;
   const n = document.getElementById('pw-new').value;
   const n2 = document.getElementById('pw-new2').value;
-  if (n.length < 6) { m.textContent = t('新密码至少 6 位'); m.style.color = 'var(--accent)'; return; }
-  if (n !== n2) { m.textContent = t('两次输入的新密码不一致'); m.style.color = 'var(--accent)'; return; }
+  if (n.length < 6) { m.textContent = t('新密码至少 6 位'); m.style.color = 'var(--danger-text)'; return; }
+  if (n !== n2) { m.textContent = t('两次输入的新密码不一致'); m.style.color = 'var(--danger-text)'; return; }
   m.textContent = t('提交中…'); m.style.color = '';
   try {
     const j = await (await fetch('/api/auth/pass', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ old: o, 'new': n }) })).json();
-    if (!j.ok) { m.textContent = '❌ ' + t(j.msg); m.style.color = 'var(--accent)'; return; }
+    if (!j.ok) { m.textContent = '❌ ' + t(j.msg); m.style.color = 'var(--danger-text)'; return; }
     // 旧 cookie 已随 secret 更换失效, 用新密码立即重新登录, 保持本机不掉线
     try {
       await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -5622,8 +6315,8 @@ async function pwSave() {
     document.getElementById('pw-new').value = '';
     document.getElementById('pw-new2').value = '';
     m.textContent = '✅ ' + j.msg;
-    m.style.color = '#4cc38a';
-  } catch (e) { m.textContent = t('修改失败') + ': ' + e; m.style.color = 'var(--accent)'; }
+    m.style.color = 'var(--success-text)';
+  } catch (e) { m.textContent = t('修改失败') + ': ' + e; m.style.color = 'var(--danger-text)'; }
 }
 
 /* ---------- 系统更新 (OTA) ---------- */
@@ -6013,15 +6706,7 @@ async function purgeTeslaCam() {
 /* ---------- 涂装 (Wraps) ---------- */
 let wrapAttached = false;   // 与文件管理共用同一个 U 盘管理状态
 function wrapStatusHtml(attached) {
-  if (!attached) {
-    return '<div style="background:#3a2a12;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#f0b429;line-height:1.6">' +
-      '⚠ U盘当前未连接管理 (车机正常读写中)<br>' +
-      '<button onclick="wrapAttach()" style="background:#e8443f;border:none;color:#fff;border-radius:8px;padding:7px 16px;font-size:12.5px;cursor:pointer;margin-top:6px"><svg class="ic"><use href="#i-link"/></svg>连接车机U盘 (临时断开车机读取)</button></div>';
-  }
-  return '<div style="background:#1a3325;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#4cc38a;line-height:1.6">' +
-    '🟢 已连接 — 上传的图片会直接写入车机U盘 Wraps/ 目录<br>' +
-    '<span style="color:#7d8894;font-size:11.5px">断开满 5 分钟无操作会自动恢复车机导出</span><br>' +
-    '<button onclick="wrapDetach()" style="background:#242c35;border:none;color:#e8eaed;border-radius:8px;padding:7px 16px;font-size:12.5px;cursor:pointer;margin-top:6px">✅ 恢复车机导出</button></div>';
+  return usbStatusHtml(attached, 'wraps');
 }
 async function wrapAttach() {
   toast('⏳ 正在连接 (车机读取将断开几秒)...');
@@ -6054,17 +6739,15 @@ async function refreshWraps() {
   if (!files.length) { grid.innerHTML = '<div class="hint">Wraps 目录为空, 上传图片即可在车机上选用</div>'; return; }
   for (const f of files) {
     const box = document.createElement('div');
-    box.style.cssText = 'width:110px;text-align:center';
+    box.className = 'wrap-file';
     const img = document.createElement('img');
     img.src = '/usbdl?path=' + encodeURIComponent('Wraps/' + f.name);
-    img.style.cssText = 'width:100px;height:68px;object-fit:contain;background:#0d1117;border-radius:8px;border:1px solid #2a3440;cursor:pointer';
     img.onclick = () => window.open('/usbdl?path=' + encodeURIComponent('Wraps/' + f.name));
     const cap = document.createElement('div');
     cap.textContent = f.name;
-    cap.style.cssText = 'font-size:11px;color:#c9d1d9;margin:4px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    cap.className = 'wrap-name';
     const btn = document.createElement('button');
-    btn.className = 'danger'; btn.textContent = t('删除');
-    btn.style.cssText = 'font-size:11px;padding:4px 12px';
+    btn.className = 'mini danger'; btn.textContent = t('删除');
     btn.onclick = async () => {
       if (!confirm(t('删除') + ' Wraps/' + f.name + ' ?')) return;
       const r = await fetch('/api/usb?path=' + encodeURIComponent('Wraps/' + f.name), { method: 'DELETE' });
@@ -6103,16 +6786,17 @@ function switchArea(a) {
   curDir = a === 'usb' ? '' : '/archive/files';
   refreshFiles();
 }
-function usbStatusHtml(attached, msg) {
+function usbStatusHtml(attached, section) {
+  const wraps = section === 'wraps';
   if (!attached) {
-    return '<div style="background:#3a2a12;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#f0b429;line-height:1.6">' +
+    return '<div class="usb-management">' +
       '⚠ U盘当前未连接管理 (车机正常读写中)<br>' +
-      '<button onclick="usbAttach()" style="background:#e8443f;border:none;color:#fff;border-radius:8px;padding:7px 16px;font-size:12.5px;cursor:pointer;margin-top:6px"><svg class="ic"><use href="#i-link"/></svg>连接车机U盘 (临时断开车机读取)</button></div>';
+      '<button class="mini primary" onclick="' + (wraps ? 'wrapAttach()' : 'usbAttach()') + '"><svg class="ic"><use href="#i-link"/></svg>连接车机U盘 (临时断开车机读取)</button></div>';
   }
-  return '<div style="background:#1a3325;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#4cc38a;line-height:1.6">' +
-    '🟢 已连接 — U盘已从车机临时断开, 你在网页上的改动会直接写入车机U盘<br>' +
-    '<span style="color:#7d8894;font-size:11.5px">断开满 5 分钟无操作会自动恢复车机导出</span><br>' +
-    '<button onclick="usbDetach()" style="background:#242c35;border:none;color:#e8eaed;border-radius:8px;padding:7px 16px;font-size:12.5px;cursor:pointer;margin-top:6px">✅ 恢复车机导出</button></div>';
+  return '<div class="usb-management attached">' +
+    (wraps ? '🟢 已连接 — 上传的图片会直接写入车机U盘 Wraps/ 目录' : '🟢 已连接 — U盘已从车机临时断开, 你在网页上的改动会直接写入车机U盘') + '<br>' +
+    '<small>断开满 5 分钟无操作会自动恢复车机导出</small><br>' +
+    '<button class="mini" onclick="' + (wraps ? 'wrapDetach()' : 'usbDetach()') + '">✅ 恢复车机导出</button></div>';
 }
 async function usbAttach() {
   toast('⏳ 正在连接 (车机读取将断开几秒)...');
@@ -6138,6 +6822,20 @@ function goDir(d) {
     refreshFiles(d);
   }
 }
+function localizeFileAction(button) {
+  const label = t(button.dataset.fileAction);
+  button.title = label;
+  button.setAttribute('aria-label', label);
+}
+function fileActionButton(label, icon, styleClass) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = styleClass + ' fm-mini';
+  button.dataset.fileAction = label;
+  button.innerHTML = `<svg class="ic" aria-hidden="true" focusable="false"><use href="#i-${icon}"/></svg>`;
+  localizeFileAction(button);
+  return button;
+}
 async function refreshFiles(dir) {
   const request = ++browseRequest;
   if (dir !== undefined) curDir = dir;
@@ -6152,7 +6850,7 @@ async function refreshFiles(dir) {
     j = await (await fetch('/api/usb/browse?dir=' + encodeURIComponent(curDir))).json();
     if (request !== browseRequest) return;
     statusEl.style.display = 'block';
-    statusEl.innerHTML = usbStatusHtml(j.attached, j.msg);
+    statusEl.innerHTML = usbStatusHtml(j.attached);
     usbAttached = !!j.attached;
     if (!j.attached) { nav.style.display = 'none'; list.innerHTML = ''; fmUpdate(); return; }
     nav.style.display = 'block';
@@ -6166,25 +6864,34 @@ async function refreshFiles(dir) {
   curDir = area === 'usb' ? j.dir : j.virtual_dir;
   document.getElementById('dest-dir').value = curDir;
   crumb.innerHTML = '';
-  const mkLink = (label, target, folder) => {
+  const mkLink = (label, target, usbRoot = false) => {
     const a = document.createElement('a');
-    a.textContent = label; a.href = 'javascript:void(0)';
-    a.style.cssText = 'color:' + (folder ? '#5ea9ff' : '#7d8894') + ';cursor:pointer;text-decoration:underline';
-    a.onclick = () => goDir(target);
+    a.href = '#';
+    if (usbRoot) {
+      a.innerHTML = '<svg class="ic" aria-hidden="true" focusable="false"><use href="#i-car"/></svg> ';
+      const text = document.createTextNode(t(label));
+      text[ZH_TXT] = label;
+      text[ZH_TV] = text.nodeValue;
+      a.append(text);
+    } else {
+      a.translate = false;
+      a.textContent = label;
+    }
+    a.onclick = event => { event.preventDefault(); goDir(target); };
     crumb.appendChild(a);
-    const s = document.createElement('span'); s.textContent = ' / '; s.style.color = '#3a4652';
+    const s = document.createElement('span'); s.textContent = ' / ';
     crumb.appendChild(s);
   };
   if (area === 'usb') {
-    mkLink('🚗 U盘根目录', '', true);
+    mkLink('U盘根目录', '', true);
     let acc = '';
     for (const seg of curDir.split('/').filter(Boolean)) {
       acc = acc ? acc + '/' + seg : seg;
-      mkLink(seg, acc, true);
+      mkLink(seg, acc);
     }
   } else {
     let acc = '';
-    for (const seg of curDir.split('/').filter(Boolean)) { acc += '/' + seg; mkLink(seg, acc, true); }
+    for (const seg of curDir.split('/').filter(Boolean)) { acc += '/' + seg; mkLink(seg, acc); }
   }
   list.innerHTML = '';
   let empty = true;
@@ -6198,9 +6905,11 @@ async function refreshFiles(dir) {
     empty = false;
     const full = area === 'usb' ? (curDir ? curDir + '/' + d : d) : curDir + '/' + d;
     const el = document.createElement('div'); el.className = 'item';
-    const n = document.createElement('span'); n.className = 'n';
-    n.textContent = '📁 ' + d; n.style.cssText = 'cursor:pointer;color:#5ea9ff';
-    n.onclick = () => goDir(full);
+    const n = document.createElement('a'); n.className = 'n folder-link'; n.href = '#';
+    n.translate = false;
+    n.innerHTML = '<svg class="ic" aria-hidden="true" focusable="false"><use href="#i-folder"/></svg>';
+    n.append(' ' + d);
+    n.onclick = event => { event.preventDefault(); goDir(full); };
     el.append(mkChk(full, el), n);
     list.appendChild(el);
   }
@@ -6210,8 +6919,7 @@ async function refreshFiles(dir) {
     const el = document.createElement('div'); el.className = 'item';
     const n = document.createElement('span'); n.className = 'n'; n.textContent = f.name;
     const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = fmtSize(f.size || 0);
-    const btnDl = document.createElement('button'); btnDl.className = 'primary fm-mini';
-    btnDl.textContent = '⬇'; btnDl.title = t('下载');
+    const btnDl = fileActionButton('下载', 'download', 'primary');
     btnDl.onclick = async () => {
       const url = (area === 'usb' ? '/usbdl?path=' : '/dl?path=') + encodeURIComponent(full);
       if (area !== 'usb') { location.href = url; return; }   // 归档区可能是大视频, 走浏览器流式下载
@@ -6225,8 +6933,7 @@ async function refreshFiles(dir) {
         setTimeout(() => URL.revokeObjectURL(a.href), 60000);
       } catch (e) { toast('❌ ' + t('下载失败')); }
     };
-    const btnDel = document.createElement('button'); btnDel.className = 'danger fm-mini';
-    btnDel.textContent = '✕'; btnDel.title = t('删除');
+    const btnDel = fileActionButton('删除', 'trash', 'danger');
     btnDel.onclick = () => delFile(full);
     el.append(mkChk(full, el), n, tag, btnDl, btnDel);
     list.appendChild(el);
@@ -6250,9 +6957,18 @@ document.getElementById('anyfile-file').onchange = async function () {
 };
 
 injectSkin();
-applyLang();
-refreshBrand();
-load();
+initialDictionary.then(pack => {
+  if (!languageRequest) {
+    LANG = pack ? initialLanguage : 'zh';
+    dictionary = pack || {};
+  }
+  applyLang();
+  updateThemeButton();
+  document.documentElement.classList.remove('language-pending');
+  if (!pack && !languageRequest) toast('语言包加载失败，请重试');
+  refreshBrand();
+  load();
+});
 // 字体状态预热: 这时还没开播放器, 连接池是空的, 一定能拿到
 loadFontInfo().then(paintFont);
 </script></body></html>"""
@@ -7041,10 +7757,12 @@ def recording_action(body):
             if usb_attached or _usb_flock_fd is not None or not _acquire_usb_flock():
                 raise ValueError("录像正在同步，请稍后重试")
             done = 0
+            removing = False
             try:
                 for item in names:
                     if not _tombstone(cat, item):
                         raise OSError("无法保存删除状态")
+                removing = True
                 for path in paths:
                     shutil.rmtree(path)
                     done += 1
@@ -7054,6 +7772,9 @@ def recording_action(body):
                 return dict(ok=False, done=done, msg="删除未完成，请刷新后重试")
             finally:
                 _release_usb_flock()
+                if removing:
+                    with _ARC_SIZE_LOCK:
+                        _ARC_SIZE_CACHE["t"] = None
 
 
 def check_recording_write(paths):
@@ -7441,7 +8162,8 @@ def _proc_running(needle):
     return False
 
 
-_ARC_SIZE_CACHE = {"t": 0.0, "v": 0}
+_ARC_SIZE_CACHE = {"t": None, "v": 0}
+_ARC_SIZE_LOCK = threading.Lock()
 
 _BITCOUNT = bytes(bin(i).count("1") for i in range(256))
 _IMG_USED_CACHE = {"t": 0.0, "path": "", "v": None}
@@ -7535,27 +8257,33 @@ def _exfat_used(path):
 def archive_size():
     """归档区实际占用。os.walk 在文件多的时候要几十~几百毫秒, 而存储卡每 10 秒轮询一次,
     所以做 60 秒缓存, 别让面板把设备拖慢。"""
-    now = time.time()
-    if _ARC_SIZE_CACHE["t"] and now - _ARC_SIZE_CACHE["t"] < 60:
-        return _ARC_SIZE_CACHE["v"]
-    sz = _dir_size(ARCHIVE, deduplicate=True) if os.path.isdir(ARCHIVE) else 0
-    _ARC_SIZE_CACHE.update(t=now, v=sz)
-    return sz
+    with _ARC_SIZE_LOCK:
+        now = time.monotonic()
+        cached_at = _ARC_SIZE_CACHE["t"]
+        if cached_at is not None and now - cached_at < 60:
+            return _ARC_SIZE_CACHE["v"]
+        size = _dir_size(ARCHIVE, deduplicate=True) if os.path.isdir(ARCHIVE) else 0
+        _ARC_SIZE_CACHE.update(t=now, v=size)
+        return size
 
 
-_SYS_CACHE = {"t": 0.0, "v": {}}
+_SYS_CACHE = {"t": 0.0, "v": {}, "cpu": None}
+_SYS_LOCK = threading.Lock()
 
 
 def sys_status():
-    """系统状态一行: CPU 温度 / CPU 占用 / 内存占用 (给存储卡折叠区显示)。
+    """前台轮询共享采样；相邻快照的差值给出 CPU 占用。"""
+    with _SYS_LOCK:
+        now = time.monotonic()
+        if _SYS_CACHE["v"] and now - _SYS_CACHE["t"] < 1:
+            return _SYS_CACHE["v"]
+        data, cpu = _read_system_status(_SYS_CACHE["cpu"])
+        _SYS_CACHE.update(t=now, v=data, cpu=cpu)
+        return data
 
-    存储卡每 10 秒轮询一次, 可能多个端同时打开 —— 结果缓存 3 秒;
-    CPU 占用必须两次采样 /proc/stat 求差, 睡 150ms 就当是采样窗口。"""
-    now = time.time()
-    if _SYS_CACHE["t"] and now - _SYS_CACHE["t"] < 3:
-        return _SYS_CACHE["v"]
-    d = {"cpu_temp": None, "cpu_pct": None, "mem_total": 0, "mem_used": 0,
-         "ffmpeg": ffmpeg_ready()}
+
+def _read_system_status(previous_cpu):
+    d = {"cpu_temp": None, "cpu_pct": None, "mem_total": 0, "mem_used": 0, "ffmpeg": ffmpeg_ready()}
     # CPU 温度: thermal_zone 里取读数合理的热区最大值 (SoC 通常只有一两个)
     temps = []
     for thermal_file in glob.glob('/sys/class/thermal/thermal_zone*/temp'):
@@ -7568,20 +8296,16 @@ def sys_status():
             temps.append(v / 1000.0)
     if temps:
         d["cpu_temp"] = round(max(temps), 1)
-    # CPU 占用: /proc/stat 两次采样求差 (user+nice+system+idle+... 与 idle+ iowait)
-    def _cpu_pair():
-        with open("/proc/stat") as f:
-            vals = [int(x) for x in f.readline().split()[1:] if x.isdigit()]
-        idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
-        return sum(vals), idle
+    cpu = None
     try:
-        t1, i1 = _cpu_pair()
-        time.sleep(0.15)
-        t2, i2 = _cpu_pair()
-        dt = t2 - t1
-        if dt > 0:
-            d["cpu_pct"] = round(max(0.0, min(100.0, (dt - (i2 - i1)) / dt * 100)), 1)
-    except Exception:
+        with open("/proc/stat") as f:
+            # guest and guest_nice are already included in user and nice.
+            vals = [int(x) for x in f.readline().split()[1:9]]
+        cpu = (sum(vals), vals[3] + (vals[4] if len(vals) > 4 else 0))
+        if previous_cpu and cpu[0] > previous_cpu[0]:
+            busy = 1 - (cpu[1] - previous_cpu[1]) / (cpu[0] - previous_cpu[0])
+            d["cpu_pct"] = round(max(0.0, min(100.0, busy * 100)), 1)
+    except (OSError, ValueError, IndexError):
         pass
     # 内存: MemTotal - MemAvailable (MemAvailable 才是内核估计的真正可用量)
     try:
@@ -7595,8 +8319,26 @@ def sys_status():
         d["mem_used"] = max(0, mi.get("MemTotal", 0) - avail)
     except Exception:
         pass
-    _SYS_CACHE.update(t=now, v=d)
-    return d
+    return d, cpu
+
+
+_PLAYBACK_BYTES = OrderedDict()
+_PLAYBACK_BYTES_LOCK = threading.Lock()
+
+
+def playback_watch(query):
+    watch = query.get("watch", [""])[0]
+    return watch if re.fullmatch(r"[0-9a-f]{32}", watch) else ""
+
+
+def playback_bytes(watch, sent=0):
+    """Count delivered media payload per open player, in bounded process memory."""
+    with _PLAYBACK_BYTES_LOCK:
+        total = _PLAYBACK_BYTES.pop(watch, 0) + sent
+        _PLAYBACK_BYTES[watch] = total
+        if len(_PLAYBACK_BYTES) > 512:
+            _PLAYBACK_BYTES.popitem(last=False)
+        return total
 
 
 def disk_usage():
@@ -7858,29 +8600,69 @@ USER_TRANS = [0]      # 正在排队/占用转码槽的用户请求数; 后台�
 RES_MAX = 2 * 1024 * 1024 * 1024  # 清晰度缓存总量上限 2GB, 超了从最旧开始删
 
 
+_res_cleanup_lock = threading.Lock()
+_res_cleanup_running = False
+_res_cleanup_last = 0.0
+
+
 def res_cleanup():
     try:
         now = time.time()
-        for f in os.listdir(RES_DIR):  # 清理残留转码临时文件 (进程被杀会留下 0 字节 tmp)
-            if f.endswith(".tmp") and now - os.path.getmtime(os.path.join(RES_DIR, f)) > 1800:
+        files = []
+        total = 0
+        with os.scandir(RES_DIR) as it:
+            for entry in it:
+                name = entry.name
                 try:
-                    os.unlink(os.path.join(RES_DIR, f))
+                    st = entry.stat(follow_symlinks=False)
                 except OSError:
-                    pass
-        files = [os.path.join(RES_DIR, f) for f in os.listdir(RES_DIR)
-                 if f.endswith(".mp4") or (f.startswith("sentry-") and f.endswith(".ts"))]
-        total = sum(os.path.getsize(f) for f in files if os.path.isfile(f))
+                    continue
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                if name.endswith(".tmp"):
+                    if now - st.st_mtime > 1800:
+                        try:
+                            os.unlink(entry.path)
+                        except OSError:
+                            pass
+                    continue
+                if name.endswith(".mp4") or (name.startswith("sentry-") and name.endswith(".ts")):
+                    files.append((st.st_mtime, st.st_size, entry.path))
+                    total += st.st_size
         if total <= RES_MAX:
             return
-        files.sort(key=lambda f: os.path.getmtime(f))
-        for f in files:
+        files.sort(key=lambda item: item[0])
+        for _mtime, sz, path in files:
             if total <= RES_MAX:
                 break
-            sz = os.path.getsize(f)
-            os.unlink(f)
-            total -= sz
+            try:
+                os.unlink(path)
+                total -= sz
+            except OSError:
+                pass
     except Exception:
         pass
+
+
+def schedule_res_cleanup():
+    """Run cache cleanup asynchronously so scanning thousands of parts never stalls Q_SEM."""
+    global _res_cleanup_running, _res_cleanup_last
+    now = time.monotonic()
+    with _res_cleanup_lock:
+        if _res_cleanup_running or now - _res_cleanup_last < 30:
+            return
+        _res_cleanup_running = True
+        _res_cleanup_last = now
+
+    def _run():
+        global _res_cleanup_running
+        try:
+            res_cleanup()
+        finally:
+            with _res_cleanup_lock:
+                _res_cleanup_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ---------- 归档滚动窗口 + 磁盘空间兜底 ----------
@@ -9804,20 +10586,20 @@ class SentryPreviewJobs:
         return True
 
 
-def run_variant(cmd, wanted, jobs=None, key=None, preferred=None, hd_preview=False, startup_boost=False):
+def run_variant(cmd, wanted, jobs=None, key=None, preferred=None, hd_preview=False, startup_boost=False,
+                on_poll=None, poll_interval=0.45):
     count = preview_cores()
     if wanted is not None and (not count or not wanted()):
         return False
     available = sorted(os.sched_getaffinity(0))
-    target = [n for n in (preferred or (4, 5, 6)) if n in available] or available
+    target = [n for n in (preferred or (4, 5, 6, 7)) if n in available] or available
     def cpu_mask(core_count):
-        if hd_preview and len(target) == 4 and _thermal_value is not None:
-            if startup_boost and core_count == 3 and _thermal_value < 65:
-                return target[:4]
-            if core_count in (2, 3) and _thermal_value < 70:
-                # Prefer the other middle core within the ordinary thermal budget.
-                return [target[0], target[3], *target[1:core_count - 1]]
-        return target[:core_count or 2]
+        if core_count <= 0:
+            return target[:2]
+        if (hd_preview and startup_boost and core_count == 3 and len(target) >= 4
+                and _thermal_value is not None and _thermal_value < 65):
+            return target[:4]
+        return target[:min(core_count, len(target))]
 
     mask = cpu_mask(count)
     launcher = 'import os,sys;os.sched_setaffinity(0,set(map(int,sys.argv[1].split(","))));os.execvp(sys.argv[2],sys.argv[2:])'
@@ -9850,8 +10632,10 @@ def run_variant(cmd, wanted, jobs=None, key=None, preferred=None, hd_preview=Fal
             proc.send_signal(signal.SIGCONT)
         while time.monotonic() < deadline:
             try:
-                return proc.wait(timeout=.45) == 0
+                return proc.wait(timeout=poll_interval) == 0
             except subprocess.TimeoutExpired:
+                if on_poll is not None:
+                    on_poll(False)
                 count = preview_cores()
                 if wanted is not None and (not count or not wanted()):
                     # A thermal hold must stop CPU use without erasing the partial Sentry preview.
@@ -9912,7 +10696,7 @@ def get_variant(fp, qv, slot=True, wanted=None, jobs=None):
         try:
             if run_variant(cmd, wanted, jobs, (fp, qv)) and os.path.isfile(tmp) and os.path.getsize(tmp) > 0:
                 os.replace(tmp, out)
-                res_cleanup()
+                schedule_res_cleanup()
                 return out
         except Exception:
             pass
@@ -10045,16 +10829,30 @@ PREVIEW_PART_SECONDS = 1
 _part_cleanup_at = 0
 _part_queue_changed = threading.Condition()
 _part_waiters = []
+_part_ready_changed = threading.Condition()
+_active_stream = None
+_BIG_CORE_ROTATIONS = ((4, 5, 6, 7), (5, 6, 7, 4), (6, 7, 4, 5), (7, 4, 5, 6))
+_BIG_CORE_ROTATIONS_2 = ((4, 5, 6, 7), (6, 7, 4, 5), (4, 6, 5, 7), (5, 7, 4, 6))
 
 
-def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead, connected, warm=False, startup_boost=False):
+def _preview_batch_size(quality, ahead, warm, startup_boost, cache_only=False):
+    if warm:
+        return 1
+    if cache_only:
+        return 6 if quality == '720p' else 4
+    if not ahead or startup_boost:
+        return 4
+    return 6
+
+
+def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead, connected, warm=False,
+                          startup_boost=False, cache_only=False):
     seconds = PREVIEW_PART_SECONDS
     end = max(1, math.ceil((duration - .08) / seconds))
     fast_hd = quality == '720p'
-    # The HTTP response is released when the batch finishes. A short first batch
-    # supplies the seek target and runway without delaying other visible cameras.
-    batch_size = 3 if startup_boost else (6 if fast_hd else 4)
-    count = min(batch_size if ahead and not warm else 1, end - index)
+    cores = preview_cores()
+    batch_size = _preview_batch_size(quality, ahead, warm, startup_boost, cache_only=cache_only)
+    count = min(batch_size, end - index)
     for step in range(1, count):
         if os.path.isfile("%s%d.%s" % (prefix, index + step, transport)):
             count = step
@@ -10062,16 +10860,17 @@ def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead
     length = duration - index * seconds if index + count == end else count * seconds
     width, height, bitrate = RES_SCALE[quality]
     level = "3.1" if quality == "720p" else "3.0"
-    scale = "scale=%d:%d" % (width, height)
-    if fast_hd:
-        scale += ':flags=fast_bilinear'
+    scale = "scale=%d:%d:flags=fast_bilinear" % (width, height)
+    threads = "3" if cores >= 3 else "2"
+    use_ultrafast = fast_hd or cores <= 2
+    enc_flags = ["-preset", "ultrafast", "-tune", "zerolatency"] if use_ultrafast else ["-preset", "superfast"]
     tmp = prefix + "%d-%d-%%d.tmp" % (os.getpid(), threading.get_ident())
     cmd = ["sh", "-c", 'echo 300 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
-           FFMPEG_BIN, "-nostdin", "-loglevel", "error", "-ss", str(index * seconds), "-threads", str(TR_THREADS), "-i", fp,
+           FFMPEG_BIN, "-nostdin", "-loglevel", "error", "-ss", str(index * seconds), "-threads", threads, "-i", fp,
            "-frames:v", str(max(1, math.ceil(length * 24 - .0001))), "-map", "0:v:0", "-an", "-filter_threads", "1",
            "-vf", "setpts=PTS-STARTPTS,fps=24:start_time=0," + scale + ",tpad=stop_mode=clone:stop_duration=0.1",
            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-           "-profile:v", "baseline", "-level", level, "-threads:v", str(TR_THREADS), "-preset", "ultrafast" if fast_hd else "superfast",
+           "-profile:v", "baseline", "-level", level, "-threads:v", threads, *enc_flags,
            "-b:v", "%dk" % bitrate, "-maxrate", "%dk" % (bitrate * 3 // 2), "-bufsize", "%dk" % (bitrate * 3),
            "-g", str(24 * seconds), "-sc_threshold", "0", "-force_key_frames", "expr:gte(t,n_forced*%d)" % seconds,
            "-f", "segment", "-segment_time_delta", "0.020833", "-segment_start_number", str(index)]
@@ -10085,22 +10884,38 @@ def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead
     else:
         cmd += ["-reset_timestamps", "1", "-segment_format", "mp4",
                 "-segment_format_options", "movflags=+empty_moov+default_base_moof+frag_keyframe"]
+    published = set()
+
+    def publish(finished=False):
+        moved = False
+        for part in range(index, index + count):
+            if part in published:
+                continue
+            part_tmp = tmp % part
+            # FFmpeg closes a segment before opening its successor. Publish each closed
+            # segment immediately so HTTP callers do not wait for the entire batch.
+            if ((finished or os.path.exists(tmp % (part + 1)))
+                    and os.path.isfile(part_tmp) and os.path.getsize(part_tmp)):
+                try:
+                    os.replace(part_tmp, "%s%d.%s" % (prefix, part, transport))
+                    published.add(part)
+                    moved = True
+                except OSError:
+                    pass
+        if moved:
+            with _part_ready_changed:
+                _part_ready_changed.notify_all()
+
     try:
-        # Spread successive cuts across the middle cores. Use the same thermal
-        # core count as the existing worker, including its full cooling stop.
+        # Rotate across the big A76 cores (4..7) so heat stays distributed across thermal zones
+        # while avoiding asymmetric big+little thread stalls.
         cam = cam_of(os.path.basename(fp))
         camera_index = CAM_ORDER6.index(cam) if cam in CAM_ORDER6 else 0
-        middle_cores = (4, 5, 6)
-        middle_index = (index + camera_index) % len(middle_cores)
-        middle = middle_cores[middle_index]
-        next_middle = middle_cores[(middle_index + 1) % len(middle_cores)]
-        complete = run_variant(cmd + ["-y", tmp], connected, preferred=(middle, 0, 1, next_middle), hd_preview=fast_hd,
-                               startup_boost=fast_hd and startup_boost)
-        for part in range(index, index + count):
-            # FFmpeg closes a segment before opening its successor. On cancellation
-            # only those closed files can safely enter the cache.
-            if (complete or os.path.exists(tmp % (part + 1))) and os.path.isfile(tmp % part) and os.path.getsize(tmp % part):
-                os.replace(tmp % part, "%s%d.%s" % (prefix, part, transport))
+        rot_pool = _BIG_CORE_ROTATIONS if cores >= 3 else _BIG_CORE_ROTATIONS_2
+        preferred = rot_pool[(index + camera_index) % len(rot_pool)]
+        complete = run_variant(cmd + ["-y", tmp], connected, preferred=preferred, hd_preview=fast_hd,
+                               startup_boost=fast_hd and startup_boost, on_poll=publish, poll_interval=0.04)
+        publish(complete)
     finally:
         for part in range(index, index + count):
             try:
@@ -10109,9 +10924,20 @@ def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead
                 pass
 
 
-def preview_part(fp, quality, index, duration, transport, ahead, connected, warm=False, prime=False, cache_only=False):
+def _stream_covers(stream, prefix, transport, index, priority):
+    if not stream or stream["done"]:
+        return False
+    if stream["prefix"] != prefix or stream["transport"] != transport:
+        return False
+    if not (stream["start"] <= index < stream["end"]):
+        return False
+    return stream["yielded"] or index == stream["start"] or priority >= stream["priority"]
+
+
+def preview_part(fp, quality, index, duration, transport, ahead, connected, warm=False, prime=False, cache_only=False,
+                 lead_ds=999):
     """Encode the requested time window in the same thermal and CPU slot as full previews."""
-    global _part_cleanup_at
+    global _active_stream
     key = os.path.basename(_variant_path(fp, quality))
     if not key:
         return None
@@ -10140,16 +10966,29 @@ def preview_part(fp, quality, index, duration, transport, ahead, connected, warm
         return data
     deadline = time.monotonic() + 24
     priority = 3 if cache_only else (0 if not ahead else (1 if prime else 2))
-    ticket = (priority, object())
+    lead_rank = max(0, min(999, int(lead_ds))) if not cache_only else 999
+    ticket = (priority, object(), prefix, transport, index, lead_rank)
+    ticket_active = True
     with _part_queue_changed:
-        # Visible frames and player read-ahead outrank cache-only work.
-        place = next((i for i, (queued_priority, _) in enumerate(_part_waiters) if queued_priority > priority), len(_part_waiters))
+        # Visible frames outrank read-ahead; within the same priority, lowest remaining buffer goes first.
+        place = next((i for i, queued in enumerate(_part_waiters)
+                      if (queued[0], queued[5]) > (priority, lead_rank)), len(_part_waiters))
         _part_waiters.insert(place, ticket)
         _part_queue_changed.notify_all()
 
+    def leave_queue():
+        nonlocal ticket_active
+        if not ticket_active:
+            return
+        with _part_queue_changed:
+            if ticket_active:
+                _part_waiters.remove(ticket)
+                ticket_active = False
+                _part_queue_changed.notify_all()
+
     def first_in_queue():
         with _part_queue_changed:
-            return _part_waiters[0] == ticket
+            return bool(_part_waiters) and _part_waiters[0] == ticket
 
     def still_needed():
         return connected() and time.monotonic() < deadline and first_in_queue()
@@ -10157,45 +10996,122 @@ def preview_part(fp, quality, index, duration, transport, ahead, connected, warm
     USER_TRANS[0] += 1
     try:
         while time.monotonic() < deadline and connected():
+            data = cached()
+            if data:
+                return data
+            # Piggyback on an active stream encoding our exact target part instead of preempting it.
+            with _part_ready_changed:
+                stream = _active_stream
+                if not cache_only and _stream_covers(stream, prefix, transport, index, priority):
+                    if priority < stream["priority"]:
+                        stream["priority"] = priority
+                    _part_ready_changed.wait(0.05)
+                    continue
             with _part_queue_changed:
-                if _part_waiters[0] != ticket:
-                    _part_queue_changed.wait(.35)
+                if not _part_waiters or _part_waiters[0] != ticket:
+                    _part_queue_changed.wait(.05)
                     continue
             if not preview_cores() or not preview_memory_available():
-                time.sleep(.25)
+                time.sleep(.15)
                 continue
-            if not Q_SEM.acquire(timeout=.25):
+            if not Q_SEM.acquire(timeout=.05):
                 continue
-            try:
-                if not first_in_queue():
-                    continue
-                data = cached()
-                if data:
-                    return data
-                cancelled = False
-                def encoding_needed():
-                    nonlocal cancelled
-                    if not still_needed():
-                        cancelled = True
-                    return not cancelled
-                _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead or prime or cache_only,
-                                      encoding_needed, warm, startup_boost=prime)
-                data = cached()
-                if data:
-                    if time.monotonic() >= _part_cleanup_at:
-                        _part_cleanup_at = time.monotonic() + 30
-                        res_cleanup()
-                    return data
-                if not cancelled and preview_cores() and still_needed():
-                    raise ValueError("preview encoding failed")
-            finally:
+            if not first_in_queue():
                 Q_SEM.release()
+                continue
+            data = cached()
+            if data:
+                Q_SEM.release()
+                return data
+            total_parts = max(1, math.ceil((duration - .08) / PREVIEW_PART_SECONDS))
+            batch_end = min(total_parts, index + _preview_batch_size(
+                quality, ahead or prime or cache_only, warm, prime, cache_only=cache_only))
+            stream = {
+                "prefix": prefix, "transport": transport, "start": index, "end": batch_end,
+                "priority": priority, "done": False, "cancelled": False, "yielded": False,
+            }
+            with _part_ready_changed:
+                _active_stream = stream
+
+            def stream_still_needed():
+                if not stream["yielded"]:
+                    if not still_needed():
+                        stream["cancelled"] = True
+                        return False
+                    return True
+                if not preview_cores() or not preview_memory_available():
+                    stream["cancelled"] = True
+                    return False
+                with _part_queue_changed:
+                    if not _part_waiters:
+                        return True
+                    head = _part_waiters[0]
+                if head[2] == prefix and head[3] == transport and index < head[4] < stream["end"]:
+                    return True
+                # Preempt an already-delivering stream only for first-frame seeks (priority == 0)
+                # or strictly higher-priority requests (e.g., low-water prime preempting ordinary read-ahead).
+                # Same-or-lower priority peers let the current 4-6s streaming batch complete so four cameras
+                # amortize FFmpeg startup cost and build real buffer ahead of the playhead.
+                if head[0] >= 1 and head[0] >= stream["priority"]:
+                    return True
+                stream["cancelled"] = True
+                return False
+
+            USER_TRANS[0] += 1
+
+            def run_stream():
+                global _active_stream
+                try:
+                    encode_fn = _encode_preview_parts
+                    if cache_only and encode_fn is _ORIGINAL_ENCODE_PREVIEW_PARTS:
+                        encode_fn(fp, quality, prefix, index, duration, transport,
+                                  ahead or prime or cache_only, stream_still_needed, warm,
+                                  startup_boost=prime, cache_only=True)
+                    else:
+                        encode_fn(fp, quality, prefix, index, duration, transport,
+                                  ahead or prime or cache_only, stream_still_needed, warm,
+                                  startup_boost=prime)
+                except Exception:
+                    pass
+                finally:
+                    with _part_ready_changed:
+                        stream["done"] = True
+                        if _active_stream is stream:
+                            _active_stream = None
+                        _part_ready_changed.notify_all()
+                    Q_SEM.release()
+                    USER_TRANS[0] = max(0, USER_TRANS[0] - 1)
+                    with _part_queue_changed:
+                        _part_queue_changed.notify_all()
+
+            threading.Thread(target=run_stream, daemon=True).start()
+            while time.monotonic() < deadline and connected():
+                if not cache_only:
+                    data = cached()
+                    if data:
+                        leave_queue()
+                        with _part_ready_changed:
+                            stream["yielded"] = True
+                            _part_ready_changed.notify_all()
+                        schedule_res_cleanup()
+                        return data
+                with _part_ready_changed:
+                    if stream["done"]:
+                        break
+                    _part_ready_changed.wait(0.05)
+            data = cached()
+            if data:
+                schedule_res_cleanup()
+                return data
+            if stream["done"] and not stream["cancelled"] and preview_cores() and still_needed():
+                raise ValueError("preview encoding failed")
     finally:
-        USER_TRANS[0] -= 1
-        with _part_queue_changed:
-            _part_waiters.remove(ticket)
-            _part_queue_changed.notify_all()
+        USER_TRANS[0] = max(0, USER_TRANS[0] - 1)
+        leave_queue()
     return None
+
+
+_ORIGINAL_ENCODE_PREVIEW_PARTS = _encode_preview_parts
 
 
 def spawn_variant(fp, qv, preheat=False):
@@ -11407,28 +12323,27 @@ def fail_check(ip, inc):
 LOGIN_HTML = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>__L_LOGIN__ · __L_BRAND__</title>
+""" + THEME_HEAD + """
 <style>
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
- background:#0d1219;color:#e8eef4;font:15px/1.5 -apple-system,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;
- padding:24px}
-.card{width:100%;max-width:340px;background:#161d26;border:1px solid #232c36;border-radius:18px;
- padding:26px 22px 22px;box-shadow:0 18px 50px rgba(0,0,0,.45)}
+ background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding:24px}
+.card{width:100%;max-width:340px;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+ padding:26px 22px 22px;box-shadow:var(--shadow)}
 .logo{display:flex;align-items:center;gap:10px;margin-bottom:18px}
-.dot{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#10b981,#059669);
- display:flex;align-items:center;justify-content:center;font-size:17px}
-img.dot{object-fit:cover;padding:0;background:none;border-radius:50%}
+.dot{width:34px;height:34px;object-fit:cover;border-radius:50%}
 h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.2px}
-p.sub{margin:2px 0 0;font-size:12px;color:#7d8894}
-label{display:block;font-size:12px;color:#97a3af;margin:12px 0 6px}
-input{width:100%;padding:11px 12px;border-radius:11px;border:1px solid #2b3540;background:#0f151d;
- color:#e8eef4;font-size:15px;outline:none}
-input:focus{border-color:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,.15)}
-button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:11px;cursor:pointer;
- background:#10b981;color:#fff;font-size:15px;font-weight:600}
-button:active{background:#0ea472}
-.err{margin-top:12px;font-size:13px;color:#f87171;min-height:18px}
-.foot{margin-top:16px;font-size:11px;color:#5f6b78;text-align:center}
+p.sub{margin:2px 0 0;font-size:12px;color:var(--muted)}
+label{display:block;font-size:12px;color:var(--muted);margin:12px 0 6px}
+input{width:100%;padding:11px 12px;border-radius:6px;border:1px solid var(--muted2);background:var(--panel2);
+ color:var(--text);font:inherit}
+input:focus-visible,button:focus-visible{outline:2px solid var(--accent-text);outline-offset:2px}
+button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:6px;cursor:pointer;
+ background:var(--accent-text);color:var(--panel);font:inherit;font-weight:600}
+button:active{background:var(--text)}
+html[data-style="pixel"] :is(.card,input,button){border-radius:0}
+.err{margin-top:12px;font-size:13px;color:var(--danger-text);min-height:18px}
+.foot{margin-top:16px;font-size:11px;color:var(--muted2);text-align:center}
 </style></head><body>
 <form class="card" method="post" action="/login">
   <div class="logo"><img class="dot" src="/api/brand/logo" alt="">
@@ -11442,6 +12357,64 @@ button:active{background:#0ea472}
   <div class="err">__MSG__</div>
   <div class="foot">__L_FOOT__</div>
 </form></body></html>"""
+
+
+def text_representations(body):
+    variants = {"identity": body, "gzip": gzip.compress(body, compresslevel=6, mtime=0)}
+    return {coding: (data, '"' + hashlib.sha256(data).hexdigest() + '"') for coding, data in variants.items()}
+
+
+@lru_cache(maxsize=4)
+def homepage_representations(style):
+    sponsor_ver = hashlib.md5(b"".join(SPONSOR_BYTES[k] for k in sorted(SPONSOR_BYTES))).hexdigest()[:10]
+    html = (HTML.replace("__DEVICE_STYLE__", style).replace("__CAT_NAMES__", json.dumps(CAT_NAMES, ensure_ascii=False))
+            .replace("__LANGS__", LANG_JS).replace("__APP_VER__", VIEWER_BUILD).replace("__SPONSOR_VER__", sponsor_ver))
+    return text_representations(html.encode("utf-8"))
+
+
+@lru_cache(maxsize=len(LANG_TABLE))
+def language_representations(code):
+    # Ship the selected translations with any missing English fallback entries filled in.
+    selected = LANG_TABLE[code]
+    english = LANG_TABLE["en"]
+    dictionary = english.copy()
+    dictionary.update({k: v for k, v in selected.items() if v})
+    dictionary["视频接收速度"], dictionary["本次累计"] = {
+        "en": ("Video receive rate", "Session total"), "de": ("Videoempfangsrate", "Sitzung gesamt"),
+        "fr": ("Débit vidéo", "Total de la session"), "it": ("Velocità di ricezione video", "Totale sessione"),
+        "es": ("Velocidad de recepción de vídeo", "Total de la sesión"), "nl": ("Video-ontvangstsnelheid", "Sessietotaal"),
+        "ru": ("Скорость приёма видео", "Всего за сеанс"), "ja": ("動画の通信速度", "今回の通信量"),
+        "ko": ("동영상 전송 속도", "세션 합계"),
+    }[code]
+    for label, key in (("哨兵录像", "哨兵告警"), ("车机 U 盘文件", "车机U盘"),
+                       ("盒子归档", "归档区"), ("外观与背景", "网页背景")):
+        dictionary[label] = selected.get(label) or selected.get(key) or english.get(key) or label
+    return text_representations(json.dumps(dictionary, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def text_encoding(header):
+    if not header:
+        return "identity"
+    weights = {}
+    for item in header.lower().split(","):
+        coding, *params = item.strip().split(";")
+        if coding.strip() not in ("gzip", "identity", "*"):
+            continue
+        weight = 1.0
+        for param in params:
+            name, _, value = param.strip().partition("=")
+            if name.strip() == "q":
+                try:
+                    parsed = float(value)
+                    weight = parsed if 0 <= parsed <= 1 else 0
+                except ValueError:
+                    weight = 0
+        weights[coding.strip()] = weight
+    gz = weights.get("gzip", weights.get("*", 0))
+    identity = weights.get("identity", 0 if weights.get("*") == 0 else 1)
+    if gz > 0 and ("identity" not in weights or gz >= identity):
+        return "gzip"
+    return "identity" if identity > 0 else None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -11477,7 +12450,11 @@ class Handler(BaseHTTPRequestHandler):
             playlist = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-PLAYLIST-TYPE:VOD",
                         "#EXT-X-TARGETDURATION:%d" % seconds, "#EXT-X-MEDIA-SEQUENCE:0",
                         "#EXT-X-START:TIME-OFFSET=%.4f,PRECISE=YES" % at]
-            params = urllib.parse.urlencode({"file": url, "q": quality})
+            fields = {"file": url, "q": quality}
+            watch = playback_watch(query)
+            if watch:
+                fields["watch"] = watch
+            params = urllib.parse.urlencode(fields)
             for index in range(total):
                 length = duration - index * seconds if index + 1 == total else seconds
                 ahead = int(index != min(total - 1, int(at / seconds)))
@@ -11498,9 +12475,13 @@ class Handler(BaseHTTPRequestHandler):
         prime = transport == "mp4" and query.get("prime") == ["1"]
         cache_only = query.get("cache_only") == ["1"]
         try:
+            lead_ds = int(query.get("lead", ["999"])[0])
+        except ValueError:
+            lead_ds = 999
+        try:
             data = preview_part(fp, quality, int(index), duration, transport, ahead, connected,
                                 warm=ahead and not prime and query.get("warm") == ["1"], prime=prime,
-                                cache_only=cache_only)
+                                cache_only=cache_only, lead_ds=lead_ds)
         except (OSError, ValueError):
             return self._send(422, b"preview encoding failed", "text/plain")
         if not connected():
@@ -11514,7 +12495,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("X-Preview-Next-Part", str(data))
             self.end_headers()
             return
-        self._send(200, data, "video/mp2t" if transport == "ts" else "video/mp4")
+        self._send(200, data, "video/mp2t" if transport == "ts" else "video/mp4",
+                   watch=playback_watch(query), cache="private, max-age=600")
 
     # ---- 认证 ----
     def _cookie(self, name):
@@ -11560,7 +12542,8 @@ class Handler(BaseHTTPRequestHandler):
         lang = lang_from_accept(self.headers.get("Accept-Language") or "", "zh")
         days = str(max(1, AUTH_TTL // 86400))
         foot = tr("仅限本人访问", lang) + " · " + tr("登录状态保留", lang) + " " + days + " " + tr("天", lang)
-        html = (LOGIN_HTML.replace("__USER__", AUTH_USER)
+        html = (LOGIN_HTML.replace("__DEVICE_STYLE__", load_settings()["ui_style"])
+                .replace("__USER__", AUTH_USER)
                 .replace("__NEXT__", nxt.replace('"', "&quot;"))
                 .replace("__MSG__", tr(msg, lang))
                 .replace("__L_BRAND__", (brand_name() or BRAND_NAME_DEFAULT)
@@ -11621,18 +12604,73 @@ class Handler(BaseHTTPRequestHandler):
             self._send(401, "unauthorized".encode(), "text/plain; charset=utf-8")
         return False
 
-    def _send(self, code, body, ctype="text/html; charset=utf-8"):
+    def _viewer_text(self, path):
+        if path in ("/", "/index.html"):
+            variants = homepage_representations(load_settings()["ui_style"])
+            ctype = "text/html; charset=utf-8"
+            policy = "private, no-cache"
+        elif path.startswith("/i18n/"):
+            match = re.fullmatch(r"/i18n/([a-z]{2})\.json", path)
+            if not match or match[1] not in LANG_TABLE:
+                self.send_error(404)
+                return True
+            variants = language_representations(match[1])
+            ctype = "application/json; charset=utf-8"
+            version = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("v")
+            policy = "private, max-age=31536000, immutable" if version == [VIEWER_BUILD] else "private, no-cache"
+        else:
+            return False
+        # Chrome ignores ETags on HTTP/1.0 responses. Keep this connection short,
+        # as on the other routes served by the embedded HTTP server.
+        self.protocol_version = "HTTP/1.1"
+        encoding = text_encoding(",".join(self.headers.get_all("Accept-Encoding", [])))
+        if encoding is None:
+            self.send_response(406)
+            self.send_header("Connection", "close")
+            self.send_header("Vary", "Accept-Encoding")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return True
+        body, etag = variants[encoding]
+        validators = ",".join(self.headers.get_all("If-None-Match", [])).split(",")
+        unchanged = any(tag.strip() in ("*", etag, "W/" + etag) for tag in validators)
+        self.send_response(304 if unchanged else 200)
+        self.send_header("Connection", "close")
+        self.send_header("Cache-Control", policy)
+        self.send_header("ETag", etag)
+        self.send_header("Vary", "Accept-Encoding")
+        if not unchanged:
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            if encoding == "gzip":
+                self.send_header("Content-Encoding", encoding)
+        self.end_headers()
+        if not unchanged and self.command != "HEAD":
+            self.wfile.write(body)
+        return True
+
+    def _send(self, code, body, ctype="text/html; charset=utf-8", watch="", cache=""):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         # 页面/接口一律禁止缓存: 之前 HTML 没有任何缓存头, iOS Safari 会把旧页面留在内存里,
         # 升级后手机上仍然显示旧界面 (典型症状: 已经改了样式, 手机上还是老样子)
-        if "text/html" in ctype or "application/json" in ctype:
+        if cache:
+            self.send_header("Cache-Control", cache)
+        elif "text/html" in ctype or "application/json" in ctype:
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
             self.send_header("Pragma", "no-cache")
             self.send_header("Expires", "0")
         self.end_headers()
-        self.wfile.write(body)
+        if watch:
+            view = memoryview(body)
+            for start in range(0, len(view), 65536):
+                chunk = view[start:start + 65536]
+                self.wfile.write(chunk)
+                playback_bytes(watch, len(chunk))
+        else:
+            self.wfile.write(body)
 
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj, ensure_ascii=False).encode(), "application/json")
@@ -11774,6 +12812,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._gate():
             return
         path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if self._viewer_text(path):
+            return
         if path == "/dl":
             self._serve_archive_download(head_only=True)
             return
@@ -11846,15 +12886,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._gate():
             return
-        if path in ("/", "/index.html"):
-            # 二维码 URL 带内容版本号: 换码后旧图缓存立即失效, 避免浏览器显示未裁剪的旧二维码
-            sponsor_ver = hashlib.md5(b"".join(SPONSOR_BYTES[k] for k in sorted(SPONSOR_BYTES))).hexdigest()[:10]
-            html = (HTML.replace("__CAT_NAMES__", json.dumps(CAT_NAMES, ensure_ascii=False))
-                    .replace("__I18N__", I18N_JS).replace("__LANGS__", LANG_JS)
-                    .replace("__APP_VER__", VIEWER_BUILD)
-                    .replace("__SPONSOR_VER__", sponsor_ver))
-            self._send(200, html.encode())
-        elif path.startswith("/sponsor/"):
+        if self._viewer_text(path):
+            return
+        if path.startswith("/sponsor/"):
             # 赞助/联系作者二维码: 从单文件内嵌资源按需返回, 不占首屏 HTML 体积
             # src 带 ?v=<内容hash> 时可长期强缓存; 不带版本号的旧链接一律不缓存, 防止陈旧图残留
             key = path[len("/sponsor/"):].split("?")[0]
@@ -12013,6 +13047,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "reason": "no-sei"})
                 return
             self._json({"ok": True, **tel})
+        elif path == "/api/system-status":
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            watch = playback_watch(query)
+            result = {"sys": sys_status()}
+            if watch:
+                result["video_bytes"] = playback_bytes(watch)
+            self._json(result)
         elif path == "/api/live":
             self._json(live_status())
         elif path == "/api/auth/info":
@@ -12207,48 +13248,71 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "video/mp4")
                 self.send_header("Content-Length", str(length))
                 self.send_header("Accept-Ranges", "bytes")
+                if variant_note or "livefile" in params:
+                    self.send_header("Cache-Control", "no-store")
+                else:
+                    self.send_header("Cache-Control", "private, max-age=600")
                 if variant_note:
                     self.send_header("X-TSF-Variant", variant_note)   # 本次暂用替代档/原画, 后台正在转目标档
                 if rng:
                     self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
                 self.end_headers()
-                # 写循环必须能感知「客户端已经不要这份数据了」:
-                # 浏览器 preload=metadata 只读完 moov 就中止请求 (ERR_ABORTED), 而我们这边
-                # 还在傻写剩下的几 MB —— 线程挂死、MEDIA_SEM 名额被占光, 后面用户点播放的
-                # seek 请求全部排队等 20 秒超时 503, 四格画面就永远停在「缓冲中…」。
-                # select 探到对端 EOF/RST 立刻收摊; 5s socket 超时兜底 (公网 64KB 正常
-                # 几百毫秒就写完; 某些中转链路不转发 RST, 客户端 abort 后服务端
-                # 会一直往黑洞里写满 15 秒, 把上行占死, 后面 seek 的请求就饿着)。
-                # 超时只作用于「单次 write 卡住」, 正常下载大文件每块都很快, 不受影响。
+                # 写循环兼顾两件事:
+                # 1) select 实时检测对端 FIN/RST (客户端 seek/切视角中止连接后 <1ms 立刻释放 MEDIA_SEM);
+                # 2) 原画/成品播放时浏览器缓存满窗口或切后台会暂停读 socket 5~20s, 不再因 5s 写超时
+                #    提前切断 206 流导致 ERR_CONTENT_LENGTH_MISMATCH; 仅在连续 25s (高并发 10s) 零进展
+                #    或总时长超 300s 时才兜底回收死连接。
                 try:
-                    self.connection.settimeout(5)
+                    self.connection.settimeout(2)
                 except OSError:
                     pass
+                watch = playback_watch(params)
                 peer_dead = False
                 with open(fp, "rb") as f:
                     f.seek(start)
                     remain = length
-                    deadline = time.time() + 60
+                    now = time.monotonic()
+                    deadline = now + 300
+                    last_write = now
                     while remain > 0:
-                        try:
-                            r, _, _ = select.select([self.connection], [], [], 0)
-                            if r:
-                                if not self.connection.recv(1, socket.MSG_PEEK):
-                                    peer_dead = True     # 对端 FIN
-                                    break
-                        except (ConnectionResetError, OSError):
-                            peer_dead = True
-                            break
                         chunk = f.read(min(65536, remain))
                         if not chunk:
                             break
-                        try:
-                            self.wfile.write(chunk)
-                        except (BrokenPipeError, ConnectionResetError, socket.timeout, TimeoutError, OSError):
-                            peer_dead = True
+                        view = memoryview(chunk)
+                        sent = 0
+                        while sent < len(view):
+                            try:
+                                r, w, _ = select.select([self.connection], [self.connection], [], 1.0)
+                                if r:
+                                    if not self.connection.recv(1, socket.MSG_PEEK):
+                                        peer_dead = True     # 对端 FIN
+                                        break
+                            except (ConnectionResetError, OSError):
+                                peer_dead = True
+                                break
+                            now = time.monotonic()
+                            stall_limit = 10.0 if MEDIA_ACTIVE[0] >= 12 else 25.0
+                            if not w:
+                                if now - last_write > stall_limit or now > deadline:
+                                    peer_dead = True
+                                    break
+                                continue
+                            try:
+                                n = self.connection.send(view[sent:])
+                            except (BrokenPipeError, ConnectionResetError, socket.timeout, TimeoutError, OSError):
+                                peer_dead = True
+                                break
+                            if n <= 0:
+                                peer_dead = True
+                                break
+                            sent += n
+                            last_write = time.monotonic()
+                            if watch:
+                                playback_bytes(watch, n)
+                        if peer_dead:
                             break
-                        remain -= len(chunk)
-                        if time.time() > deadline:
+                        remain -= sent
+                        if time.monotonic() > deadline:
                             break     # 链路太慢, 交还线程给别的请求
             except (BrokenPipeError, ConnectionResetError):
                 pass

@@ -49,4 +49,21 @@ assert.equal(vm.runInContext('bufferedPosition(preview,13)',ctx),13.01);
 assert.equal(vm.runInContext('hasBufferedTime(preview,13,14.5)',ctx),true,'tiny encoded start offset must not stall four views');
 assert.equal(vm.runInContext('hasBufferedTime(preview,16)',ctx),false,'buffer end stays exclusive');
 assert.equal(vm.runInContext('hasBufferedTime(preview,12.99)',ctx),false,'never cover an absent prior part');
+vm.runInContext(`
+${fn('startLivePreview')}
+let opened;
+const localStorage = {getItem: () => preferredCamera};
+function showClip(ix, offset) { opened = [ix, offset, camSel].join('/'); }
+`,ctx);
+function liveEntry(durations, preferred) {
+  clips([[0,{front:60}],[60,durations]]);
+  ctx.preferredCamera = preferred;
+  return vm.runInContext('startLivePreview(); opened',ctx);
+}
+assert.equal(liveEntry({front:60},null),'1/0/front');
+assert.equal(liveEntry({front:45,back:60},'front'),'1/0/front');
+assert.equal(liveEntry({front:12},'all'),'1/0/all');
+assert.equal(liveEntry({front:0},null),'1/0/front');
+assert.equal(liveEntry({front:23,back:60},'all'),'1/0/all');
+assert.equal(liveEntry({back:58},'front'),'1/0/back');
 console.log('PASS: full tails, overlap, real gaps and missing cameras');

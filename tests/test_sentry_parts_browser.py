@@ -11,7 +11,7 @@ import tempfile
 import threading
 import types
 from urllib.parse import parse_qs, urlencode, urlsplit
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout, sync_playwright
 
@@ -29,6 +29,62 @@ def drag_timeline(page, target):
     page.mouse.down()
     page.mouse.move(x(target), y, steps=8)
     page.mouse.up()
+
+
+def check_preview_connection_retry(browser, base, quality, entry_url=None):
+    page = browser.new_page(locale='zh-CN', viewport={'width':1280, 'height':800})
+    dropped = []
+    retried = []
+    armed = False
+    reject_encoding = False
+    source_reset = False
+
+    def use_parts(route):
+        nonlocal source_reset
+        if armed and not source_reset:
+            source_reset = True
+            return route.abort('connectionreset')
+        # Exercise the part reader even if an earlier run filled the whole-file cache.
+        route.fulfill(status=200, content_type='application/json', body='{"state":"parts","seconds":1}')
+
+    def intercept(route):
+        query = parse_qs(urlsplit(route.request.url).query)
+        key = (query.get('file'), query.get('part'))
+        if armed and query.get('cache_only') != ['1']:
+            if reject_encoding:
+                return route.fulfill(status=422, content_type='text/plain', body='preview encoding failed')
+            # Inject on a startup/needed camera part rather than a far-ahead reused camera that yields to lagging peers.
+            if not dropped and (query.get('ahead') == ['0'] or query.get('prime') == ['1']):
+                dropped.append(key)
+                return route.abort('connectionreset')
+            if dropped and key == dropped[0]:
+                retried.append(key)
+        route.continue_()
+
+    try:
+        page.add_init_script(f"localStorage.setItem('tsfq3','{quality}')")
+        page.route('**/api/playback-source?*', use_parts)
+        page.route('**/api/playback-preview/part.mp4?*', intercept)
+        page.goto(entry_url or base)
+        if entry_url is None:
+            page.locator('#grid .card').first.click()
+        page.locator('#cambar').get_by_text('前视', exact=True).click()
+        page.wait_for_function('activeVideos().length===1&&activeVideos()[0].readyState>=2&&!activeVideos()[0].paused')
+        armed = True
+        page.locator('#cambar').get_by_text('全览', exact=True).click()
+        page.wait_for_function('activeVideos().some(v=>v.dataset.loadFailed)||activeVideos().length===4&&activeVideos().every(v=>v.readyState>=2&&!v.paused)', timeout=45000)
+        assert dropped, 'network failure was not injected'
+        assert source_reset, 'source request failure was not injected'
+        assert not page.evaluate('activeVideos().some(v=>v.dataset.loadFailed)'), 'one connection reset permanently stopped playback'
+        assert retried, 'the failed part was not requested again'
+        position = page.evaluate('Math.min(...activeVideos().map(v=>v.currentTime))')
+        page.wait_for_function('at=>activeVideos().every(v=>!v.paused&&!v.dataset.loadFailed&&v.currentTime>at+.5)', arg=position)
+        reject_encoding = True
+        page.locator('#cambar').get_by_text('前视', exact=True).click()
+        page.wait_for_function('activeVideos().some(v=>v.dataset.loadFailed)', timeout=5000)
+        print('Camera switch retry PASS: source and part resets recover; an encoding error still fails promptly')
+    finally:
+        page.close()
 
 
 def check_paused_seek_runway(browser, base, quality):
@@ -232,21 +288,22 @@ def check_seek_startup_buffer(browser, base, quality):
         assert 'playing' in events and 'waiting' not in events[events.index('playing') + 1:], events
 
         # Seeking while paused should show the target frame and preserve the pause state.
+        # Land beyond the 20s read-ahead window so the paused seek stays cold and only loads one part.
         page.get_by_role('button', name='暂停', exact=True).click()
-        drag_timeline(page, 87.8)
+        drag_timeline(page, 107.8)
         page.wait_for_function("""activeVideos()[0].paused && !activeVideos()[0].seeking &&
-            activeVideos()[0].readyState >= 2 && Math.abs(activeVideos()[0].currentTime - 27.8) < .35""")
+            activeVideos()[0].readyState >= 2 && Math.abs(activeVideos()[0].currentTime - 47.8) < .35""")
 
         # A paused seek exactly onto the buffered end needs the following part.
         # The previous part's final timestamp is not a decodable target frame.
         page.wait_for_function("""activeVideos()[0].buffered.length &&
-            Math.abs(activeVideos()[0].buffered.end(activeVideos()[0].buffered.length-1)-28)<.01""")
+            Math.abs(activeVideos()[0].buffered.end(activeVideos()[0].buffered.length-1)-48)<.01""")
         slider = page.locator('#seek')
-        steps = round((88 - float(slider.input_value())) / .05)
+        steps = round((108 - float(slider.input_value())) / .05)
         for _ in range(abs(steps)):
             slider.press('ArrowRight' if steps > 0 else 'ArrowLeft')
         page.wait_for_function("""activeVideos()[0].paused && activeVideos()[0].readyState>=2 &&
-            !activeVideos()[0].seeking && Math.abs(activeVideos()[0].currentTime-28)<.02""", timeout=8000)
+            !activeVideos()[0].seeking && Math.abs(activeVideos()[0].currentTime-48)<.02""", timeout=8000)
         assert not page.locator('#vgrid .cload:visible').count()
 
         # The startup threshold cannot exceed the amount of video left in a clip.
@@ -557,12 +614,13 @@ def check(root, sample, ffmpeg, chrome, mbps, native_hls, entry, quality, viewer
     if category == 'SentryClips':
         (folder / 'event.json').write_text(json.dumps(dict(timestamp='2026-11-19T10:00:15',
             reason='sentry_aware_object_detection', camera='7')), encoding='utf-8')
-    os.environ.update(TSF_ARCHIVE=str(archive), TSF_CACHE=str(root/'cache'), TSF_SETTINGS=str(root/'settings'), TSF_FFMPEG=ffmpeg)
+    os.environ.update(TSF_ARCHIVE=str(archive), TSF_CACHE=str(root/'cache'), TSF_SETTINGS=str(root/'settings'))
     if os.name == 'nt':
         sys.modules['fcntl'] = types.ModuleType('fcntl')
     spec = importlib.util.spec_from_file_location('viewer', viewer_path or Path(__file__).resolve().parents[1] / 'sentry-viewer.py')
     viewer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(viewer)
+    viewer.FFMPEG_BIN = ffmpeg
     viewer.ensure_dirs()
     viewer.live_status = lambda: {'running': True}
     if os.name == 'nt':
@@ -596,6 +654,7 @@ def check(root, sample, ffmpeg, chrome, mbps, native_hls, entry, quality, viewer
                 check_paused_seek_runway(browser, base, quality)
                 check_tiny_preview_cut(browser, base, quality)
                 check_seek_promotes_inflight_read_ahead(browser, base, quality)
+                check_preview_connection_retry(browser, base, quality)
             if entry == 'live' and quality == '360p' and not native_hls and not mbps:
                 stamp = '2026-11-19_10-02-00'
                 latest_cameras = [archive / category / stamp / f'{stamp}-{cam}.mp4' for cam in cams]
@@ -612,6 +671,11 @@ def check(root, sample, ffmpeg, chrome, mbps, native_hls, entry, quality, viewer
             requests, errors = [], []
             page.on('request', lambda r: requests.append(r.url))
             page.on('pageerror', lambda e: errors.append(str(e)))
+            if entry == 'live':
+                page.add_init_script("""document.addEventListener('playing', event => {
+                    if (event.target.matches('#vgrid video') && window.firstLiveTime === undefined)
+                        window.firstLiveTime = event.target.currentTime;
+                }, true)""")
             page.goto(base)
             if entry == 'live':
                 page.locator('#tab-live').click()
@@ -619,6 +683,9 @@ def check(root, sample, ffmpeg, chrome, mbps, native_hls, entry, quality, viewer
                 page.locator(f'#tabs [data-category="{category}"]').click()
                 page.locator('#grid .card').first.click()
             page.wait_for_function(f"activeVideos()[0]?.videoHeight==={height} && activeVideos()[0].currentTime>.2")
+            if entry == 'live':
+                page.wait_for_function('window.firstLiveTime !== undefined')
+                assert page.evaluate('curClipIx === curClips.length - 1 && firstLiveTime >= 0 && firstLiveTime < 1')
             page.get_by_role('button', name='全览', exact=True).click()
             page.wait_for_function(f"activeVideos().length===4 && activeVideos().every(v=>v.videoHeight==={height}&&!v.paused)")
             drag_timeline(page, 78)
@@ -683,10 +750,23 @@ def check(root, sample, ffmpeg, chrome, mbps, native_hls, entry, quality, viewer
         with urlopen(playlist.replace('/playback-preview/', '/sentry-preview/'), timeout=4) as legacy:
             assert legacy.read().decode() == text
         part = base + '/api/playback-preview/part.mp4?' + urlencode(dict(file=uri, q=quality, part=0, ahead=1))
-        with urlopen(part + '&cache_only=1', timeout=30) as warmed:
+        watch = '1' * 32
+        counter = base + '/api/system-status?watch=' + watch
+        with urlopen(part + '&cache_only=1&watch=' + watch, timeout=30) as warmed:
             assert warmed.status == 204 and not warmed.read()
-        with urlopen(part, timeout=4) as media:
-            assert media.status == 200 and len(media.read()) > 0
+        with urlopen(playlist + '&watch=' + watch) as response:
+            segments = [s for s in response.read().decode().splitlines() if s.startswith('part.ts?')]
+            assert segments and all(parse_qs(urlsplit(s).query)['watch'] == [watch] for s in segments)
+        assert json.load(urlopen(counter))['video_bytes'] == 0
+        with urlopen(part + '&watch=' + watch, timeout=4) as media:
+            expected = len(media.read())
+            assert media.status == 200 and expected > 0
+        with urlopen(base + '/api/playback-preview/' + segments[0]) as media:
+            expected += len(media.read())
+        with urlopen(Request(base + uri + '?watch=' + watch, headers={'Range':'bytes=123-567'})) as media:
+            assert media.status == 206 and len(media.read()) == 445
+        assert json.load(urlopen(counter))['video_bytes'] == expected + 445
+        assert json.load(urlopen(base + '/api/system-status?watch=' + '2' * 32))['video_bytes'] == 0
         frames = subprocess.run([ffmpeg, '-v', 'error', '-ss', '12', '-i', playlist, '-t', '4.2',
                                  '-f', 'framehash', '-'], capture_output=True, check=True, timeout=30)
         assert sum(line.startswith(b'0,') for line in frames.stdout.splitlines()) >= 96
