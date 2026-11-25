@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.010"
+APP_VERSION = "2026.11.25.011"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1586,7 +1586,7 @@ def _retention_default(name, default):
 
 def load_settings():
     d = {"auto_update": True, "ui_style": "default", "brand_name": "", "brand_logo": "",
-         "remote_quality": "480p", "amap_key": "",
+         "remote_quality": "480p", "amap_key": "", "addr_format": "",
          "recent_roll_min": _retention_default("TSF_RECENT_ROLL_MIN", 60),
          "recent_keep_min": _retention_default("TSF_RECENT_KEEP_MIN", 60),
          "recent_max_gb": _retention_default("TSF_RECENT_MAX_GB", 12),
@@ -1618,6 +1618,11 @@ def load_settings():
             key = str(j.get("amap_key") or "").strip()
             if re.fullmatch(r"[A-Za-z0-9]{16,64}", key):
                 d["amap_key"] = key
+            # 地址显示格式: 纯文本模板, 只留常用占位符, 去掉控制字符
+            fmt = str(j.get("addr_format") or "").strip()[:120]
+            fmt = "".join(ch for ch in fmt if ch >= " " and ch not in "\r\n\t")
+            if fmt:
+                d["addr_format"] = fmt
             # 保留时间/容量策略: 只接受范围内的整数, 非法值忽略并用默认
             for name, (low, high) in list(RETENTION_FIELDS.items()) + list(PREWARM_FIELDS.items()):
                 if name not in j or isinstance(j[name], bool):
@@ -1771,7 +1776,7 @@ SPONSOR_BYTES = {k: base64.b64decode(v.split(",", 1)[1]) for k, v in SPONSOR_IMG
 HTML = r"""<!DOCTYPE html>
 <html lang="zh"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>哨兵一剪梅</title>
+<title>__BRAND__</title>
 <style id="base">
 :root {
   color-scheme: dark;
@@ -1850,6 +1855,26 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
   border-radius:8px; padding:8px 15px; font-size:12.5px; cursor:pointer; }
 .dpick-actions button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
 .dpick-actions button:hover { filter:brightness(1.08); }
+.dpick-cal { margin:0 0 11px; padding:8px 8px 6px; border:1px solid var(--line2); border-radius:9px; background:var(--panel2); }
+.dcal-bar { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
+.dcal-bar strong { font-size:12.5px; color:var(--text); font-weight:600; }
+.dcal-bar button { width:30px; height:28px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--text); font-size:18px; cursor:pointer; }
+.dcal-bar button:hover { background:var(--chipbg); }
+.dcal-bar button:disabled { opacity:.3; cursor:default; }
+.dcal-week,.dcal-grid { display:grid; grid-template-columns:repeat(7,1fr); }
+.dcal-week span { padding:2px 0; text-align:center; font-size:10.5px; color:var(--muted2); }
+.dcal-grid { gap:2px; touch-action:none; user-select:none; }
+.dcal-blank { height:30px; }
+.dcal-day { height:30px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--text); font-size:12px; cursor:pointer; }
+.dcal-day:hover { background:var(--chipbg); }
+.dcal-day.in { border-radius:0; background:color-mix(in srgb, var(--accent) 24%, transparent); }
+.dcal-day.start,.dcal-day.end { background:var(--accent); color:#fff; font-weight:600; }
+.dcal-day:disabled { opacity:.35; cursor:default; }
+.dcal-tip { margin-top:5px; font-size:10.5px; color:var(--muted2); }
+.calbtn { display:inline-flex; align-items:center; justify-content:center; width:38px; height:38px; padding:0;
+  border:1px solid var(--line2); border-radius:8px; background:var(--panel2); color:var(--text); cursor:pointer; }
+.calbtn:hover { filter:brightness(1.08); }
+.calbtn .ic { width:18px; height:18px; }
 .chip { padding:8px 13px; border-radius:14px; background:var(--chipbg); color:var(--muted); border:1px solid var(--line2);
   font-size:12px; cursor:pointer; white-space:nowrap; flex:0 0 auto; transition:background .15s,color .15s; }
 .chip:hover { color:var(--text); border-color:var(--muted2); }
@@ -2583,7 +2608,8 @@ body.watching { overflow:hidden; }
 #track-end { text-align:right; }
 #trigger-marker { position:absolute; top:29px; transform:translateX(-50%); display:block; margin:0; padding:2px 4px; background:var(--panel); color:var(--text); border:0; border-radius:3px; font-size:11px; min-height:22px; cursor:pointer; white-space:nowrap; z-index:2; }
 .timeline-row { display:flex; align-items:flex-start; gap:14px; }
-.playback-help { color:var(--muted); font-size:11px; line-height:1.75; padding-top:6px; white-space:nowrap; }
+.playback-help { display:flex; flex-direction:column; justify-content:center; gap:2px; min-height:36px;
+  color:var(--muted); font-size:11px; line-height:1.5; white-space:nowrap; }
 .timeline { position:relative; height:54px; display:flex; align-items:flex-start; flex:1; min-width:0; padding-top:2px; }
 #track-bands { position:absolute; left:8px; right:8px; height:6px; border-radius:3px; background:linear-gradient(to right,var(--play-accent) var(--played,0%),var(--muted2) var(--played,0%)); pointer-events:none; }
 #track-bands i { position:absolute; inset-block:0; }
@@ -2637,12 +2663,12 @@ body.watching { overflow:hidden; }
 .player.expanded .tpanel,.player.expanded .infocard { display:none; }
 @media (max-width:700px) {
   .timeline-row { display:block; }
-  .playback-help { padding:0 0 4px; font-size:10px; white-space:normal; }
+  .playback-help { font-size:10px; }
   .timeline { height:52px; }
 }
 @media (max-width:600px) {
-  .playtools { grid-template-columns:1fr; }
-  .playback-help { grid-column:1; grid-row:3; padding:8px 2px 0; line-height:1.7; }
+  .playtools { grid-template-columns:minmax(0,1fr) auto; }
+  .playback-help { grid-column:1; grid-row:2; align-self:center; font-size:9.5px; line-height:15px; min-height:0; gap:0; white-space:normal; }
 }
 @media (max-width:400px) {
   .playtools { gap:3px; } .playtools button { padding:0 7px; }
@@ -2675,8 +2701,13 @@ button:focus-visible,input:focus-visible,select:focus-visible,[role="button"]:fo
 html[data-theme] .app-header .tab.active { background:transparent; color:var(--accent); border-bottom-color:var(--accent); font-weight:600; box-shadow:none; }
 body.settings-open .app-header .tab.active { color:var(--text); border-bottom-color:transparent; }
 .app-header .tn { display:none; }
-.app-header #theme,.app-header #gear { order:3; height:44px; min-width:36px; width:auto; display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:0 6px; margin:0; border:0; border-radius:0; color:var(--text); background:transparent; }
-.app-header #gear[aria-expanded="true"] { color:var(--accent); border-bottom:3px solid var(--accent); }
+.app-header #theme,.app-header > #gear { order:3; height:44px; min-width:36px; width:auto; display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:0 6px; margin:0; border:0; border-radius:0; color:var(--text); background:transparent; }
+.app-header > #gear[aria-expanded="true"] { color:var(--accent); border-bottom:3px solid var(--accent); }
+.system-status #gear { position:relative; order:3; display:inline-flex; align-items:center; justify-content:center; height:auto; min-width:0; width:auto; padding:0 2px; border:0; border-radius:0; color:var(--muted); background:transparent; }
+.system-status #gear .ic { width:17px; height:17px; }
+.system-status #gear:hover { color:var(--text); }
+.system-status #gear[aria-expanded="true"] { color:var(--accent); border-bottom:0; }
+.system-status #gear.hasupd::after { top:-1px; right:-1px; }
 .app-header .ic { width:19px; height:19px; }
 .library-page { max-width:1440px; margin:auto; padding:26px 32px 40px; }
 body.watching .library-page,body.settings-open .library-page { visibility:hidden; }
@@ -2747,6 +2778,9 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .shuttle #ppbtn { border-radius:6px; background:var(--accent); color:white; border:0; width:40px; height:36px; }
 .playtools .qsel .qbtn { background:var(--panel); color:var(--accent); border:1px solid var(--line); border-radius:6px; }
 .playtools .qmenu { right:0; left:auto; border-radius:6px; }
+.viewtools #shotbtn, .viewtools #bbtn { width:36px; min-width:36px; padding:0; display:inline-flex; align-items:center; justify-content:center; }
+.viewtools #shotbtn .ic, .viewtools #bbtn .ic { width:17px; height:17px; }
+.viewtools #shotbtn { color:var(--accent); }
 .player .tpanel { padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .player .tp-spd { font-size:32px; }
 .player .tp-badge { border-radius:5px; padding:5px 8px; font-size:13px; }
@@ -2874,7 +2908,7 @@ body.settings-open { overflow:hidden; }
   .app-header { --app-header:104px; flex-wrap:wrap; align-content:start; row-gap:0; height:104px; }
   :root { --app-header:104px; }
   .app-header h1 { height:54px; margin-right:auto; flex:1 1 0; max-width:none; }
-  .app-header #theme,.app-header #gear { order:0; height:54px; }
+  .app-header #theme,.app-header > #gear { order:0; height:54px; }
   .app-header .tabs { flex:1 0 100%; height:50px; order:4; justify-content:space-between; gap:4px; }
   .app-header .tab { flex:1; padding:0 4px; }
   .library-page { padding:20px; }
@@ -2926,13 +2960,13 @@ body.settings-open { overflow:hidden; }
   .list-toggle { width:40px; min-width:40px; height:40px; }
   .player .pscroll { padding:12px 10px max(16px,env(safe-area-inset-bottom)); gap:10px; }
   .player .cambar button { flex:1; min-height:44px; padding:4px; font-size:12px; }
-  .playtools { gap:6px; grid-template-columns:1fr; }
-  .playtools .shuttle { grid-column:1; grid-row:1; gap:3px; }
-  .playtools .viewtools { grid-column:1; grid-row:2; }
+  .playtools { gap:6px; grid-template-columns:minmax(0,1fr) auto; }
+  .playtools .shuttle { grid-column:1 / -1; grid-row:1; gap:3px; justify-self:center; }
+  .playtools .viewtools { grid-column:2; grid-row:2; align-self:center; gap:2px; }
   .playtools button { padding:0 6px; min-height:44px; font-size:12px; }
-  .playtools .viewtools { gap:3px; }
+  .playtools .qsel .qbtn { padding:0 5px; font-size:11px; }
+  .viewtools #shotbtn,.viewtools #bbtn,.viewtools #spdbtn,.viewtools #screenbtn { width:34px; min-width:34px; padding:0; }
   .shuttle #ppbtn { width:44px; height:44px; }
-  .viewtools #screenbtn { width:44px; padding:0; }
   .player .tpanel { padding:12px; }
   .player .tp-spd { font-size:28px; }
   .player .tp-badge { font-size:12px; padding:4px 6px; }
@@ -2982,7 +3016,7 @@ body.settings-open { overflow:hidden; }
   .app-header .blogo { display:none; }
   .app-header .tabs { order:1; flex:1; height:48px; gap:0; }
   .app-header .tab { font-size:11px; padding:0 3px; }
-  .app-header #theme,.app-header #gear { order:2; height:48px; }
+  .app-header #theme,.app-header > #gear { order:2; height:48px; }
   .app-header #gear span { display:none; }
   .player .pscroll { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(260px,1fr); padding:6px 10px; gap:6px 12px; }
   .player .video-toolbar { grid-row:1; }
@@ -3090,6 +3124,8 @@ body.settings-open { overflow:hidden; }
 <symbol id="i-move" viewBox="0 0 24 24"><path d="M3.8 12h12.4"/><path d="m12.4 8 4.2 4-4.2 4"/><path d="M20.4 4.6v14.8"/></symbol>
 <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.8" y="8.8" width="11.4" height="11.4" rx="2"/><path d="M15.2 5.6A1.6 1.6 0 0 0 13.6 4H5.6A1.6 1.6 0 0 0 4 5.6v8a1.6 1.6 0 0 0 1.6 1.6"/></symbol>
 <symbol id="i-pen" viewBox="0 0 24 24"><path d="m4 20 4.6-1.1L19 8.5a2.1 2.1 0 0 0-3-3L5.6 16z"/><path d="m14.5 5.5 4 4"/></symbol>
+<symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.4h3l1.3-2h7.4l1.3 2h3A1.6 1.6 0 0 1 21.6 10v8A1.6 1.6 0 0 1 20 19.6H4A1.6 1.6 0 0 1 2.4 18v-8A1.6 1.6 0 0 1 4 8.4z"/><circle cx="12" cy="13.6" r="3.4"/></symbol>
+<symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.8" y="5" width="16.4" height="15.2" rx="2"/><path d="M3.8 9.6h16.4M8.2 3.4v3.2M15.8 3.4v3.2"/><path d="M7.6 13h2M11 13h2M14.4 13h2M7.6 16.4h2M11 16.4h2M14.4 16.4h2"/></symbol>
 <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.6 12S6.1 5.6 12 5.6 21.4 12 21.4 12 17.9 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.9"/></symbol>
 <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4.2 20 20"/><path d="M9.7 5.9A9.4 9.4 0 0 1 12 5.6c5.9 0 9.4 6.4 9.4 6.4a17 17 0 0 1-2.5 3.4"/><path d="M6.4 7.3A16.6 16.6 0 0 0 2.6 12S6.1 18.4 12 18.4c1.3 0 2.5-.28 3.6-.76"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
 <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.8v11.4"/><path d="m7.4 10.8 4.6 4.6 4.6-4.6"/><path d="M4.4 20h15.2"/></symbol>
@@ -3098,9 +3134,9 @@ body.settings-open { overflow:hidden; }
 <symbol id="i-link" viewBox="0 0 24 24"><path d="M9.6 14.4a4.2 4.2 0 0 0 6 0l2.6-2.6a4.2 4.2 0 0 0-6-6l-1.5 1.5"/><path d="M14.4 9.6a4.2 4.2 0 0 0-6 0L5.8 12.2a4.2 4.2 0 0 0 6 6l1.5-1.5"/></symbol>
 <symbol id="i-brand" viewBox="0 0 24 24"><path d="M12 3.6l2.35 4.05 4.55.7-3.3 3.2.8 4.55L12 13.95 7.6 16.1l.8-4.55-3.3-3.2 4.55-.7z"/></symbol>
 </defs></svg>
-<header class="app-header"><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">哨兵一剪梅</span></h1><span class="sub" id="stat"></span>
-<div class="system-status" aria-label="系统状态"><span class="netspeed" id="netspeed"></span><span class="netspeed" id="copyspeed" hidden></span><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span></div>
-<nav class="tabs" id="tabs" aria-label="录像分类"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button><button id="gear" title="设置" aria-expanded="false" aria-controls="panel"><svg class="ic"><use href="#i-gear"/></svg><span>设置</span></button></header>
+<header class="app-header"><h1><img class="blogo" id="blogo" src="/api/brand/logo" alt=""><span id="bname">__BRAND__</span></h1><span class="sub" id="stat"></span>
+<div class="system-status" aria-label="系统状态"><span class="netspeed" id="netspeed"></span><span class="netspeed" id="copyspeed" hidden></span><span>温度 <strong id="sys-temp">—</strong></span><span>CPU <strong id="sys-cpu">—</strong></span><span id="sys-memory">内存 <strong id="sys-mem">—</strong></span><button id="gear" title="设置" aria-label="设置" aria-expanded="false" aria-controls="panel"><svg class="ic"><use href="#i-gear"/></svg></button></div>
+<nav class="tabs" id="tabs" aria-label="录像分类"></nav><button id="theme" title="主题: 自动/浅色/深色" onclick="cycleTheme()"><svg class="ic"><use href="#i-theme"/></svg></button></header>
 <main class="library-page">
 <div class="ffwarn" id="ffwarn" role="status" hidden><div class="ffwarn-head"><b id="ffwarn-title">FFmpeg 未配置</b><button class="ffwarn-fix" id="ffwarn-fix" type="button" onclick="ffmpegFix()">一键修复</button></div><span class="ffwarn-text" id="ffwarn-text">列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。点「一键修复」自动安装完整版；也可在设备上执行 <code>apk add ffmpeg</code> 后运行 <code>install.sh apply --install-deps --ffmpeg /usr/bin/ffmpeg</code> 写入配置。</span></div>
 <nav class="storwrap status-only" id="storwrap">
@@ -3118,15 +3154,21 @@ body.settings-open { overflow:hidden; }
 <button class="stortog" id="stortog" onclick="toggleStor()" title="展开总占用" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
 </nav>
-<div class="library-toolbar"><button class="livebtn" id="live-btn" onclick="openLive()" hidden><svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg><span>实时预览</span></button><h2 id="library-title">录像</h2><span id="library-count"></span><div class="library-filters">
+<div class="library-toolbar"><h2 id="library-title">录像</h2><span id="library-count"></span><button class="livebtn" id="live-btn" onclick="openLive()" hidden><svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg><span>实时预览</span></button><div class="library-filters">
 <nav class="filters" id="dfilters"></nav>
 <nav class="filters" id="filters"></nav>
 <button class="filter-reset" onclick="resetFilters()">重置</button>
 </div></div>
 <div class="dpick-pop" id="dpick-pop" hidden role="dialog" aria-modal="true" aria-label="选择日期时间段">
   <h4>选择日期时间段</h4>
-  <label><span>开始</span><input type="date" id="dpick-from"></label>
-  <label><span>结束</span><input type="date" id="dpick-to"></label>
+  <div class="dpick-cal">
+    <div class="dcal-bar"><button type="button" id="dcal-prev" aria-label="上个月" onclick="calShift(-1)">‹</button><strong id="dcal-title"></strong><button type="button" id="dcal-next" aria-label="下个月" onclick="calShift(1)">›</button></div>
+    <div class="dcal-week" id="dcal-week"></div>
+    <div class="dcal-grid" id="dcal-grid"></div>
+    <div class="dcal-tip">在日历上按住拖动可选择一段日期</div>
+  </div>
+  <label><span>开始</span><input type="date" id="dpick-from" onchange="calJump()"></label>
+  <label><span>结束</span><input type="date" id="dpick-to" onchange="calJump()"></label>
   <div class="hint" style="margin:0 0 4px">只填开始或结束也可以，表示从该日期起 / 截止到该日期。</div>
   <div class="dpick-actions"><button type="button" onclick="closeDatePick()">取消</button><button type="button" class="primary" onclick="applyDateRange()">应用</button></div>
 </div>
@@ -3188,9 +3230,9 @@ body.settings-open { overflow:hidden; }
       <div class="clockline"><span id="track-start"></span><output id="ptime">--:--:--</output><span id="track-end"></span></div>
       <div class="timeline-row"><div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"><output id="seek-hover" hidden></output><button id="trigger-marker" hidden>触发时刻</button></div></div>
       <div class="playtools">
-        <div class="playback-help">点击画面 播放 / 暂停<br>长按画面 3×，松开 1×<br>空格 播放 / 暂停<br>← / → 10 秒 · ↑ / ↓ 1 秒</div>
+        <div class="playback-help"><span>点击 播放/暂停 · 长按 3×</span><span>空格 · ←→10s · ↑↓1s</span></div>
         <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="skip-back-one" aria-label="回退一秒">−1s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next-one" aria-label="前进一秒">+1s</button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
-        <div class="viewtools"><div class="qsel" id="qsel"></div><button id="spdbtn" onclick="cycleSpeed()">1×</button><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
+        <div class="viewtools"><div class="qsel" id="bsel"><button class="qbtn" id="bbtn" title="画面亮度" aria-label="画面亮度" onclick="toggleBright(event)"><svg class="ic"><use href="#i-sun"/></svg></button><div class="qmenu" id="bmenu" onclick="closeBright()"></div></div><button id="shotbtn" title="截屏下载" aria-label="截屏下载" onclick="captureFrame()"><svg class="ic"><use href="#i-camera"/></svg></button><div class="qsel" id="qsel"></div><button id="spdbtn" onclick="cycleSpeed()">1×</button><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
       </div>
       <div id="livep" class="watch-live" hidden>
         <span id="lv-status"></span><button id="lv-back" onclick="backToLatest()">回到最新</button>
@@ -3455,6 +3497,8 @@ body.settings-open { overflow:hidden; }
       <div class="hint">不配置 Key 时，所有录像沿用原来的「城市 · 街道」或经纬度显示。配置后，高德 Web 服务会把录像坐标解析为详细地址，驾驶记录显示「起点 → 终点」。经纬度会发送给高德；Key 仅保存在本机服务端，不会随接口返回。服务未提供门牌号时显示其返回的最精确真实地址。</div>
       <details class="storage-advanced"><summary>设置教程与 Key 申请</summary><div class="hint">1. 打开高德开放平台并登录，进入「控制台 → 应用管理 → 我的应用」。<br>2. 创建应用后添加 Key，服务平台选择「Web 服务」。<br>3. 复制 Key 粘贴到下方并保存，稍等后台解析后刷新录像列表。<br><a href="https://console.amap.com/dev/key/app" target="_blank" rel="noopener noreferrer">申请高德 Web 服务 Key →</a></div></details>
       <input class="ninput" id="amap-key" type="password" placeholder="高德 Web 服务 API Key（已保存则留空表示不修改）" autocomplete="off" autocapitalize="none" spellcheck="false" style="margin-top:12px;width:100%">
+      <div class="hint" style="margin-top:14px">地址显示格式（留空为默认：详细地址 → 城市 · 街道 → 经纬度）。可用占位符：{省} {市} {区} {街道} {门牌} {详细地址} {坐标}，例如「{市}{区}{街道}{门牌}」或「{街道} · {坐标}」。省 / 区 / 门牌需配置高德 Key 才能取到。</div>
+      <input class="ninput" id="addr-format" maxlength="120" placeholder="留空使用默认格式" style="width:100%">
       <div class="updbtns"><button class="mini primary" id="geocode-save" onclick="geocodeSave()">保存地址设置</button></div>
       <div class="hint" id="geocode-msg" role="status" aria-live="polite"></div>
     </section>
@@ -3794,7 +3838,7 @@ function toggleQ(e) {
   document.getElementById('qsel').classList.toggle('open');
 }
 function closeQ() {
-  ['qsel', 'expq'].forEach(id => { const el = document.getElementById(id); if (el) el.classList.remove('open'); });
+  ['qsel', 'expq', 'bsel'].forEach(id => { const el = document.getElementById(id); if (el) el.classList.remove('open'); });
 }
 document.addEventListener('click', closeQ);
 function setQuality(q) {
@@ -3804,6 +3848,39 @@ function setQuality(q) {
   localStorage.setItem(liveMode ? 'tsfliveq' : 'tsfq3', q);
   renderQSel();
   if (curClips.length) showClip(curClipIx, playbackOffset());
+}
+/* ---------- 画面亮度 (只影响本机显示, 不改变源文件) ---------- */
+const BRIGHT_STEPS = [100, 110, 125, 150, 175, 200];
+let vbright = 100;
+try { vbright = parseInt(localStorage.getItem('tsf-bright') || '100', 10) || 100; } catch (e) {}
+if (!BRIGHT_STEPS.includes(vbright)) vbright = 100;
+function renderBright() {
+  const menu = document.getElementById('bmenu');
+  if (menu) menu.innerHTML = BRIGHT_STEPS.map(p =>
+    `<button class="${p === vbright ? 'on' : ''}" onclick="setBright(${p})">${p === 100 ? '正常' : p + '%'}</button>`).join('');
+  const grid = document.getElementById('vgrid');
+  if (grid) grid.style.filter = vbright === 100 ? '' : `brightness(${vbright}%)`;
+  const btn = document.getElementById('bbtn');
+  if (btn) btn.classList.toggle('on', vbright !== 100);
+}
+function toggleBright(e) {
+  if (e) e.stopPropagation();
+  const el = document.getElementById('bsel');
+  if (!el) return;
+  const open = !el.classList.contains('open');
+  closeQ();
+  el.classList.toggle('open', open);
+}
+function closeBright() {
+  const el = document.getElementById('bsel');
+  if (el) el.classList.remove('open');
+}
+function setBright(p) {
+  closeBright();
+  vbright = p;
+  try { localStorage.setItem('tsf-bright', String(p)); } catch (e) {}
+  renderBright();
+  flashPlayer(p === 100 ? '亮度 正常' : '亮度 ' + p + '%');
 }
 const CATS_NAME = __CAT_NAMES__;
 CATS_NAME.SentryClips = '哨兵录像';
@@ -3963,7 +4040,7 @@ function openDeepLink() {
 
 function sigOf(d) {
   return Object.keys(d).map(c => c + ':' + d[c].map(e => e.name + '/' + e.videos.length + '/' + !!e.locked + '/' + !!e.lock_unknown + '/' +
-    [e.meta, e.start_meta, e.end_meta].map(m => (m && m.full_address) || '').join(',')).join(',')).join('|');
+    [e.meta, e.start_meta, e.end_meta].map(m => (m && (m.place || m.full_address)) || '').join(',')).join(',')).join('|');
 }
 
 /* 容量条配色: <30% 绿 / 30%~85% 蓝 / >85% 红 (三行同规则) */
@@ -4078,7 +4155,7 @@ async function refreshLive() {
         if (item) {
           playerRecording.locked = !!item.locked; playerRecording.lock_unknown = !!item.lock_unknown;
           if (cur) {
-            if (cur.meta && item.meta) cur.meta.full_address = item.meta.full_address;
+            if (cur.meta && item.meta) { cur.meta.full_address = item.meta.full_address; cur.meta.place = item.meta.place; }
             cur.start_meta = item.start_meta; cur.end_meta = item.end_meta;
             renderInfo();
           }
@@ -4199,7 +4276,117 @@ function renderFilters(cat) {
     if (value === 'pick' || value === 'range') { dbox.querySelector('select').value = dateFilter; pickDate(); }
     else setDate(value);
   });
+  const calbtn = document.createElement('button');
+  calbtn.type = 'button'; calbtn.className = 'calbtn'; calbtn.title = '打开日历选择日期';
+  calbtn.setAttribute('aria-label', '打开日历选择日期');
+  calbtn.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-cal"/></svg>';
+  calbtn.onclick = pickDate;
+  dbox.append(calbtn);
 }
+/* ---------- 日期选择弹层里的日历 (支持拖动选择一段日期) ---------- */
+const CAL = { y: 0, m: 0, anchor: '', hover: '', dragging: false, cells: null };
+function calTodayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function calInit() {
+  const f = document.getElementById('dpick-from'), to = document.getElementById('dpick-to');
+  const from = (f && f.value) || '', end = (to && to.value) || '';
+  const base = from || end || calTodayStr();
+  const d = new Date(base + 'T00:00:00');
+  CAL.y = d.getFullYear(); CAL.m = d.getMonth();
+  CAL.anchor = from || end || '';
+  CAL.hover = end || from || '';
+  CAL.dragging = false;
+  calRender();
+}
+function calRender() {
+  const title = document.getElementById('dcal-title');
+  const week = document.getElementById('dcal-week');
+  const grid = document.getElementById('dcal-grid');
+  if (!title || !grid) return;
+  title.textContent = CAL.y + '年' + (CAL.m + 1) + '月';
+  if (week && !week.childElementCount)
+    week.innerHTML = ['日', '一', '二', '三', '四', '五', '六'].map(w => '<span>' + w + '</span>').join('');
+  const lead = new Date(CAL.y, CAL.m, 1).getDay();
+  const days = new Date(CAL.y, CAL.m + 1, 0).getDate();
+  const today = calTodayStr(), mm = String(CAL.m + 1).padStart(2, '0');
+  let html = '';
+  for (let i = 0; i < lead; i++) html += '<span class="dcal-blank"></span>';
+  for (let d = 1; d <= days; d++) {
+    const ds = CAL.y + '-' + mm + '-' + String(d).padStart(2, '0');
+    html += `<button type="button" class="dcal-day" data-d="${ds}"${ds > today ? ' disabled' : ''}>${d}</button>`;
+  }
+  grid.innerHTML = html;
+  CAL.cells = new Map([...grid.querySelectorAll('.dcal-day[data-d]')].map(el => [el.dataset.d, el]));
+  const next = document.getElementById('dcal-next');
+  if (next) next.disabled = new Date(CAL.y, CAL.m + 1, 1) > new Date();
+  calPaint();
+}
+function calPaint() {
+  if (!CAL.cells) return;
+  let a = CAL.anchor, b = CAL.hover;
+  if (a && b && a > b) { const x = a; a = b; b = x; }
+  CAL.cells.forEach((el, d) => {
+    el.classList.toggle('in', !!(a && b) && d > a && d < b);
+    el.classList.toggle('start', !!a && d === a);
+    el.classList.toggle('end', !!b && d === b);
+  });
+}
+function calSet(a, b, syncInputs = true) {
+  if (a && b && a > b) { const x = a; a = b; b = x; }
+  CAL.anchor = a; CAL.hover = b;
+  if (syncInputs) {
+    const f = document.getElementById('dpick-from'), to = document.getElementById('dpick-to');
+    if (f) f.value = a || '';
+    if (to) to.value = b || '';
+  }
+  calPaint();
+}
+function calShift(n) {
+  const d = new Date(CAL.y, CAL.m + n, 1);
+  if (n > 0 && d > new Date()) return;
+  CAL.y = d.getFullYear(); CAL.m = d.getMonth();
+  calRender();
+}
+function calJump() {
+  const f = document.getElementById('dpick-from'), to = document.getElementById('dpick-to');
+  const a = (f && f.value) || '', b = (to && to.value) || '';
+  const ok = x => !x || /^\d{4}-\d{2}-\d{2}$/.test(x);
+  if (!ok(a) || !ok(b)) return;
+  const base = a || b;
+  if (!base) { CAL.anchor = ''; CAL.hover = ''; calPaint(); return; }
+  const d = new Date(base + 'T00:00:00');
+  CAL.y = d.getFullYear(); CAL.m = d.getMonth();
+  CAL.anchor = a || b; CAL.hover = b || a;
+  calRender();
+}
+function calDown(e) {
+  const el = e.target && e.target.closest ? e.target.closest('.dcal-day[data-d]') : null;
+  if (!el || el.disabled) return;
+  e.preventDefault();
+  CAL.dragging = true;
+  calSet(el.dataset.d, el.dataset.d);
+}
+function calMove(e) {
+  if (!CAL.dragging) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const day = el && el.closest ? el.closest('.dcal-day[data-d]') : null;
+  if (!day || day.disabled) return;
+  if (day.dataset.d !== CAL.hover) { CAL.hover = day.dataset.d; calPaint(); }
+}
+function calEnd() {
+  if (!CAL.dragging) return;
+  CAL.dragging = false;
+  calSet(CAL.anchor, CAL.hover);
+}
+(function bindCalendar() {
+  const grid = document.getElementById('dcal-grid');
+  if (grid) grid.addEventListener('pointerdown', calDown);
+  document.addEventListener('pointermove', calMove);
+  document.addEventListener('pointerup', calEnd);
+  document.addEventListener('pointercancel', calEnd);
+})();
 /* 日期筛选: 全部 / 单日 / 自选时间段 */
 let dateRange = { from: '', to: '' };
 function dateMatch(d) {
@@ -4226,7 +4413,7 @@ function pickDate() {
   if (!from && !end && /^\d{4}-\d{2}-\d{2}$/.test(dateFilter)) { from = end = dateFilter; }
   f.value = from || ''; to.value = end || '';
   document.getElementById('dpick-pop').hidden = false;
-  try { (from ? to : f).focus(); } catch (e) {}
+  calInit();
 }
 function closeDatePick() {
   const box = document.getElementById('dpick-pop');
@@ -4287,7 +4474,9 @@ function metaCoordKey(md) {
 }
 function singlePlace(md) {
   md = md || {};
-  return String(md.full_address || '').trim() || [md.city, md.street].filter(Boolean).join(' · ') || metaCoordKey(md);
+  // place 由服务端按「地址显示格式」拼好, 未设置格式时等于原来的默认结果。
+  return String(md.place || '').trim() || String(md.full_address || '').trim() ||
+    [md.city, md.street].filter(Boolean).join(' · ') || metaCoordKey(md);
 }
 function recordPlace(ev, cat) {
   const sm = ev.start_meta || {}, em = ev.end_meta || {};
@@ -5468,7 +5657,7 @@ function loadTelemetry(url, meta) {
   document.getElementById('telmore').classList.remove('open');
   document.getElementById('th-fold').textContent = '详细数据 ⌄';
   document.getElementById('th-fold').setAttribute('aria-expanded', 'false');
-  const locationText = [TEL_META.city, TEL_META.street].filter(Boolean).join(' · ') ||
+  const locationText = singlePlace(TEL_META) ||
     (TEL_META.est_lat != null && TEL_META.est_lon != null ? TEL_META.est_lat + ', ' + TEL_META.est_lon : '—');
   document.getElementById('tp-loc').textContent = locationText === '—' ? '' : locationText;
   document.getElementById('th-loc').textContent = locationText;
@@ -5637,7 +5826,7 @@ function drawWm(ctx, t, W) {
   const dateStr = telT0 ? fmtTelDate(new Date(telT0.getTime() + f[0] * 1000)) : '';
   ctx.fillText(dateStr, pad, yc + Math.round(1 * s));
   const dw = ctx.measureText(dateStr).width;
-  const loc = [(TEL_META || {}).city, (TEL_META || {}).street].filter(Boolean).join(' · ');
+  const loc = singlePlace(TEL_META);
   if (loc) {
     ctx.font = '500 ' + Math.round(13 * s) + 'px system-ui,"Segoe UI",sans-serif';
     ctx.fillStyle = '#eef3f8';
@@ -6464,6 +6653,50 @@ function togglePlay() {
   else { playAll(); flashPlayer('播放'); }
 }
 
+/* 截屏: 浏览器端把当前画面合成到 canvas 后直接下载, 设备不落盘 */
+function captureFrame() {
+  const grid = byId('vgrid');
+  const videos = activeVideos().filter(v => v.videoWidth && v.videoHeight);
+  if (!videos.length) { flashPlayer('暂时没有可截取的画面'); return; }
+  const box = grid.getBoundingClientRect();
+  if (!box.width || !box.height) { flashPlayer('暂时没有可截取的画面'); return; }
+  const scale = Math.min(2, Math.max(1, 1600 / box.width));
+  const cells = [...grid.children];
+  const rects = cells.map(c => c.getBoundingClientRect());
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(box.width * scale);
+  canvas.height = Math.round(box.height * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (vbright !== 100) ctx.filter = 'brightness(' + vbright + '%)';
+  videos.forEach(v => {
+    const ix = cells.indexOf(v.closest('.vcell'));
+    if (ix < 0) return;
+    const r = rects[ix];
+    const x = (r.left - box.left) * scale, y = (r.top - box.top) * scale;
+    const w = r.width * scale, h = r.height * scale;
+    const k = Math.min(w / v.videoWidth, h / v.videoHeight);
+    const dw = v.videoWidth * k, dh = v.videoHeight * k;
+    ctx.drawImage(v, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+  });
+  ctx.filter = 'none';
+  const d = new Date(), p2 = n => String(n).padStart(2, '0');
+  const name = 'sentry-' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' +
+    p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds()) + '.jpg';
+  canvas.toBlob(blob => {
+    if (!blob) { flashPlayer('截屏失败'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    flashPlayer('截屏已下载');
+  }, 'image/jpeg', 0.92);
+}
+
 function fmtSec(x) {
   const seconds = Math.max(0, Math.floor(x || 0));
   return String(Math.floor(seconds / 60)).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0');
@@ -6731,28 +6964,31 @@ function playLoad() {
   playSpaceHint();
 }
 function geocodeLoad() {
-  const input = byId('amap-key'), msg = byId('geocode-msg');
+  const input = byId('amap-key'), msg = byId('geocode-msg'), fmt = byId('addr-format');
   fetch('/api/settings', {cache:'no-store'}).then(r => r.json()).then(j => {
     input.dataset.has = j.has_amap_key ? '1' : '0';
+    if (fmt && document.activeElement !== fmt) fmt.value = j.addr_format || '';
     if (!input.value) msg.textContent = j.has_amap_key
       ? '已配置高德 Key；录像地址在后台解析并缓存，刷新列表后会自动补全。'
       : '尚未配置高德 Key，当前沿用原来的城市、街道或经纬度显示。';
   }).catch(e => { msg.textContent = '设置读取失败：' + e.message; });
 }
 function geocodeSave() {
-  const input = byId('amap-key'), msg = byId('geocode-msg'), button = byId('geocode-save');
+  const input = byId('amap-key'), fmt = byId('addr-format'), msg = byId('geocode-msg'), button = byId('geocode-save');
   const key = input.value.trim();
-  if (!key) {
-    msg.textContent = input.dataset.has === '1' ? '已保留原高德 Key。' : '请先填写高德 Web 服务 API Key。';
+  const format = (fmt ? fmt.value : '').trim();
+  if (!key && !format && input.dataset.has !== '1') {
+    msg.textContent = '请先填写高德 Web 服务 API Key，或设置地址显示格式。';
     return;
   }
   button.disabled = true; msg.textContent = '保存中…';
-  fetch('/api/settings/geocode', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key})})
+  fetch('/api/settings/geocode', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key, format})})
     .then(r => r.json()).then(j => {
       if (!j.ok) throw Error(j.msg || '保存失败');
-      input.value = ''; input.dataset.has = '1';
-      msg.textContent = '已保存。后台将开始解析录像地址，约 10 秒后自动刷新。';
+      if (key) { input.value = ''; input.dataset.has = '1'; }
+      msg.textContent = (key ? '已保存高德 Key，后台将开始解析录像地址。' : '已保存地址显示格式。') + ' 列表稍后自动刷新。';
       refreshLive();
+      load().catch(() => {});
     }).catch(e => { msg.textContent = '保存失败：' + e.message; })
     .finally(() => { button.disabled = false; });
 }
@@ -8257,6 +8493,7 @@ document.getElementById('anyfile-file').onchange = async function () {
 
 injectSkin();
 applyLang();
+renderBright();
 refreshBrand();
 load();
 // 字体状态预热: 这时还没开播放器, 连接池是空的, 一定能拿到
@@ -8474,7 +8711,24 @@ def _amap_reverse(lat, lon, key):
             address += ("" if street and street in address else street) + house
     if not address:
         raise RuntimeError("高德未返回地址")
-    return address[:240]
+    # 同时保留结构化字段, 供「地址显示格式」按省/市/区/街道/门牌自由拼接
+    parts = {}
+    if isinstance(comp, dict):
+        def _pick(*names):
+            for n in names:
+                v = comp.get(n)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+            return ""
+        parts = {
+            "province": _pick("province"),
+            "city": _pick("city"),
+            "district": _pick("district"),
+            "township": _pick("township"),
+            "street": (str(number.get("street") or "").strip() if isinstance(number, dict) else "") or _pick("street"),
+            "number": (str(number.get("number") or "").strip() if isinstance(number, dict) else ""),
+        }
+    return {"address": address[:240], "parts": parts}
 
 
 def _geocode_worker():
@@ -8496,13 +8750,14 @@ def _geocode_worker():
             key = str(load_settings().get("amap_key") or "")
             if not key:
                 raise RuntimeError("未配置高德 Key")
-            address = _amap_reverse(lat, lon, key)
+            info = _amap_reverse(lat, lon, key)
+            address, parts = info["address"], info.get("parts") or {}
             error = ""
         except Exception as ex:
-            address, error = "", str(ex)[:160]
+            address, parts, error = "", {}, str(ex)[:160]
         with _GEO_LOCK:
             _GEO_RETRY_AFTER = 0.0 if address else time.time() + 120
-            _GEO_CACHE[cache_key] = {"address": address, "at": now, "error": error}
+            _GEO_CACHE[cache_key] = {"address": address, "parts": parts, "at": now, "error": error}
             _GEO_QUEUED.discard(cache_key)
             _geo_save_locked()
 
@@ -8523,6 +8778,9 @@ def _geocode_attach(meta, amap_key=""):
         address = str(item.get("address") or "").strip()
         if address:
             meta["full_address"] = address
+            parts = item.get("parts")
+            if isinstance(parts, dict) and parts:
+                meta["addr_parts"] = parts
             return
         if not amap_key or time.time() < _GEO_RETRY_AFTER:
             return
@@ -8550,7 +8808,39 @@ def _geocode_key_updated():
                     _GEO_CACHE.pop(key, None)
 
 
-def normalize_event_meta(meta, amap_key=""):
+ADDR_TOKENS = (
+    ("{省}", "province"), ("{市}", "city"), ("{区}", "district"),
+    ("{街道}", "street"), ("{门牌}", "number"), ("{乡镇}", "township"),
+)
+
+
+def format_place(meta, fmt=""):
+    """按「地址显示格式」拼接地址; 留空沿用 详细地址 → 城市 · 街道 → 经纬度 的默认顺序。"""
+    meta = meta if isinstance(meta, dict) else {}
+    parts = meta.get("addr_parts") if isinstance(meta.get("addr_parts"), dict) else {}
+    city = str(meta.get("city") or parts.get("city") or "").strip()
+    street = str(meta.get("street") or parts.get("street") or "").strip()
+    full = str(meta.get("full_address") or "").strip()
+    coord = ""
+    try:
+        if meta.get("est_lat") not in (None, "") and meta.get("est_lon") not in (None, ""):
+            coord = "%.5f,%.5f" % (float(meta["est_lat"]), float(meta["est_lon"]))
+    except (TypeError, ValueError):
+        coord = ""
+    default = full or " · ".join(x for x in (city, street) if x) or coord
+    fmt = str(fmt or "").strip()
+    if not fmt:
+        return default
+    out = fmt.replace("{详细地址}", full).replace("{地址}", full)
+    out = out.replace("{坐标}", coord).replace("{经纬度}", coord)
+    for token, field in ADDR_TOKENS:
+        out = out.replace(token, str(parts.get(field) or "").strip())
+    out = re.sub(r"\s+", " ", out).strip()
+    out = re.sub(r"^[·,，\-\s]+|[·,，\-\s]+$", "", out)
+    return out or default
+
+
+def normalize_event_meta(meta, amap_key="", addr_format=""):
     """统一车机坐标字段, 并从后台逆地理缓存补充详细地址。"""
     if not isinstance(meta, dict):
         return {}
@@ -8559,12 +8849,16 @@ def normalize_event_meta(meta, amap_key=""):
         if meta.get(dst) in (None, "") and meta.get(src) not in (None, ""):
             meta[dst] = meta[src]
     _geocode_attach(meta, amap_key)
+    meta["place"] = format_place(meta, addr_format)
+    meta.pop("addr_parts", None)
     return meta
 
 
 def list_events(category=None, event=None, durations=False, trips=False):
     out = {}
-    amap_key = str(load_settings().get("amap_key") or "")
+    saved = load_settings()
+    amap_key = str(saved.get("amap_key") or "")
+    addr_format = str(saved.get("addr_format") or "")
     try:
         locks = recording_locks()
         lock_unknown = False
@@ -8607,7 +8901,7 @@ def list_events(category=None, event=None, durations=False, trips=False):
                     except Exception:
                         meta = {}
                 events.append({"name": name, "videos": vids, "size": total,
-                               "meta": normalize_event_meta(meta, amap_key),
+                               "meta": normalize_event_meta(meta, amap_key, addr_format),
                                "locked": cat + "/" + name in locks, "lock_unknown": lock_unknown})
         if cat == "DriveClips" and trips:
             summaries = []
@@ -12657,6 +12951,14 @@ def _feishu_send_media(conf, file_key, image_key=""):
     return True
 
 
+def _event_loc(meta):
+    """推送里的「位置」: 设过地址显示格式就按格式拼接, 否则沿用「城市 街道」。"""
+    fmt = str(load_settings().get("addr_format") or "").strip()
+    if fmt:
+        return format_place(meta, fmt) or "位置未知"
+    return " ".join(x for x in (meta.get("city") or "", meta.get("street") or "") if x).strip() or "位置未知"
+
+
 def _feishu_card(conf, cat, name, img_key=None, test=False):
     """拼一张飞书卡片 (标题/时间/位置/原因/镜头/封面/查看按钮)"""
     d = os.path.join(ARCHIVE, cat, name)
@@ -12676,7 +12978,7 @@ def _feishu_card(conf, cat, name, img_key=None, test=False):
         when = "%d月%d日 %02d:%02d:%02d" % (dt.month, dt.day, dt.hour, dt.minute, dt.second)
     except Exception:
         pass
-    loc = " ".join(x for x in (meta.get("city") or "", meta.get("street") or "") if x).strip() or "位置未知"
+    loc = _event_loc(meta)
     nclip = len(_ev_files(d))
     title = ("🧪 [测试] " if test else "🚨 ") + cat_name + (" · " + cam if cam else "")
     fields = [("时间", when), ("位置", loc), ("触发原因", detail)]
@@ -12762,7 +13064,7 @@ def _event_text(cat, name, test=False):
         cat_name = "手动保存"
     cam = CAM_NUM.get(int(meta["camera"])) if str(meta.get("camera", "")).strip().isdigit() else ""
     when = str(meta.get("timestamp") or name)[:19].replace("T", " ").replace("_", " ")
-    loc = " ".join(x for x in (meta.get("city") or "", meta.get("street") or "") if x).strip() or "位置未知"
+    loc = _event_loc(meta)
     kind = ("[测试] " if test else "") + "哨兵提醒 · " + cat_name + (" · " + cam if cam else "")
     tpl = str(notify_conf().get("wx_format") or "").strip()
     if not tpl:
@@ -15472,9 +15774,12 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             # 二维码 URL 带内容版本号: 换码后旧图缓存立即失效, 避免浏览器显示未裁剪的旧二维码
             sponsor_ver = hashlib.md5(b"".join(SPONSOR_BYTES[k] for k in sorted(SPONSOR_BYTES))).hexdigest()[:10]
+            brand_html = str(load_settings().get("brand_name") or BRAND_NAME_DEFAULT)
+            brand_html = brand_html.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             html = (HTML.replace("__CAT_NAMES__", json.dumps(CAT_NAMES, ensure_ascii=False))
                     .replace("__I18N__", I18N_JS).replace("__LANGS__", LANG_JS)
                     .replace("__APP_VER__", VIEWER_BUILD)
+                    .replace("__BRAND__", brand_html)
                     .replace("__SPONSOR_VER__", sponsor_ver))
             self._send(200, html.encode())
         elif path.startswith("/sponsor/"):
@@ -15689,6 +15994,7 @@ class Handler(BaseHTTPRequestHandler):
                         "brand_logo_v": brand_logo_ver(),
                         "remote_quality": saved.get("remote_quality", "480p"),
                         "has_amap_key": bool(saved.get("amap_key")),
+                        "addr_format": saved.get("addr_format", ""),
                         "retention": retention_values(),
                         "auto_checked": AUTO_UPD["last_check"], "auto_msg": AUTO_UPD["last_result"]})
         elif path == "/api/font":
@@ -16296,12 +16602,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "msg": "参数错误"}, 400)
                 return
             key = str(body.get("key") or "").strip()
-            if not re.fullmatch(r"[A-Za-z0-9]{16,64}", key):
+            fmt = str(body.get("format") or "").strip()[:120] if "format" in body else None
+            if key and not re.fullmatch(r"[A-Za-z0-9]{16,64}", key):
                 self._json({"ok": False, "msg": "请输入有效的高德 Web 服务 API Key"}, 400)
                 return
-            save_settings({"amap_key": key})
-            _geocode_key_updated()
-            self._json({"ok": True, "has_amap_key": True})
+            if not key and fmt is None:
+                self._json({"ok": False, "msg": "请输入有效的高德 Web 服务 API Key"}, 400)
+                return
+            if key:
+                save_settings({"amap_key": key})
+                _geocode_key_updated()
+            if fmt is not None:
+                save_settings({"addr_format": fmt})
+            self._json({"ok": True, "has_amap_key": bool(load_settings().get("amap_key"))})
             return
         if path == "/api/settings/retention":
             body = self._read_json()
