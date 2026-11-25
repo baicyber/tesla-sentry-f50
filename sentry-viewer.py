@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.012"
+APP_VERSION = "2026.11.25.013"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2019,9 +2019,9 @@ body.watching { overscroll-behavior:none; }
 .th-sig.on { opacity:1; color:#ffb340; animation:tpBlink 1.05s steps(1,end) infinite; }
 .th-gear { min-width:22px; height:22px; padding:0 4px; border-radius:11px; background:#34c759; color:#fff;
   font-size:12px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
-.th-ap { min-width:24px; height:20px; padding:0 5px; border-radius:5px; background:var(--panel2); color:var(--muted);
-  font-size:11px; font-weight:700; letter-spacing:.02em; display:inline-flex; align-items:center; justify-content:center; }
-.th-ap.on { background:rgba(90,162,255,.16); color:#5aa2ff; }
+.th-ap { display:none; min-width:24px; height:20px; padding:0 6px; border-radius:5px; background:#2f7cf6; color:#fff;
+  font-size:11px; font-weight:700; letter-spacing:.02em; align-items:center; justify-content:center; }
+.th-ap.on { display:inline-flex; }
 .th-wheel { width:32px; height:32px; flex:none; color:var(--text); transition:transform .1s linear; }
 .th-wheel svg { width:100%; height:100%; display:block; }
 .th-wheel.ap { color:#5aa2ff; filter:drop-shadow(0 0 6px rgba(90,162,255,.55)); }
@@ -2658,7 +2658,8 @@ body.watching { overflow:hidden; }
 .watch-live { display:block; }
 .watch-live .live-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .watch-live .live-row #lv-status { margin-right:auto; }
-.watch-live .live-hint { margin-top:6px; font-size:12px; line-height:1.6; color:var(--muted); }
+.watch-live .live-iv-lab { font-size:12px; color:var(--muted); }
+.watch-live .live-hint { flex:0 1 340px; min-width:0; margin-left:2px; font-size:12px; line-height:1.5; color:var(--muted); }
 .watch-live :disabled { opacity:.5; cursor:default; }
 /* 亮度竖向滑块 */
 .viewtools .bpop { display:none; position:absolute; bottom:calc(100% + 8px); right:0; z-index:12; flex-direction:column; align-items:center; gap:6px; padding:8px 4px 6px; border:1px solid var(--line2); border-radius:8px; background:var(--panel); box-shadow:0 6px 18px rgba(0,0,0,.28); }
@@ -3247,7 +3248,7 @@ body.settings-open { overflow:hidden; }
     <div class="video-toolbar">
       <div class="cambar" id="cambar" aria-label="摄像头"></div>
       <div class="telhud" id="telhud" aria-label="行车遥测">
-        <span class="th-ap" id="th-ap" title="Autopilot 状态">—</span>
+        <span class="th-ap" id="th-ap" title="Autopilot 状态">AP</span>
         <span class="th-gear" id="th-gear" title="挡位">D</span>
         <div class="th-spdbox" title="时速"><b id="th-spd">0</b><i>km/h</i></div>
         <span class="th-wheel" id="th-wheel" title="方向盘角度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/><path d="M3.2 10.5h6M14.8 10.5h6M12 14.6V21"/></svg></span>
@@ -3274,9 +3275,9 @@ body.settings-open { overflow:hidden; }
       </div>
       <div id="livep" class="watch-live" hidden>
         <div class="live-row"><span id="lv-status"></span><button id="lv-back" onclick="backToLatest()">回到最新</button>
-        <select id="lv-iv" aria-label="检查间隔" onchange="liveRestart()"><option value="3">3 秒</option><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">1 分钟</option><option value="0">仅手动</option></select>
-        <button onclick="liveTick()">检查更新</button></div>
-        <div class="live-hint">「检查间隔」是自动检查新片段的频率：间隔越短，新片段出现得越快，也更耗流量；选「仅手动」后只有点「检查更新」才会刷新。</div>
+        <span class="live-iv-lab">间隔</span><select id="lv-iv" aria-label="检查间隔" onchange="liveRestart()"><option value="3">3 秒</option><option value="15">15 秒</option><option value="30">30 秒</option><option value="60">1 分钟</option><option value="0">仅手动</option></select>
+        <button onclick="liveTick()">立即更新</button>
+        <div class="live-hint">「间隔」是自动检查新片段的频率：间隔越短，新片段出现得越快，也更耗流量；选「仅手动」后只有点「立即更新」才会刷新。</div></div>
       </div>
     </section>
     <div class="infocard" id="infocard">
@@ -3329,7 +3330,7 @@ body.settings-open { overflow:hidden; }
     <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车语音</button>
     <button class="stab" id="st-wraps" onclick="stab('wraps')"><svg class="ic"><use href="#i-brush"/></svg>涂装</button>
     <h3>系统与偏好</h3>
-    <button class="stab" id="st-geocode" onclick="stab('geocode')"><svg class="ic"><use href="#i-location"/></svg>地址设置</button>
+    <button class="stab" id="st-geocode" onclick="stab('geocode')"><svg class="ic"><use href="#i-location"/></svg>地址</button>
     <button class="stab" id="st-notify" onclick="stab('notify')"><svg class="ic"><use href="#i-bell"/></svg>推送</button>
     <button class="stab" id="st-auth" onclick="stab('auth')"><svg class="ic"><use href="#i-key"/></svg>账号</button>
     <button class="stab" id="st-lang" onclick="stab('lang')"><svg class="ic"><use href="#i-globe"/></svg>语言</button>
@@ -5723,17 +5724,22 @@ function requestRoad(lat, lon) {
       if (road) road.textContent = [roadInfo.parts.province, roadInfo.parts.city, roadInfo.parts.district, j.road].filter(Boolean).join('');
     }).catch(() => {});
 }
-/* 详细数据宽度与上方显示条保持一致 */
+/* 详细数据宽度与上方显示条保持一致 (显示条宽度变化时也实时跟随) */
 function syncTelWidth() {
   const hud = document.getElementById('telhud'), more = document.getElementById('telmore');
   if (!hud || !more || !more.classList.contains('open')) return;
-  const w = hud.offsetWidth;
+  const w = hud.getBoundingClientRect().width;
   if (w > 0 && more.dataset.w !== String(w)) {
     more.style.width = w + 'px';
     more.dataset.w = String(w);
   }
 }
 window.addEventListener('resize', syncTelWidth);
+(function watchTelWidth() {
+  const hud = document.getElementById('telhud');
+  if (!hud || typeof ResizeObserver === 'undefined') return;
+  new ResizeObserver(() => syncTelWidth()).observe(hud);
+})();
 function loadTelemetry(url, meta) {
   const generation = renderId;
   TEL = null;
@@ -5824,10 +5830,11 @@ function renderHud(f) {
   const th = id => document.getElementById(id);
   const md = TEL_META || {};
   if (th('th-gear')) {
-    const apTxt = apv ? (apNames[apv] || 'AP') : '未启用';
-    th('th-ap').textContent = apv ? (apNames[apv] || 'AP') : '—';
-    th('th-ap').classList.toggle('on', !!apv);
-    th('th-ap').title = 'Autopilot：' + apTxt;
+    const apTxt = apv ? (apNames[apv] || 'AP') : '';
+    const apBadge = th('th-ap');
+    apBadge.textContent = apTxt || 'AP';
+    apBadge.classList.toggle('on', !!apv);
+    apBadge.title = 'Autopilot：' + (apTxt || '未启用');
     th('th-gear').textContent = f[1];
     th('th-spd').textContent = Math.max(0, Math.round(f[2]));
     const wheel = th('th-wheel');
@@ -7165,9 +7172,12 @@ function geocodeSave() {
     .then(r => r.json()).then(j => {
       if (!j.ok) throw Error(j.msg || '保存失败');
       if (key) { input.value = ''; input.dataset.has = '1'; }
-      msg.textContent = (key ? '已保存高德 Key，后台将开始解析录像地址。' : '已保存地址显示格式。') + ' 列表稍后自动刷新。';
+      msg.textContent = (key ? '已保存高德 Key，后台将开始解析录像地址。' : '已保存地址显示格式。') + ' 事件列表已刷新。';
       refreshLive();
-      load().catch(() => {});
+      // 强制按新的显示格式重拉事件列表, 事件右侧的位置文字立即生效
+      lastSig = '';
+      load().then(() => { if (liveMode) liveTick(); })
+        .catch(() => { msg.textContent = '已保存，但列表刷新失败，请手动刷新页面。'; });
     }).catch(e => { msg.textContent = '保存失败：' + e.message; })
     .finally(() => { button.disabled = false; });
 }
