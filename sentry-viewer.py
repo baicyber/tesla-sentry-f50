@@ -224,6 +224,8 @@ CONF_DOCS = {
     "TSF_RECENT_KEEP_MIN": "空间兜底清理时最近必留分钟",
     "TSF_RECENT_MAX_GB": "实时滚动记录体积上限 G, 0=不限",
     "TSF_BOX_KEEP_DAYS": "盒子侧哨兵/手动保存按天保留, 0=不限",
+    "TSF_USB_CLEAN_PCT": "车机U盘用量达到该百分比后自动清理旧事件, 0=关闭",
+    "TSF_USB_CLEAN_DAYS": "车机U盘自动清理时最近必留天数, 0=只按容量清",
     "TSF_DISK_GUARD_INTERVAL": "磁盘空间检查间隔秒数",
     "TSF_FREE_MIN_MB": "存储卡空闲低于此值暂停同步 (MiB)",
     "TSF_FREE_TARGET_MB": "空间不足时清理到的目标空闲 (MiB)",
@@ -497,7 +499,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.023"
+APP_VERSION = "2026.11.25.027"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -572,7 +574,28 @@ def _ota_sources():
     ]
 
 
-def _http_get(url, timeout=10, limit=8 << 20):
+# OTA 更新进度: 主程序下载 -> 模块 -> 安装重启, 前端 /api/ota/progress 轮询显示百分比
+_OTA_PROG = {"stage": "", "got": 0, "total": 0, "pct": 0, "at": 0.0}
+_OTA_PROG_LOCK = threading.Lock()
+
+
+def _ota_progress(stage=None, got=None, total=None, pct=None):
+    with _OTA_PROG_LOCK:
+        if stage is not None:
+            _OTA_PROG["stage"] = stage
+            _OTA_PROG["got"] = 0
+            _OTA_PROG["total"] = 0
+            _OTA_PROG["pct"] = 0
+        if got is not None:
+            _OTA_PROG["got"] = got
+        if total:
+            _OTA_PROG["total"] = total
+        if pct is not None:
+            _OTA_PROG["pct"] = max(0, min(100, int(pct)))
+        _OTA_PROG["at"] = time.time()
+
+
+def _http_get(url, timeout=10, limit=8 << 20, track=None):
     req = urllib.request.Request(url, headers={"User-Agent": "tsf-ota/" + APP_VERSION, "Cache-Control": "no-cache"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         try:
@@ -586,6 +609,8 @@ def _http_get(url, timeout=10, limit=8 << 20):
                 break
             chunks.append(chunk)
             got += len(chunk)
+            if track and want:
+                track(got, want)
         data = b"".join(chunks)
         # 连接中途被掐断时 read() 可能只是提前返回 EOF; 按响应头核对长度,
         # 避免把半截文件当成完整文件 (F50 走 4G 时很常见)
@@ -628,7 +653,7 @@ def _err_kind(ex):
     return type(ex).__name__
 
 
-def _race_get(path, timeout, limit, validate=None, collect=False, grace=1.0):
+def _race_get(path, timeout, limit, validate=None, collect=False, grace=1.0, track=None):
     """并发竞速所有下载源, 单个源被墙/超时不影响其它源。
     collect=False: 谁先返回【通过校验】的数据就用谁, 返回 (data, base)。
     collect=True:  返回 [(base, data), ...] 全部成功的源 —— 首次成功后最多再等 grace 秒
@@ -640,7 +665,7 @@ def _race_get(path, timeout, limit, validate=None, collect=False, grace=1.0):
 
     def worker(base):
         try:
-            data = _http_get(base + path, timeout=timeout, limit=limit)
+            data = _http_get(base + path, timeout=timeout, limit=limit, track=track)
             if data and (validate is None or validate(data)):
                 with lock:
                     got.append((base, data))
@@ -1247,6 +1272,7 @@ def ota_apply(force=False):
 
     顺序刻意做成"全部下载校验 -> 备份 -> 先模块后主程序 -> 记账 -> 重启 + 探活守护":
     任何一步失败都停在"只动了临时文件"的阶段, 线上程序一个字节都不动。"""
+    _ota_progress(stage="正在检查更新…")
     try:
         j = ota_latest(True)
     except Exception as ex:
@@ -1258,9 +1284,13 @@ def ota_apply(force=False):
     # 1) 下载主程序。镜像 CDN 可能缓存旧文件(清单已经 2.8.55 而文件还是 2.8.52),
     #    所以一次性收齐各源的结果, 挑版本号与清单一致的那份; 只有全部源都旧才报错。
     #    4G 网络偶发中途断流, 下载失败或没挑到完整文件时自动整体重试一次。
+    def _track(got, total):
+        # 主程序下载占进度条前 88%, 后续模块/安装/重启快速走到 100%
+        if total > 0:
+            _ota_progress(got=got, total=total, pct=min(88, got * 88 // total))
     def _fetch_viewer():
         return _race_get("/sentry-viewer.py?ts=%d" % int(time.time()), timeout=60, limit=8 << 20,
-                         validate=_viewer_blob_ok, collect=True, grace=3.0)
+                         validate=_viewer_blob_ok, collect=True, grace=3.0, track=_track)
     res, picked = [], None
     for attempt in (0, 1):
         try:
@@ -1293,6 +1323,8 @@ def ota_apply(force=False):
     # 2) 下载依赖模块: 少一个都不装 (先装主程序后补模块, 只会得到一个起不来的服务)
     names = _ota_need_modules(j, data)
     mods = []
+    if names:
+        _ota_progress(stage="正在更新模块…", pct=92)
     for name in names:
         blob = None
         if via_api:
@@ -1331,6 +1363,7 @@ def ota_apply(force=False):
     if err:
         return False, "启动自检失败: " + err
     # 4) 备份旧版 (回滚用)
+    _ota_progress(stage="正在安装，即将重启…", pct=98)
     here = os.path.realpath(__file__)
     try:
         os.makedirs(os.path.dirname(OTA_BACKUP) or ".", exist_ok=True)
@@ -1371,6 +1404,7 @@ def ota_apply(force=False):
     if skipped:
         msg += " (%d 个脚本源不可用, 保持原文件)" % skipped
     threading.Timer(1.2, _ota_restart).start()
+    _ota_progress(stage="更新完成，服务正在重启…", pct=100)
     return True, msg
 
 
@@ -1559,6 +1593,16 @@ BRAND_LOGO_B64 = (
     "sSzab5jOOncvIrWcX1Bhd8EFXEqzgHlxHdzN5lM4DUPCcMPYqZJ1foWnxiCFRFOVyPqBHpCJrgI8Q9wfFwXGPIxaFO1zMiHiEMCY"
     "iEtF4YAuz0yzhNBDFAC06lEVVFcQpajIy8kMiFtD+if/2Q=="
 )
+# 默认标题图标: 特斯拉哨兵小图标 (内联 SVG, 免图片文件; 换图后前端带 ?v= 破缓存)
+BRAND_LOGO_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">'
+    '<rect width="64" height="64" rx="16" fill="#111418"/>'
+    '<path d="M32 11c-8 0-15.5 1.5-21.6 4l2.5 5.1C18.2 17.7 25 16.6 32 16.6s13.8 1.1 19.1 3.5l2.5-5.1C47.5 12.5 40 11 32 11z'
+    'M27.2 20h9.6v33h-9.6z" fill="#e82127"/>'
+    '<circle cx="48" cy="44" r="7.5" fill="none" stroke="#e82127" stroke-width="3"/>'
+    '<circle cx="48" cy="44" r="2.6" fill="#e82127"/>'
+    '</svg>'
+)
 
 
 PLAYBACK_QUALITIES = ("orig", "720p", "480p", "360p")
@@ -1569,6 +1613,8 @@ RETENTION_FIELDS = {
     "recent_keep_min": (0, 1440),   # 空间兜底清理时最近必留(分钟)
     "recent_max_gb": (0, 4096),     # 「实时滚动记录」体积上限(G), 0=不限; 归档不限量时仍独立生效
     "box_keep_days": (0, 3650),     # 哨兵/手动保存按天数保留, 0=不按天数清理
+    "usb_clean_pct": (0, 99),       # 车机U盘用量达到该百分比自动清理旧事件, 0=关闭
+    "usb_keep_days": (0, 365),      # 车机U盘自动清理时最近必留天数, 0=只按容量清
 }
 # 预转码缓存: 每个模块只预转码最新的 N 个事件, 0=关闭该模块预转码
 PREWARM_FIELDS = {
@@ -1591,6 +1637,8 @@ def load_settings():
          "recent_keep_min": _retention_default("TSF_RECENT_KEEP_MIN", 60),
          "recent_max_gb": _retention_default("TSF_RECENT_MAX_GB", 12),
          "box_keep_days": _retention_default("TSF_BOX_KEEP_DAYS", 14),
+         "usb_clean_pct": _retention_default("TSF_USB_CLEAN_PCT", 90),
+         "usb_keep_days": _retention_default("TSF_USB_CLEAN_DAYS", 7),
          "prewarm_sentry": _retention_default("TSF_PREWARM_SENTRY", 2),
          "prewarm_saved": _retention_default("TSF_PREWARM_SAVED", 2)}
     try:
@@ -1665,10 +1713,7 @@ def brand_logo_bytes():
                                       "image/webp" if lg.lower().endswith(".webp") else "image/jpeg")
             except OSError:
                 pass
-    try:
-        return base64.b64decode(BRAND_LOGO_B64), "image/jpeg"
-    except (ValueError, TypeError):
-        return b"", "image/jpeg"
+    return BRAND_LOGO_SVG.encode("utf-8"), "image/svg+xml"
 
 
 def brand_name():
@@ -2507,6 +2552,16 @@ html[data-style="claude"] .toast { border-radius:12px; }
 .brandreset { padding:9px 14px; border-radius:9px; border:1px solid var(--line2); background:var(--panel2);
   color:var(--muted); font-size:12.5px; cursor:pointer; }
 .brandreset:hover { border-color:var(--accent); color:var(--accent); }
+/* 上传图标与恢复默认同一行, 窄屏自动换行且保持等高手感 */
+.brandactions { display:flex; align-items:stretch; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+#tab-skin .brandactions .upbtn { margin:0; }
+#tab-skin .brandactions .brandreset { display:inline-flex; align-items:center; justify-content:center;
+  min-height:36px; padding:0 16px; }
+@media (max-width:520px){
+  #tab-skin .brandactions { gap:6px; }
+  #tab-skin .brandactions .upbtn { flex:1 1 auto; width:auto; min-height:44px; margin:0; }
+  #tab-skin .brandactions .brandreset { flex:1 1 auto; min-height:44px; }
+}
 html[data-style="pixel"] .brandbox .blogo { border-radius:0; box-shadow:none; border:2px solid var(--line); }
 /* ===== 像素艺术风 (Pixel Art) =====
    参考 StyleKit pixel-art: 零圆角 / 2px 硬边框 / 4px 硬偏移阴影 / 8-bit 调色板。
@@ -2619,26 +2674,26 @@ body.watching { overflow:hidden; }
 .player .cambar { order:1; justify-content:flex-start; flex-wrap:nowrap; overflow-x:auto; padding:2px 0; }
 .player .cambar button { white-space:nowrap; border-radius:6px; padding:7px 13px; min-height:38px; }
 .player .cambar button.on { background:var(--text); color:var(--bg); border-color:var(--text); }
-.transport { order:2; width:100%; max-width:980px; margin:0 auto; padding:8px 0 12px; border-bottom:1px solid var(--line); }
+.transport { order:2; width:100%; max-width:980px; margin:0 auto; padding:4px 0 4px; border-bottom:1px solid var(--line); }
 .playtools,.watch-live { display:flex; align-items:center; gap:10px; }
 .clockline { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:10px; font-variant-numeric:tabular-nums; }
 .clockline output { font:600 20px/1.2 ui-monospace,Consolas,monospace; text-align:center; }
 .clockline > span { color:var(--muted); font-size:12px; white-space:nowrap; }
 #track-start { text-align:left; }
 #track-end { text-align:right; }
-#trigger-marker { position:absolute; top:29px; transform:translateX(-50%); display:block; margin:0; padding:2px 4px; background:var(--panel); color:var(--text); border:0; border-radius:3px; font-size:11px; min-height:22px; cursor:pointer; white-space:nowrap; z-index:2; }
+#trigger-marker { position:absolute; top:15px; left:0; transform:translate(-50%,-100%); display:block; margin:0; padding:1px 4px; background:var(--panel); color:var(--text); border:0; border-radius:3px; font-size:10px; line-height:12px; min-height:0; cursor:pointer; white-space:nowrap; z-index:3; }
 .timeline-row { display:flex; align-items:flex-start; gap:14px; }
 .playback-help { display:flex; flex-direction:column; justify-content:center; gap:2px; min-height:36px;
   color:var(--muted); font-size:11px; line-height:1.5; white-space:nowrap; }
-.timeline { position:relative; height:54px; display:flex; align-items:flex-start; flex:1; min-width:0; padding-top:2px; }
-#track-bands { position:absolute; left:8px; right:8px; height:6px; border-radius:3px; background:linear-gradient(to right,var(--play-accent) var(--played,0%),var(--muted2) var(--played,0%)); pointer-events:none; }
+.timeline { position:relative; height:34px; display:flex; align-items:flex-start; flex:1; min-width:0; padding-top:0; }
+#track-bands { position:absolute; left:8px; right:8px; top:16px; height:6px; border-radius:3px; background:linear-gradient(to right,var(--play-accent) var(--played,0%),var(--muted2) var(--played,0%)); pointer-events:none; }
 #track-bands i { position:absolute; inset-block:0; }
 #track-bands .gap { min-width:1px; background:#fff; }
 #track-bands .trigger { height:9px; top:-2px; width:9px; border-radius:50%; background:#e65050; transform:translateX(-50%); }
 #track-bands .event-dot { height:8px; top:-1px; width:8px; border-radius:50%; transform:translateX(-50%); box-shadow:0 0 0 1px var(--bg); }
 #track-bands .event-dot.sentry { background:#ff453a; }
 #track-bands .event-dot.saved { background:#ffd60a; }
-#seek { position:relative; width:100%; height:36px; margin:0; cursor:pointer; appearance:none; -webkit-appearance:none; background:transparent; }
+#seek { position:absolute; left:0; top:0; width:100%; height:34px; margin:0; cursor:pointer; appearance:none; -webkit-appearance:none; background:transparent; }
 #seek::-webkit-slider-runnable-track { background:transparent; height:6px; }
 #seek::-moz-range-track { background:transparent; height:6px; }
 #seek::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:0; height:0; border:0; background:transparent; opacity:0; }
@@ -2685,6 +2740,7 @@ body.watching { overflow:hidden; }
 .upbtn.accent-up,.upbtn.accent-up:hover { background:var(--accent); border-color:var(--accent); color:#fff; }
 .upbtn.accent-up:hover { filter:brightness(1.07); }
 .player .tpanel { order:3; box-shadow:none; border-radius:6px; }
+.player .pscroll { gap:8px; }
 .player .infocard { order:4; border:0; padding:0; border-radius:0; background:transparent; box-shadow:none; }
 .player .ic-fold { margin:0; font-size:13px; }
 .player .clipbar.show { display:flex; }
@@ -2708,7 +2764,7 @@ body.watching { overflow:hidden; }
 @media (max-width:700px) {
   .timeline-row { display:block; }
   .playback-help { font-size:10px; }
-  .timeline { height:52px; }
+  .timeline { height:36px; }
 }
 @media (max-width:600px) {
   .playtools { grid-template-columns:minmax(0,1fr) auto; }
@@ -2811,7 +2867,7 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .player .cambar button:first-child { border-radius:6px 0 0 6px; margin-left:0; }
 .player .cambar button:last-child { border-radius:0 6px 6px 0; }
 .player .cambar button.on { color:var(--accent); background:var(--selected); border-color:var(--accent); z-index:1; }
-.player .transport { padding:0 0 12px; }
+.player .transport { padding:0 0 4px; }
 .clockline output { font-size:17px; font-weight:500; font-style:normal; }
 .playtools { grid-template-columns:1fr auto 1fr; gap:12px; }
 .playtools .shuttle { grid-column:2; grid-row:1; gap:6px; }
@@ -2824,7 +2880,7 @@ body.watching .library-page,body.settings-open .library-page { visibility:hidden
 .viewtools #shotbtn, .viewtools #bbtn { width:36px; min-width:36px; padding:0; display:inline-flex; align-items:center; justify-content:center; }
 .viewtools #shotbtn .ic, .viewtools #bbtn .ic { width:17px; height:17px; }
 .viewtools #shotbtn { color:var(--accent); }
-.player .tpanel { padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.player .tpanel { padding:9px 18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .player .tp-spd { font-size:32px; }
 .player .tp-badge { border-radius:5px; padding:5px 8px; font-size:13px; }
 .player .tp-gear { width:25px; height:25px; font-size:15px; }
@@ -3400,10 +3456,12 @@ body.settings-open { overflow:hidden; }
     <div class="storage-columns storage-settings-columns">
     <section class="storage-quota" id="storage-retention">
       <h3>保留时间设置</h3>
-      <div class="hint">填 0 表示不限制：实时滚动记录按滚动窗口保留，哨兵 / 手动保存按天数保留。时间限制立即作用于后台清理，并同步写入 /etc/tesla-sentry.conf，重启后仍然生效。</div>
+      <div class="hint">填 0 表示不限制：实时滚动记录按滚动窗口保留，哨兵 / 手动保存按天数保留；车机 U 盘自动清理填 0 即关闭。设置立即作用于后台清理，并同步写入 /etc/tesla-sentry.conf，重启后仍然生效。</div>
       <div class="storage-row note"><label for="retention-roll">实时滚动记录保留</label><input class="ninput" id="retention-roll" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div>
       <div class="storage-nested"><div class="storage-row note"><label for="retention-keep">空间紧张时至少保留</label><input class="ninput" id="retention-keep" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div></div>
       <div class="storage-row note"><label for="retention-days">哨兵 / 手动保存保留</label><input class="ninput" id="retention-days" type="number" min="0" max="3650" step="1" inputmode="numeric"><span class="retention-unit">天</span></div>
+      <div class="storage-row note"><label for="retention-usbpct">车机 U 盘自动清理</label><input class="ninput" id="retention-usbpct" type="number" min="0" max="99" step="1" inputmode="numeric"><span class="retention-unit">%</span><button class="storage-help" type="button" aria-label="车机 U 盘自动清理说明" aria-expanded="false" aria-controls="storage-tip" data-help="usbclean">?</button></div>
+      <div class="storage-nested"><div class="storage-row note"><label for="retention-usbdays">清理时保留最近</label><input class="ninput" id="retention-usbdays" type="number" min="0" max="365" step="1" inputmode="numeric"><span class="retention-unit">天</span></div></div>
       <div class="updbtns"><button class="mini primary" id="retention-save" onclick="storageSaveRetention()" disabled>保存时间限制</button></div>
       <div class="hint" id="retention-msg" role="status" aria-live="polite"></div>
     </section>
@@ -3436,8 +3494,10 @@ body.settings-open { overflow:hidden; }
       <input class="ninput" id="brand-name" maxlength="24" placeholder="哨兵一剪梅" autocomplete="off" autocapitalize="none" onkeydown="if(event.key==='Enter')saveBrandName()">
       <button class="primary" onclick="saveBrandName()">保存</button>
     </div>
-    <label class="fm-tool upbtn"><svg class="ic"><use href="#i-upload"/></svg>上传图标 (png/jpg/webp, ≤3MB)<input type="file" id="brand-file" accept=".png,.jpg,.jpeg,.webp" hidden></label>
-    <div style="margin-top:4px"><button class="brandreset" onclick="resetBrand()">恢复默认图标与名称</button></div>
+    <div class="brandactions">
+      <label class="fm-tool upbtn"><svg class="ic"><use href="#i-upload"/></svg>上传图标 (png/jpg/webp, ≤3MB)<input type="file" id="brand-file" accept=".png,.jpg,.jpeg,.webp" hidden></label>
+      <button class="brandreset" onclick="resetBrand()">恢复默认图标与名称</button>
+    </div>
     <h3 style="margin-top:22px">界面与背景</h3>
     <div class="hint">界面风格 · 只换配色、圆角与阴影, 不动功能; 选完即时生效并记住</div>
     <div class="stylepick" id="style-pick">
@@ -4200,8 +4260,16 @@ async function refreshLive() {
     };
     // 虚拟U盘: 卷内实际写入 / 镜像标称容量
     // (img_real 是镜像在宿主盘上的预分配占用, 几乎等于标称容量, 永远 100% 不直观)
-    tset('storvusb', dk.img_used != null ? dk.img_used : dk.img_real, dk.img_nominal,
-         'storvusbbar');
+    if (dk.img_ready === false) {
+      // 车机格式化 U 盘期间镜像暂时不是 exFAT, 显示未就绪而不是满盘
+      document.getElementById('storvusb').textContent = t('镜像未就绪（车机格式化中）');
+      const ub = document.getElementById('storvusbbar');
+      ub.style.width = '0%';
+      ub.style.background = storColor(0);
+    } else {
+      tset('storvusb', dk.img_used != null ? dk.img_used : dk.img_real, dk.img_nominal,
+           'storvusbbar');
+    }
     const vu = document.getElementById('storvusb');
     if (vu) vu.title = t('车机 U 盘里已写入的数据 / 车机看到的容量');
     // 归档区: 已归档 / 配置的归档总量上限
@@ -7267,7 +7335,8 @@ const STORAGE_HELP = {
   recentmax: '实时滚动记录单独的容量上限，已包含在归档总容量内。6 路 1 小时约 12 G；填 0 表示不限制，只按保留分钟数滚动清理。',
   drive: '驾驶记录的容量上限，已包含在归档总容量内。超限时从最旧行程开始清理，保留最新片段。',
   reserve: '空间不足时，希望清理后恢复的空闲容量，不创建独立分区。增大此值可能使旧归档更早被清理。',
-  minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间。这条保护线不另占容量，不能高于安全预留空间。'
+  minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间。这条保护线不另占容量，不能高于安全预留空间。',
+  usbclean: '车机 U 盘用量达到该百分比后，后台会在车机空闲（约 10 分钟没写入）时自动删除镜像里最旧的事件目录，删到低于「阈值 - 10%」为止，删完立即恢复车机读写。清理只针对 TeslaCam 下的哨兵 / 手动保存 / 实时滚动记录，根目录的铃声、涂装等文件不受影响，归档区副本也不会被删除。填 0 表示关闭。'
 };
 let storageData = null, storageTimer = null, storageHelpButton = null, storageRequest = 0;
 function storageHelpClose() {
@@ -7395,12 +7464,13 @@ function storageRenderUsage() {
   const recentLimit = inputNum('retention-recentmax', storageData.retention ? storageData.retention.recent_max_gb : 0);
   // 实际用量的限额文字与容量条都读容量设置输入框, 改上限时同步变化
   for (const [name, used, limit] of [['usb', disk.usb_used_bytes, usbLimit], ['archive', disk.archive_bytes, archiveLimit], ['drive', disk.drive_bytes, driveLimit], ['recent', disk.recent_bytes, recentLimit]]) {
-    const amount = used == null ? '—' : (used / G).toFixed(1);
+    const notReady = name === 'usb' && disk.usb_ready === false;
+    const amount = notReady ? t('未就绪') : (used == null ? '—' : (used / G).toFixed(1));
     document.getElementById('storage-used-' + name).textContent = amount + ' / ' + (limit > 0 ? limit + ' G' : t('无限制'));
     const meter = document.getElementById('storage-meter-' + name);
     if (!meter) continue;
-    meter.hidden = used == null || !(limit > 0);
-    meter.value = limit > 0 ? Math.min(100, used / G / limit * 100) : 0;
+    meter.hidden = notReady || used == null || !(limit > 0);
+    meter.value = limit > 0 && used != null ? Math.min(100, used / G / limit * 100) : 0;
   }
   document.getElementById('storage-used-free').textContent = (disk.free_bytes / G).toFixed(1) + ' G';
   for (const [name, bytes] of [['sentry', disk.sentry_bytes], ['saved', disk.saved_bytes], ['cache', disk.cache_bytes], ['other', disk.other_bytes]]) {
@@ -7457,7 +7527,7 @@ async function storageLoad() {
     usbInput.value = data.usb_gib;
     if (data.prewarm) for (const [id, key] of [['prewarm-sentry','prewarm_sentry'],['prewarm-saved','prewarm_saved']]) document.getElementById(id).value = data.prewarm[key];
     for (const [id, key] of [['archive','archive_gib'],['drive','drive_gib'],['reserve','free_target_gib'],['minimum','free_min_gib']]) document.getElementById('storage-' + id).value = data.values[key];
-    if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days']]) document.getElementById('retention-' + id).value = data.retention[key];
+    if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days'],['usbpct','usb_clean_pct'],['usbdays','usb_keep_days']]) document.getElementById('retention-' + id).value = data.retention[key];
     if (data.paths) {
       document.getElementById('storage-path-root').value = data.paths.video_root;
       document.getElementById('storage-path-img').value = data.paths.img;
@@ -7512,7 +7582,7 @@ async function storageSave() {
   finally { storageDisable(false); }
 }
 async function storageSaveRetention() {
-  const ids = [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days']];
+  const ids = [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['days','box_keep_days'],['usbpct','usb_clean_pct'],['usbdays','usb_keep_days']];
   const body = {};
   for (const [id, key] of ids) {
     const input = document.getElementById('retention-' + id);
@@ -8170,13 +8240,29 @@ async function otaApply(force) {
   if (!confirm(tip)) return;
   const btn = document.getElementById('upd-go'), msg = document.getElementById('upd-msg');
   btn.disabled = true;
-  msg.textContent = t('正在下载并校验新版本…');
+  // 下载/安装进度: 服务端在 _http_get 里逐块上报, 这里轮询显示「阶段 + 百分比」
+  let pct = 0;
+  const showProgress = (stage) => {
+    msg.textContent = (stage || t('正在下载并校验新版本…')) + ' ' + pct + '%';
+  };
+  showProgress();
+  const timer = setInterval(async () => {
+    try {
+      const p = await (await fetch('/api/ota/progress', { cache: 'no-store' })).json();
+      if (p && p.ok) {
+        if (typeof p.pct === 'number') pct = Math.max(pct, Math.min(100, p.pct));
+        showProgress(p.stage);
+      }
+    } catch (e) { /* 服务重启瞬间忽略 */ }
+  }, 700);
   try {
     const j = await (await fetch('/api/ota/apply', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({force})})).json();
+    clearInterval(timer);
     msg.textContent = j.msg;
     if (!j.ok) { btn.disabled = false; return; }
     otaWaitBack();
   } catch (e) {
+    clearInterval(timer);
     msg.textContent = t('升级失败') + ': ' + e;
     btn.disabled = false;
   }
@@ -9153,7 +9239,7 @@ def road_for(lat, lon):
         _geo_load_locked()
         item = _GEO_CACHE.get(key) or {}
         parts = item.get("parts") if isinstance(item.get("parts"), dict) else {}
-        road = str(parts.get("street") or parts.get("township") or "").strip()
+        road = _clean_street(parts.get("street") or "") or str(parts.get("township") or "").strip()
         address = str(item.get("address") or "").strip()
         if road:
             return {"ok": True, "road": road, "parts": parts, "address": address, "cached": True}
@@ -9173,7 +9259,7 @@ def road_for(lat, lon):
     except Exception as ex:
         return {"ok": False, "road": "", "reason": str(ex)[:120]}
     parts = info.get("parts") if isinstance(info.get("parts"), dict) else {}
-    road = str(parts.get("street") or parts.get("township") or "").strip()
+    road = _clean_street(parts.get("street") or "") or str(parts.get("township") or "").strip()
     address = str(info.get("address") or "").strip()
     with _GEO_LOCK:
         _GEO_CACHE[key] = {"address": address, "parts": parts, "at": int(time.time()), "error": ""}
@@ -9213,6 +9299,29 @@ def _geocode_worker():
 
 
 _ADDR_RE_PROV = re.compile(r"^(.+?(?:省|自治区|特别行政区)|北京市|上海市|天津市|重庆市)")
+# 街道/乡镇、道路、门牌: 高德返回的 formatted_address 里街道办、道路名和 POI 常连在一起
+# (如「中韩街道劲松六路青岛高新职业学校」), 按最长后缀切出第一个道路名。
+_ADDR_RE_TOWN = re.compile(r"^(.+?(?:街道|镇|乡))")
+_ADDR_RE_ROAD = re.compile(r"^([\u4e00-\u9fa5A-Za-z0-9]+?(?:大道|大街|路|街|巷|弄|胡同|道))")
+_ADDR_RE_NUM = re.compile(r"^(\d+号.*|[A-Za-z]?\d+[栋幢单元室].*)$")
+
+
+def _clean_street(street):
+    """只保留道路名: 去掉「XX街道/镇/乡」前缀, 并在第一个道路名后缀处截断。
+
+    旧缓存里 street 可能是整段「中韩街道劲松六路青岛高新职业学校劲松七路」,
+    显示到 {街道} 会又长又乱; 这里统一收敛成「劲松六路」。
+    """
+    s = str(street or "").strip()
+    if not s:
+        return ""
+    m = _ADDR_RE_TOWN.match(s)
+    if m:
+        s = s[len(m.group(1)):]
+    m = _ADDR_RE_ROAD.match(s)
+    if m:
+        s = m.group(1)
+    return s
 
 
 def _parse_addr_parts(addr):
@@ -9236,14 +9345,23 @@ def _parse_addr_parts(addr):
     if m:
         dist = m.group(1)
         s = s[len(dist):]
-    street = num = ""
-    m = re.match(r"^(.+?)(\d+号.*)$", s)
+    street = num = town = ""
+    m = _ADDR_RE_TOWN.match(s)
     if m:
-        street, num = m.group(1).strip(), m.group(2).strip()
-    else:
+        town = m.group(1)
+        s = s[len(town):]
+    m = _ADDR_RE_ROAD.match(s)
+    if m:
+        street = m.group(1)
+        rest = s[len(street):]
+        m = _ADDR_RE_NUM.match(rest)
+        if m:
+            num = m.group(1)
+    elif s:
+        # 认不出道路名时保留原文, 交给 _clean_street 再去一次前后缀
         street = s.strip()
-    return {"province": prov, "city": city, "district": dist, "township": "",
-            "street": street, "number": num}
+    return {"province": prov, "city": city, "district": dist, "township": town,
+            "street": _clean_street(street), "number": num}
 
 
 def _geocode_attach(meta, amap_key=""):
@@ -9310,7 +9428,7 @@ def format_place(meta, fmt=""):
     meta = meta if isinstance(meta, dict) else {}
     parts = meta.get("addr_parts") if isinstance(meta.get("addr_parts"), dict) else {}
     city = str(meta.get("city") or parts.get("city") or "").strip()
-    street = str(meta.get("street") or parts.get("street") or "").strip()
+    street = _clean_street(str(meta.get("street") or parts.get("street") or "").strip())
     full = str(meta.get("full_address") or "").strip()
     if not parts and full:
         # 没有结构化字段时从完整地址反推, 保证自定义格式始终能拼出内容
@@ -9576,11 +9694,27 @@ def _gadget_rebind(bind):
         return False
 
 
+def usb_img_ready():
+    """镜像引导扇区是否已是合法 exFAT 卷。
+
+    车机格式化 U 盘期间镜像会被清空或重建, 此时 losetup/mount 都会失败;
+    提前判掉可以给出「正在格式化」的提示, 而不是把 Invalid argument 丢给用户。
+    """
+    try:
+        with open(IMG, "rb") as f:
+            vbr = f.read(512)
+        return len(vbr) >= 512 and vbr[3:11] == b"EXFAT   "
+    except OSError:
+        return False
+
+
 def usb_attach():
     """临时断开车机读取, 挂载镜像到 MNT (读写). 返回 (ok, msg)"""
     global usb_attached, usb_timer
     if storage_busy():
         return False, "正在调整 U 盘容量"
+    if not usb_img_ready():
+        return False, "镜像未就绪: 车机可能正在格式化 U 盘, 请稍后再试"
     with usb_lock:
         if storage_busy():
             return False, "正在调整 U 盘容量"
@@ -9601,6 +9735,13 @@ def usb_attach():
             return False, "创建挂载点失败: " + str(ex)
         _gadget_rebind(False)  # 停止导出
         time.sleep(1)
+        # 上次异常退出可能留下指向本镜像的 loop 绑定, 不释放会 EBUSY
+        try:
+            cur = subprocess.run([LOSETUP, LOOPDEV], capture_output=True, text=True).stdout
+            if IMG in cur:
+                subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
+        except Exception:
+            pass
         r = subprocess.run([LOSETUP, LOOPDEV, IMG], capture_output=True, text=True)
         if r.returncode != 0:
             _gadget_rebind(True)
@@ -9611,7 +9752,10 @@ def usb_attach():
             subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
             _gadget_rebind(True)
             _release_usb_flock()
-            return False, "挂载失败: " + r.stderr.strip()[-120:]
+            msg = r.stderr.strip()[-120:]
+            if "Invalid argument" in msg:
+                msg += "（镜像不是有效的 exFAT 卷，车机可能正在格式化，请稍后再试）"
+            return False, "挂载失败: " + msg
         usb_attached = True
         # 无操作自动恢复
         if usb_timer:
@@ -9663,6 +9807,152 @@ def usb_img_age():
         return time.time() - os.path.getmtime(IMG)
     except OSError:
         return -1
+
+
+# ---------- 车机U盘容量定时清理 ----------
+# 车机U盘(镜像)写满后车机会停止录像, 网页端也只能看到满盘。这里在车机空闲窗口内
+# 按设定删除镜像里最旧的事件目录, 逻辑与归档区一致: 从最旧开始删, 保留最近 N 天,
+# 删到占用低于「阈值 - 10%」为止。
+# 安全前提与写锁车音一致: 车机 N 秒没写 + 跨进程排他锁 + 短暂停止 USB 导出;
+# 只删 TeslaCam 下按时间命名的事件目录, 根目录文件(Boombox/Wraps/锁车音)一律不碰。
+USB_CLEAN_MNT = os.environ.get("TSF_USB_CLEAN_MNT", MNT + "-clean")
+USB_CLEAN_IDLE_S = int(os.environ.get("TSF_IDLE", "600"))
+USB_CLEAN_INTERVAL = max(60, int(os.environ.get("TSF_USB_CLEAN_INTERVAL", "600")))
+USB_CLEAN_LOG = os.environ.get(
+    "TSF_USB_CLEAN_LOG",
+    os.path.join(os.path.dirname(SETTINGS_FILE) or "/opt/tesla-sentry", "usb-clean.log"))
+USB_CLEAN_CATS = ("SentryClips", "SavedClips", "RecentClips")
+_usb_clean_ts = [0.0]
+
+
+def _usb_clean_log(msg):
+    try:
+        with open(USB_CLEAN_LOG, "a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+        if os.path.getsize(USB_CLEAN_LOG) > 256 * 1024:   # 环形截断
+            with open(USB_CLEAN_LOG, encoding="utf-8") as f:
+                tail = f.readlines()[-1000:]
+            with open(USB_CLEAN_LOG, "w", encoding="utf-8") as f:
+                f.writelines(tail)
+    except OSError:
+        pass
+
+
+def _usb_clean_candidates(root):
+    """镜像内可删的事件目录 (按时间从旧到新)。只认时间戳命名的目录, 最近还在写的跳过。"""
+    rows = []
+    now = time.time()
+    for cat in USB_CLEAN_CATS:
+        base = os.path.join(root, "TeslaCam", cat)
+        try:
+            names = os.listdir(base)
+        except OSError:
+            continue
+        for name in names:
+            if name.startswith("."):
+                continue
+            dt = _ev_dt(name)
+            p = os.path.join(base, name)
+            if not dt or not os.path.isdir(p):
+                continue
+            try:
+                if now - os.path.getmtime(p) < USB_CLEAN_IDLE_S:
+                    continue                     # 车机可能还在往里写
+            except OSError:
+                continue
+            rows.append((dt, p))
+    rows.sort(key=lambda x: x[0])
+    return rows
+
+
+def usb_auto_clean():
+    """车机U盘接近满时自动清理最旧事件, 返回删除的事件数。
+
+    车机正在录制/写入时不动手; 镜像无效、拿不到锁或网页正在管理U盘时本轮跳过。
+    """
+    if USB_CLEAN_PCT <= 0 or storage_busy():
+        return 0
+    now = time.time()
+    if now - _usb_clean_ts[0] < USB_CLEAN_INTERVAL:
+        return 0
+    try:
+        nominal = os.path.getsize(IMG)
+    except OSError:
+        return 0
+    used = _exfat_used(IMG)
+    _usb_clean_ts[0] = now          # 位图解析有成本, 10 分钟内不重复检查
+    if not nominal or used is None or used * 100 < nominal * USB_CLEAN_PCT:
+        return 0
+    age = usb_img_age()
+    if age >= 0 and age < USB_CLEAN_IDLE_S:
+        _usb_clean_log("跳过: 车机 %d 秒前仍在写入镜像" % age)
+        return 0
+    if os.path.ismount(MNT) or usb_attached or _usb_flock_fd is not None:
+        return 0
+    if not _acquire_usb_flock():
+        return 0
+    _usb_clean_ts[0] = now
+    pct_before = int(used * 100 / nominal)
+    lb = ""
+    mounted = False
+    removed = 0
+    try:
+        os.makedirs(USB_CLEAN_MNT, exist_ok=True)
+        r = subprocess.run([LOSETUP, "-f"], capture_output=True, text=True)
+        lb = (r.stdout.strip().splitlines() or [""])[0] if r.returncode == 0 else ""
+        if not lb:
+            lb = LOOPDEV
+        if subprocess.run([LOSETUP, lb, IMG], capture_output=True).returncode != 0:
+            _usb_clean_log("losetup 失败, 本轮跳过")
+            return 0
+        _gadget_rebind(False)          # 短暂停止导出, 避免车机同时写
+        time.sleep(1)
+        if subprocess.run(["mount", "-t", "exfat", lb, USB_CLEAN_MNT],
+                          capture_output=True).returncode != 0:
+            _usb_clean_log("挂载镜像失败 (车机可能正在格式化), 本轮跳过")
+            return 0
+        mounted = True
+        rows = _usb_clean_candidates(USB_CLEAN_MNT)
+        if not rows:
+            _usb_clean_log("镜像已用 %d%%, 但没有可清理的事件目录" % pct_before)
+            return 0
+        newest = rows[-1][0]
+        keep_cutoff = (newest - datetime.timedelta(days=USB_KEEP_DAYS)
+                       if USB_KEEP_DAYS > 0 else None)
+        target = max(0, USB_CLEAN_PCT - 10)
+
+        def usage_pct():
+            try:
+                st = os.statvfs(USB_CLEAN_MNT)
+            except OSError:
+                return 0
+            return (st.f_blocks - st.f_bavail) * 100.0 / st.f_blocks if st.f_blocks else 0
+
+        for dt, p in rows:
+            if usage_pct() <= target:
+                break
+            if keep_cutoff and dt >= keep_cutoff:
+                break                   # 剩下的都在保留期内
+            try:
+                shutil.rmtree(p)
+                removed += 1
+            except OSError:
+                pass
+        _usb_clean_log("自动清理完成: 删除 %d 个事件, 用量 %d%% -> %d%%"
+                       % (removed, pct_before, int(usage_pct())))
+        return removed
+    finally:
+        if mounted:
+            subprocess.run(["sync"], capture_output=True)
+            for _ in range(3):
+                if subprocess.run(["umount", USB_CLEAN_MNT], capture_output=True).returncode == 0:
+                    break
+                time.sleep(2)
+        if lb:
+            subprocess.run([LOSETUP, "-d", lb], capture_output=True)
+        _gadget_rebind(True)
+        _release_usb_flock()
+        _IMG_USED_CACHE.update(t=0.0, path="", v=None)   # 下次重新读用量
 
 
 # ---------- 车机U盘「幽灵占用」回收 (位图自愈) ----------
@@ -10663,6 +10953,9 @@ def disk_usage():
             pass
     if d["img_used"] is None:
         d["img_used"] = _exfat_used(IMG)
+    # 车机格式化期间镜像不是合法 exFAT, 用量读不出来; 标记未就绪, 前端不能拿
+    # 预分配的 img_real 当已用 (那会永远显示满盘)
+    d["img_ready"] = d["img_used"] is not None
     d["arc_used"] = archive_size()
     # 整盘 = 镜像文件所在分区 (镜像和归档同一块盘)
     d["disk_total"] = d["disk_used"] = d["disk_free"] = 0
@@ -11336,6 +11629,8 @@ RECENT_MAX_GB = int(os.environ.get("TSF_RECENT_MAX_GB", "12"))        # 「实�
 # 清掉的分类/事件会记入 /archive/.pruned 墓碑文件, 同步端读到就跳过 —— 否则车机 U 盘上
 # 还留着的旧事件会被当成新片段重抄回来, 形成 删除→重抄 的死循环 (和 RecentClips 同理)。
 BOX_KEEP_DAYS = int(os.environ.get("TSF_BOX_KEEP_DAYS", "14"))        # 盒子侧哨兵/手动保存保留天数, 0=不按天数清
+USB_CLEAN_PCT = int(os.environ.get("TSF_USB_CLEAN_PCT", "90"))        # 车机U盘用量达到该百分比自动清理, 0=关闭
+USB_KEEP_DAYS = int(os.environ.get("TSF_USB_CLEAN_DAYS", "7"))        # 自动清理时最近必留天数, 0=只按容量清
 ARCHIVE_TOTAL_GB = int(os.environ.get("TSF_ARCHIVE_TOTAL_GB", "30"))  # 所有录像归档总量上限(GB), 0=不按总量清
 DISK_GUARD_INTERVAL = max(30, int(os.environ.get("TSF_DISK_GUARD_INTERVAL", "60")))
 PRUNED_FILE = os.path.join(ARCHIVE, ".pruned")                        # 墓碑: 每行 "分类/事件名", 同步端跳过
@@ -11374,6 +11669,7 @@ if storage_resize.pending_recovery(IMG):
 def refresh_storage_settings():
     global ARCHIVE_TOTAL_GB, DRIVE_MAX_GB, FREE_MIN_MB, FREE_TARGET_MB
     global RECENT_ROLL_MIN, RECENT_KEEP_MIN, RECENT_MAX_GB, BOX_KEEP_DAYS
+    global USB_CLEAN_PCT, USB_KEEP_DAYS
     try:
         values = storage_allocation.load()
     except (OSError, ValueError, TypeError):
@@ -11388,6 +11684,8 @@ def refresh_storage_settings():
     RECENT_KEEP_MIN = int(saved['recent_keep_min'])
     RECENT_MAX_GB = int(saved['recent_max_gb'])
     BOX_KEEP_DAYS = int(saved['box_keep_days'])
+    USB_CLEAN_PCT = int(saved['usb_clean_pct'])
+    USB_KEEP_DAYS = int(saved['usb_keep_days'])
 
 
 refresh_storage_settings()
@@ -11406,6 +11704,7 @@ def storage_status():
     values = storage_allocation.load()
     disk = storage_allocation.snapshot(IMG, ARCHIVE, TRANSCODE_DIR)
     disk['usb_used_bytes'] = _exfat_used(IMG)
+    disk['usb_ready'] = disk['usb_used_bytes'] is not None
     # 实际用量分项。四类录像之间用硬链接共享同一段视频, 必须共用 seen 集合,
     # 否则各目录会把同一份数据重复计入, 加起来超过归档总量, 容量图只能缩放,
     # 与「实际占用」对不上。去重顺序和链接源一致: 实时滚动 -> 驾驶 -> 哨兵 -> 手动。
@@ -11490,6 +11789,8 @@ def save_retention(body):
         'TSF_RECENT_KEEP_MIN': current['recent_keep_min'],
         'TSF_RECENT_MAX_GB': current['recent_max_gb'],
         'TSF_BOX_KEEP_DAYS': current['box_keep_days'],
+        'TSF_USB_CLEAN_PCT': current['usb_clean_pct'],
+        'TSF_USB_CLEAN_DAYS': current['usb_keep_days'],
     })
     return dict(ok=True, values=current, conf_synced=written)
 
@@ -12586,6 +12887,11 @@ def disk_guard():
                     print("重复片段合并完成: %d 个, 释放约 %.1f MiB" % (merged, freed / 1048576.0), flush=True)
         except Exception as ex:
             print("重复片段合并失败: %s" % ex, flush=True)
+        # 车机U盘接近满时自动清理旧事件 (挂载类操作, 放在清理锁之外, 内部自带空闲/互斥检查)
+        try:
+            usb_auto_clean()
+        except Exception as ex:
+            print("车机U盘自动清理失败: %s" % ex, flush=True)
         time.sleep(DISK_GUARD_INTERVAL)
 
 
@@ -16614,6 +16920,11 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/ota/check":
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             self._json(ota_check(force=q.get("force", ["0"])[0] == "1"))
+        elif path == "/api/ota/progress":
+            with _OTA_PROG_LOCK:
+                p = dict(_OTA_PROG)
+            self._json({"ok": True, "stage": p["stage"], "pct": p["pct"],
+                        "got": p["got"], "total": p["total"]})
         elif path == "/api/ota/target":
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             repo = (q.get("repo") or [""])[0]
