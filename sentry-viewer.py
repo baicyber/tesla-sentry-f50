@@ -497,7 +497,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.25.022"
+APP_VERSION = "2026.11.25.023"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -4052,8 +4052,9 @@ function gridDims(n) {
 
 async function load() {
   const res = await fetch('/api/events');
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.error) { toast('事件列表加载失败：' + (data.error || res.status)); return; }
+  const next = await res.json().catch(() => ({}));
+  if (!res.ok || next.error) { toast('事件列表加载失败：' + (next.error || res.status)); return; }
+  data = next;
   const tabs = document.getElementById('tabs');
   tabs.innerHTML = '';
   const liveOpen = liveMode;
