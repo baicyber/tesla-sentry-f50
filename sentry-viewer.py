@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.001"
+APP_VERSION = "2026.11.27.002"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1160,6 +1160,7 @@ OTA_SIDECARS = (
     ("scripts/tesla-sync.sh", "tesla-sync.sh", b"#!/bin/sh", 200),
     ("scripts/usb-selfheal.sh", "usb-selfheal.sh", b"#!/bin/sh", 200),
     ("scripts/tesla-img.sh", "tesla-img.sh", b"#!/bin/sh", 200),
+    ("scripts/tsf-watchdog.sh", "tsf-watchdog.sh", b"tsf-watchdog", 200),
     ("tesla-live-sync.py", "tesla-live-sync.py", b"def do_sync", 2000),
 )
 
@@ -1173,7 +1174,8 @@ def _ota_sidecars(base):
     updated, failed = [], 0
     for rel, name, sig, minsz in OTA_SIDECARS:
         dest = os.path.join(d, name)
-        if not os.path.isfile(dest):
+        # 看门狗是后加的组件: 老设备上没有也要装, 其它脚本仍只覆盖已存在的
+        if not os.path.isfile(dest) and name != "tsf-watchdog.sh":
             failed += 1
             continue
         try:
@@ -14184,6 +14186,56 @@ def _ensure_mkfs_ext4(progress):
                      % ("；".join(fails[-3:]), hint))
 
 
+WATCHDOG_INIT = "/etc/init.d/tsf-watchdog"
+WATCHDOG_INIT_SCRIPT = """#!/bin/sh /etc/rc.common
+# tsf-watchdog: 服务存活监控 (失败自动恢复, 连续失败重启系统, 最多2次)
+# 具体策略见 /opt/tesla-sentry/tsf-watchdog.sh
+START=99
+STOP=10
+USE_PROCD=1
+
+start_service() {
+    procd_open_instance
+    procd_set_param command /opt/tesla-sentry/tsf-watchdog.sh
+    procd_set_param respawn 3600 5 5
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+"""
+
+
+def _ensure_watchdog():
+    """确保服务看门狗已安装并运行 (幂等, 失败不影响主服务)。
+
+    看门狗每 10 秒检查 tesla-viewer/tesla-live, 失败自动 restart;
+    连续 6 次失败重启 OpenWrt, 重启 2 次仍失败则停止重启并在系统日志写明原因与建议。
+    """
+    try:
+        script = os.path.join(os.environ.get("TSF_DIR", "/opt/tesla-sentry"), "tsf-watchdog.sh")
+        if not os.path.isfile(script):
+            return
+        os.chmod(script, 0o755)
+        try:
+            with open(WATCHDOG_INIT, encoding="utf-8") as f:
+                current = f.read()
+        except OSError:
+            current = ""
+        if current != WATCHDOG_INIT_SCRIPT:
+            with open(WATCHDOG_INIT, "w", encoding="utf-8") as f:
+                f.write(WATCHDOG_INIT_SCRIPT)
+            os.chmod(WATCHDOG_INIT, 0o755)
+            subprocess.run([WATCHDOG_INIT, "enable"], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=20)
+        r = subprocess.run([WATCHDOG_INIT, "running"], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=20)
+        if r.returncode != 0:
+            subprocess.run([WATCHDOG_INIT, "start"], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30)
+    except Exception:
+        pass
+
+
 def _device_mounts(dev):
     """列出该设备(含同一块卡的分区)当前的所有挂载点, 长的优先, 便于从深到浅卸载。"""
     rp = os.path.realpath(dev)
@@ -14328,6 +14380,27 @@ def _force_unmount_device(dev, progress=None):
     time.sleep(0.3)
 
 
+def _device_exclusive_ok(dev):
+    """用 O_EXCL 打开块设备: 仍被内核挂载/占用时会 EBUSY, 能直接反映 mkfs 会不会报 busy。"""
+    try:
+        fd = os.open(dev, os.O_RDONLY | os.O_EXCL)
+        os.close(fd)
+        return True
+    except OSError:
+        return False
+
+
+def _wait_device_free(dev, timeout=8.0):
+    """等设备真正被内核释放 (挂载表消失且可独占打开), 避免 mkfs 写 superblock 时 EBUSY。"""
+    deadline = time.time() + timeout
+    while True:
+        if not _device_mounts(dev) and _device_exclusive_ok(dev):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.4)
+
+
 def external_card_format(body):
     """初始格式化外置卡为 ext4。会清空该卡全部内容, 需前端二次确认。"""
     dev = str((body or {}).get("device") or "").strip()
@@ -14354,6 +14427,8 @@ def external_card_format(body):
             mkfs = _ensure_mkfs_ext4(lambda message: _card_job_set(message=message))
             _card_job_set(message="正在卸载外置卡…")
             _force_unmount_device(dev, lambda message: _card_job_set(message=message))
+            _card_job_set(message="正在等待外置卡释放…")
+            _wait_device_free(dev, timeout=8.0)
             _card_job_set(message="正在创建 ext4 文件系统…")
             # -F 重复两次: 常规的 -F 只放行非块设备/异常参数, 双 -F 才会在设备仍被
             # 内核标记占用时继续格式化 —— 卸载已完成, 这里的占用只会是残留句柄
@@ -14362,16 +14437,24 @@ def external_card_format(body):
             else:
                 cmd = [mkfs, "-F", "-F", "-L", "TESLA_DATA", dev]
             r = _run_cmd(cmd, timeout=600)
+            for attempt in range(4):
+                if r.returncode == 0:
+                    break
+                err = (r.stderr or r.stdout or "未知错误").strip()
+                # mke2fs 提示 "is mounted / in use / Resource busy" 都是内核仍占用:
+                # 结束占用进程、卸载并等待块设备可独占打开后再重试
+                if attempt == 3 or not re.search(r"mounted|in use|busy", err, re.I):
+                    break
+                _card_job_set(message="设备仍被占用，正在释放后重试…")
+                _force_unmount_device(dev, lambda message: _card_job_set(message=message))
+                _wait_device_free(dev, timeout=8.0)
+                r = _run_cmd(cmd, timeout=600)
             if r.returncode != 0:
                 err = (r.stderr or r.stdout or "未知错误").strip()
-                if "is mounted" in err or "in use" in err:
-                    # 仍有进程占用: 再强制卸载并结束占用进程后重试
-                    _card_job_set(message="仍有进程占用，正在释放后重试…")
-                    _force_unmount_device(dev, lambda message: _card_job_set(message=message))
-                    r = _run_cmd(cmd, timeout=600)
-                    err = (r.stderr or r.stdout or "未知错误").strip()
-                if r.returncode != 0:
-                    raise ValueError("格式化失败: " + err[:160])
+                if re.search(r"mounted|in use|busy", err, re.I):
+                    raise ValueError("格式化失败: 设备仍被系统占用（可能有自动挂载或残留句柄）。"
+                                     "请稍后重试，或先在系统里关闭该卡的自动挂载。原始错误: " + err[:120])
+                raise ValueError("格式化失败: " + err[:160])
             target = mounts[0] if mounts else "/mnt/sdcard"
             os.makedirs(target, exist_ok=True)
             _card_job_set(message="正在挂载 " + target)
@@ -21425,6 +21508,7 @@ if __name__ == "__main__":
     else:
         print("startup self-heal skipped: usb lock held by another process")
     threading.Thread(target=disk_guard, daemon=True).start()
+    threading.Thread(target=_ensure_watchdog, daemon=True, name="watchdog-init").start()
     threading.Thread(target=health_logger, daemon=True).start()
     threading.Thread(target=notify_loop, daemon=True).start()
     threading.Thread(target=auto_update_loop, daemon=True).start()

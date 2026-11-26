@@ -24,7 +24,7 @@ APP = '/opt/tesla-sentry'
 CONF = '/etc/tesla-sentry.conf'
 SERVICES = ('tsf-mount', 'tesla-gadget', 'tesla-live', 'tesla-viewer')
 SCRIPTS = ('mkexfat.py', 'tesla-gadget.sh', 'tesla-usb-start.sh', 'tesla-img.sh', 'tesla-sync.sh',
-           'usb-selfheal.sh', 'tsf-storage.sh', 'tsf-maintenance.sh')
+           'usb-selfheal.sh', 'tsf-storage.sh', 'tsf-maintenance.sh', 'tsf-watchdog.sh')
 MARKER = 'installation.json'
 
 
@@ -289,6 +289,8 @@ class Installer:
         result.update({APP + '/' + name: self.source / 'scripts' / name for name in SCRIPTS})
         result.update({'/etc/init.d/' + name: self.source / 'openwrt/init.d' / name
                        for name in SERVICES})
+        # 服务看门狗: 独立安装, 不随 tsf-mount 启动, 由 S99 链接在系统启动后拉起
+        result['/etc/init.d/tsf-watchdog'] = self.source / 'openwrt/init.d' / 'tsf-watchdog'
         return result
 
     def source_hashes(self):
@@ -933,6 +935,10 @@ class Installer:
                 target = self.path('/etc/rc.d/' + name)
                 target.symlink_to('../init.d/tsf-mount')
                 created.append(target)
+            # 服务看门狗开机自启 (服务挂掉自动恢复, 连续失败按策略重启系统)
+            target = self.path('/etc/rc.d/S99tsf-watchdog')
+            target.symlink_to('../init.d/tsf-watchdog')
+            created.append(target)
             cron_new = self.cron_text((old_cron or b'').decode('utf-8'))
             if (cron_path.read_bytes() if cron_path.exists() else None) != old_cron:
                 raise InstallError('安装期间定时任务被其他程序修改，停止发布')
@@ -1070,6 +1076,9 @@ class Installer:
                 target = self.path('/etc/rc.d/' + name)
                 if not os.path.lexists(target):
                     target.symlink_to('../init.d/tsf-mount')
+            watchdog_link = self.path('/etc/rc.d/S99tsf-watchdog')
+            if not os.path.lexists(watchdog_link):
+                watchdog_link.symlink_to('../init.d/tsf-watchdog')
             if conf_path.exists():
                 conf_backup = self.backup_conf(conf_path)
             self._replace_file(conf_path, self.configuration(old_conf_text=old_conf_text, upgrade=True))
@@ -1111,6 +1120,11 @@ class Installer:
                 print('已重启 %s' % service)
             except InstallError as exc:
                 print('提示：%s 未运行或重启失败（%s），可稍后手动启动' % (service, exc))
+        try:
+            run([str(self.path('/etc/init.d/tsf-watchdog')), 'restart'], timeout=30)
+            print('服务看门狗已启动')
+        except InstallError as exc:
+            print('提示：看门狗启动失败（%s），不影响主服务' % exc)
 
     def rollback(self):
         """命令行回滚: 恢复最近一次 install 原地升级前的程序目录与配置备份。
@@ -1161,6 +1175,10 @@ class Installer:
     def start(self):
         # Installation remains intact if startup fails; no blind reinstall or USB rollback.
         run(['/etc/init.d/tsf-mount', 'start'], timeout=90)
+        try:
+            run(['/etc/init.d/tsf-watchdog', 'restart'], timeout=30)
+        except InstallError as exc:
+            print('提示：看门狗启动失败（%s），不影响主服务' % exc)
         run(['/etc/init.d/tesla-live', 'running'])
         run(['/etc/init.d/tesla-viewer', 'running'])
         expected = self.data_home + '/img/teslacam.img'
