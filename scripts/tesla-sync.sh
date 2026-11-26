@@ -102,7 +102,20 @@ if [ "$age" -lt "$IDLE" ]; then
     exit 0
 fi
 
-log "=== sync start (idle ${age}s) ==="
+# 2b. 没有待写音频就立刻退出, 绝不碰 UDC。
+#     视频归档早已交给 tesla-live-sync.py 只读同步, 本脚本只剩写锁车音这一件事。
+#     以前无论有没有音频都会在 cron 每 10 分钟"停止导出 -> 挂载镜像 -> 恢复导出",
+#     主机(车机/电脑)看到的就是 U 盘被弹出又插回, 导出视频撞上这个窗口就会掉盘。
+has_audio=0
+for f in "$AUDIO_Q"/*.wav "$AUDIO_Q"/*.mp3; do
+    [ -f "$f" ] && has_audio=1 && break
+done
+if [ "$has_audio" != "1" ]; then
+    echo "NO-AUDIO (video archive handled by live-sync), skip without touching USB"
+    exit 0
+fi
+
+log "=== sync start (idle ${age}s, audio=$(ls "$AUDIO_Q" 2>/dev/null | wc -l)) ==="
 
 # 3. 短暂停止导出
 echo "" > "$GADGET/UDC"
@@ -128,26 +141,21 @@ ps w 2>/dev/null | grep -v grep | grep -q tesla-live-sync.py || \
 
 # 6. 把待写入的音频直接写进车机U盘根目录
 #    (上传的音频全部放根目录: LockChime.wav 即锁车音, 其它文件名原样放根目录)
+#    2b 已确认队列非空, 这里不再重复探测 has_audio。
 pushed=0
-has_audio=0
 for f in "$AUDIO_Q"/*.wav "$AUDIO_Q"/*.mp3; do
-    [ -f "$f" ] && has_audio=1 && break
+    [ -f "$f" ] || continue
+    bn=$(basename "$f")
+    dest="$MNT/$bn"
+    if cp "$f" "$dest" 2>>"$LOG"; then
+        mv "$f" "$AUDIO_DONE/" && pushed=$((pushed+1))
+        log "audio -> ${dest#$MNT/}"
+    else
+        log "audio copy fail: $bn"
+    fi
 done
-if [ "$has_audio" = "1" ]; then
-    for f in "$AUDIO_Q"/*.wav "$AUDIO_Q"/*.mp3; do
-        [ -f "$f" ] || continue
-        bn=$(basename "$f")
-        dest="$MNT/$bn"
-        if cp "$f" "$dest" 2>>"$LOG"; then
-            mv "$f" "$AUDIO_DONE/" && pushed=$((pushed+1))
-            log "audio -> ${dest#$MNT/}"
-        else
-            log "audio copy fail: $bn"
-        fi
-    done
-    sync
-    log "pushed $pushed audio -> USB root"
-fi
+sync
+log "pushed $pushed audio -> USB root"
 
 # 7. 卸载并恢复导出
 umount "$MNT" 2>>"$LOG"
