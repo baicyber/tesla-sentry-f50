@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.27.002",
+  "version": "2026.11.27.003",
   "date": "2026-11-27",
   "files": [
     "storage_allocation.py",
@@ -7,6 +7,12 @@
     "tesla-live-sync.py"
   ],
   "notes": [
+    "看门狗与暂停/手动停止全面兼容：测速或挂载车机U盘时不恢复 tesla-live；tsf-mount stop 整体暂停；数据卡未挂载时不 restart、不计失败、不重启系统，只尝试重新挂载；手动 stop/disable 的服务不再被自动拉起，disable 持久生效且开机也不再启动",
+    "init.d 启动脚本随 OTA 一起下发并在启动时自动写入 /etc/init.d，网页升级后不用再跑 install.sh apply",
+    "外置卡开机自动挂载的挂载点统一为 /mnt/sdcard，修复与 tsf-mount/看门狗挂载点不一致导致的误判",
+    "一键迁移上方加分割线，归档目录默认收起、点开后用目录树多选分类，右侧显示容量/文件数量/删除按钮",
+    "重启整个系统改名重启系统并注明重启 OpenWrt；锁车语音改名锁车声音，选文件后可播放预览，新增立即写入按钮马上写入车机U盘",
+    "—— 以下为 2026.11.27.002 更新 ——",
     "修复外置卡格式化报 Resource busy while setting up superblock：mkfs 前用 O_EXCL 独占检测并等待内核释放设备，busy/in use/mounted 统一重试最多 4 轮，仍失败时给出关闭自动挂载的建议",
     "新增服务看门狗 tsf-watchdog：每 10 秒检查 tesla-viewer/tesla-live，挂掉自动 restart；连续 6 次恢复失败重启 OpenWrt；重启 2 次仍失败则暂停重启，并把最近错误与处理建议写入系统日志（logread 查看）",
     "—— 以下为 2026.11.27.001 更新 ——",

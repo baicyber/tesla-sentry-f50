@@ -6,11 +6,33 @@
 #   2. 连续 6 次恢复仍失败 -> 重启 OpenWrt 尝试恢复。
 #   3. 重启 OpenWrt 2 次仍失败 -> 暂停自动重启, 把具体失败原因与处理建议写进系统日志。
 #
+# 不会跟"有意停止/暂停"打架:
+#   - 测速产生的 .sync-pause 标志、或网页正在挂载车机U盘(/tmp/teslamnt)时,
+#     tesla-live 属于被有意暂停, 不 restart、不计失败;
+#   - tsf-mount stop(卸载数据卡/关机)会写 /tmp/tsf-watchdog.pause, 看门狗整体暂停;
+#   - 数据卡未挂载时不 restart、不计失败、不重启系统, 只定期尝试 tsf-mount 挂载;
+#   - 手动 /etc/init.d/<svc> stop|disable 的服务不自动拉起(disable 持久生效);
+#   - tsf-mount 被 disable 时看门狗整体退出监控。
+# 以上 /tmp 标记在断电重启后自动清空, 不会导致重启后监控失效。
+#
 # 重启次数持久化在 /root/tsf-watchdog/, 服务恢复健康后清零。
 STATE_DIR=/root/tsf-watchdog
+# 读取实际配置, 避免自定义挂载点/暂停标志路径时判断失准
+[ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf
 FAIL_FILE=$STATE_DIR/recover-fails
 BOOT_FILE=$STATE_DIR/reboot-count
 GIVEUP_FILE=$STATE_DIR/giveup
+# 服务被有意停掉时(tsf-mount stop / 卸载数据卡 / 关机)看门狗必须让路
+PAUSE_FILE=/tmp/tsf-watchdog.pause
+# 手动 /etc/init.d/<svc> stop|disable 会在 /tmp 留下标记, disable 另在 STATE_DIR 留持久标记
+STOPPED_PREFIX=/tmp/tsf-watchdog.stopped-
+# tsf-mount 被 disable 说明用户不要这套服务自启, 看门狗整体退出监控
+MOUNT_ENABLE_LINK=/etc/rc.d/S08tsf-mount
+# 数据卡挂载点: 没挂载时重启服务毫无意义, 更不能因此重启系统
+DATA_ROOT=${TSF_CARD_MNT:-/mnt/sdcard}
+# 车机U盘暂停同步标志(测速等)与网页挂载车机U盘的挂载点
+SYNC_PAUSE_FLAG=${TSF_SYNC_PAUSE:-/opt/tesla-sentry/.sync-pause}
+USB_MNT=${TSF_MNT:-/tmp/teslamnt}
 SERVICES="tesla-viewer tesla-live"
 INTERVAL=10
 MAX_FAILS=6
@@ -19,6 +41,8 @@ MAX_REBOOTS=2
 mkdir -p "$STATE_DIR"
 # 每次看门狗启动(含系统重启后)重新计数恢复失败, 但重启次数要跨重启保留
 fails=0
+storage_miss=0
+tick=0
 echo 0 > "$FAIL_FILE"
 boots=0
 [ -f "$BOOT_FILE" ] && boots=$(cat "$BOOT_FILE" 2>/dev/null)
@@ -35,9 +59,43 @@ last_error() {
 
 while true; do
     sleep "$INTERVAL"
+    tick=$((tick + 1))
+    # 已暂停自动重启后仍保留恢复能力, 但降为每分钟一轮, 避免每 10 秒刷系统日志
+    if [ -f "$GIVEUP_FILE" ] && [ $((tick % 6)) -ne 0 ]; then
+        continue
+    fi
+    # tsf-mount 被禁用: 用户明确不要这套服务自启, 看门狗不做任何恢复
+    [ -e "$MOUNT_ENABLE_LINK" ] || continue
+    # tsf-mount stop / 卸载数据卡 / 关机期间服务是被有意停掉的, 不参与恢复与计数
+    if [ -f "$PAUSE_FILE" ]; then
+        continue
+    fi
+    # 数据卡没挂载(未安装/突然断电后没识别到): 直接 restart 服务只会反复失败,
+    # 甚至把"没插卡"误判成服务故障去重启系统。这里改为尝试走 tsf-mount 挂载,
+    # 挂不上就继续等, 不计失败、不重启。
+    if ! grep -q " $DATA_ROOT " /proc/mounts 2>/dev/null; then
+        fails=0
+        echo 0 > "$FAIL_FILE"
+        storage_miss=$((storage_miss + 1))
+        if [ $((storage_miss % 6)) -eq 1 ]; then
+            log "数据卡未挂载($DATA_ROOT), 尝试 tsf-mount 挂载; 自动恢复与重启策略暂停"
+            /etc/init.d/tsf-mount start >/tmp/tsf-watchdog-mount.log 2>&1
+        fi
+        continue
+    fi
+    storage_miss=0
     healthy=1
     for svc in $SERVICES; do
         [ -x "/etc/init.d/$svc" ] || continue
+        # 手动 stop(本次开机内有效) / disable(持久) 的服务不自动拉起
+        if [ -f "$STOPPED_PREFIX$svc" ] || [ -f "$STATE_DIR/disabled-$svc" ]; then
+            continue
+        fi
+        if [ "$svc" = "tesla-live" ] && { [ -f "$SYNC_PAUSE_FLAG" ] || grep -q " $USB_MNT " /proc/mounts 2>/dev/null; }; then
+            # 车机U盘暂停同步(测速)或网页正在挂载车机U盘: 同步服务被有意暂停,
+            # 不 restart、不计失败, 避免跟"暂停同步"打架
+            continue
+        fi
         if ! /etc/init.d/"$svc" running >/dev/null 2>&1; then
             healthy=0
             log "$svc 未运行, 尝试 restart 恢复"
@@ -85,6 +143,9 @@ while true; do
 
     boots=$((boots + 1))
     echo "$boots" > "$BOOT_FILE"
+    # reboot 若因故没生效, 清零失败计数, 避免每 10 秒连续触发重启
+    fails=0
+    echo 0 > "$FAIL_FILE"
     log "连续 $MAX_FAILS 次恢复失败, 第 $boots 次重启 OpenWrt 尝试恢复"
     sync
     reboot

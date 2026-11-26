@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.002"
+APP_VERSION = "2026.11.27.003"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1161,8 +1161,14 @@ OTA_SIDECARS = (
     ("scripts/usb-selfheal.sh", "usb-selfheal.sh", b"#!/bin/sh", 200),
     ("scripts/tesla-img.sh", "tesla-img.sh", b"#!/bin/sh", 200),
     ("scripts/tsf-watchdog.sh", "tsf-watchdog.sh", b"tsf-watchdog", 200),
+    # init.d 启动脚本随 OTA 一起下发, 由 _ensure_watchdog 在启动时装进 /etc/init.d
+    ("openwrt/init.d/tesla-viewer", "init.d.tesla-viewer", b"rc.common", 100),
+    ("openwrt/init.d/tesla-live", "init.d.tesla-live", b"rc.common", 100),
+    ("openwrt/init.d/tsf-mount", "init.d.tsf-mount", b"rc.common", 100),
     ("tesla-live-sync.py", "tesla-live-sync.py", b"def do_sync", 2000),
 )
+# 这些 sidecar 即使设备上还没有同名文件也必须安装 (新组件/启动脚本)
+OTA_SIDECAR_ALWAYS = {"tsf-watchdog.sh", "init.d.tesla-viewer", "init.d.tesla-live", "init.d.tsf-mount"}
 
 
 def _ota_sidecars(base):
@@ -1174,8 +1180,8 @@ def _ota_sidecars(base):
     updated, failed = [], 0
     for rel, name, sig, minsz in OTA_SIDECARS:
         dest = os.path.join(d, name)
-        # 看门狗是后加的组件: 老设备上没有也要装, 其它脚本仍只覆盖已存在的
-        if not os.path.isfile(dest) and name != "tsf-watchdog.sh":
+        # 看门狗与 init.d 脚本是后加的组件: 老设备上没有也要装, 其它脚本仍只覆盖已存在的
+        if not os.path.isfile(dest) and name not in OTA_SIDECAR_ALWAYS:
             failed += 1
             continue
         try:
@@ -3270,6 +3276,7 @@ body.settings-open { overflow:hidden; }
 .scan-del { flex:0 0 auto; }
 .scan-actions { flex-wrap:wrap; }
 /* 迁移: 镜像/归档分组与分类文件树 */
+.func-divider { border:none; border-top:1px solid var(--line); margin:18px 0 4px; }
 .arch-group { font-size:12.5px; font-weight:600; color:var(--text); margin:12px 0 6px; line-height:1.6; }
 .arch-tree { margin:-2px 0 8px; padding:4px 0 4px; border:1px dashed var(--line); border-radius:7px; background:var(--panel2); }
 .scan-item .p.foldable { cursor:pointer; flex:1 1 auto; user-select:none; }
@@ -3689,7 +3696,7 @@ body.settings-open { overflow:hidden; }
     <button class="stab" id="st-play" onclick="stab('play')"><svg class="ic"><use href="#i-eye"/></svg>播放设置</button>
     <button class="stab" id="st-files" onclick="stab('files');switchArea(area)"><svg class="ic"><use href="#i-folder"/></svg>文件管理</button>
     <h3>车辆个性化</h3>
-    <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车语音</button>
+    <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车声音</button>
     <button class="stab" id="st-wraps" onclick="stab('wraps')"><svg class="ic"><use href="#i-brush"/></svg>涂装</button>
     <h3>系统与偏好</h3>
     <button class="stab" id="st-geocode" onclick="stab('geocode')"><svg class="ic"><use href="#i-location"/></svg>地址</button>
@@ -3798,8 +3805,9 @@ body.settings-open { overflow:hidden; }
         <div class="hint" id="arch-sync-msg" role="status" aria-live="polite"></div>
       </div>
       <div id="arch-migrate" hidden>
-        <h4 style="margin-top:14px">一键迁移</h4>
-        <div class="hint">扫描本机其它位置的 <code>teslacam.img</code> 与 <code>archive</code> 目录，迁移到默认镜像/归档区。迁移前会比对同名文件并可选择覆盖；只迁移勾选的分类，校验通过后才删除源文件，中途断电不会丢失数据。</div>
+        <hr class="func-divider">
+        <h4>一键迁移</h4>
+        <div class="hint">扫描本机其它位置的 <code>teslacam.img</code> 与 <code>archive</code> 目录，迁移到默认镜像/归档区。归档目录默认收起，<b>点开目录</b>后用目录树勾选要同步的分类/子目录（右侧显示容量、文件数量，可单独删除）。迁移前会比对同名文件并可选择覆盖；校验通过后才删除源文件，中途断电不会丢失数据。</div>
         <div class="tool-actions"><button class="mini" onclick="archiveScan(true)">重新扫描</button></div>
         <div id="arch-scan-box" class="scan-box"></div>
         <div id="arch-migrate-actions"></div>
@@ -3817,9 +3825,9 @@ body.settings-open { overflow:hidden; }
       <div class="hint" id="paths-msg" role="status" aria-live="polite"></div>
     </details>
     <section class="storage-danger"><h3>重启服务 / 系统</h3>
-    <div class="hint">修改存储路径、容量分配后，点此重启服务让设置生效。重启期间网页会短暂断开（约 5 秒），刷新后自动恢复。遇到挂载失败、格式化失败或系统长时间运行异常时，可以重启整个 OpenWrt 系统（约 1–2 分钟，期间网页与车机录像都会中断）。</div>
+    <div class="hint">修改存储路径、容量分配后，点此重启服务让设置生效。重启期间网页会短暂断开（约 5 秒），刷新后自动恢复。遇到挂载失败、格式化失败或系统长时间运行异常时，可以重启系统（重启 OpenWrt 系统，约 1–2 分钟，期间网页与车机录像都会中断）。</div>
     <div class="tool-actions"><button class="mini" id="storage-restart" onclick="storageRestartService()">重启服务</button>
-    <button class="mini tool-danger" id="system-reboot" onclick="systemReboot()">重启整个系统</button></div><div id="storage-restart-status"></div></section>
+    <button class="mini tool-danger" id="system-reboot" onclick="systemReboot()">重启系统</button></div><div id="storage-restart-status"></div></section>
   </div>
   <div id="tab-skin" style="display:none">
     <h3>品牌</h3>
@@ -3850,8 +3858,13 @@ body.settings-open { overflow:hidden; }
     <div id="skin-list"></div>
   </div>
   <div id="tab-audio" style="display:none">
-    <div class="hint">上传的音频 (wav/mp3, &lt;1MB) 会直接写入车机U盘根目录；文件名为 LockChime.wav 的即锁车音 (特斯拉只认根目录这个文件名)。文件在归档同步时写入车机U盘。</div>
-    <label class="fm-tool upbtn accent-up"><svg class="ic"><use href="#i-upload"/></svg>上传音频 (wav/mp3, &lt;1MB)<input type="file" id="audio-file" accept=".wav,.mp3" hidden></label>
+    <div class="hint">上传的音频 (wav/mp3, &lt;1MB) 会写入车机U盘根目录；文件名为 LockChime.wav 的即锁车声音 (特斯拉只认根目录这个文件名)。选择文件后可在下方播放预览；点「立即写入」马上写入车机U盘，否则等自动同步。</div>
+    <div class="tool-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label class="fm-tool upbtn accent-up" style="margin:0"><svg class="ic"><use href="#i-upload"/></svg>上传音频 (wav/mp3, &lt;1MB)<input type="file" id="audio-file" accept=".wav,.mp3" hidden></label>
+      <button class="mini primary" id="audio-write-btn" onclick="audioWriteNow()">立即写入</button>
+    </div>
+    <audio id="audio-preview" controls hidden style="width:100%;margin-top:10px"></audio>
+    <div class="hint" id="audio-write-msg" role="status" aria-live="polite"></div>
     <div class="hint" style="color:#4cc38a">⏳ 待写入车机U盘:</div>
     <div id="audio-list"></div>
     <div class="hint" style="color:#4cc38a">✅ 已写入:</div>
@@ -8536,7 +8549,8 @@ function storageFail(error) {
 /* ---------- 外置卡与归档同步 ---------- */
 let EXT_CARDS = [], EXT_CARD = null, ARCH_SCAN_ITEMS = [], ARCH_SCAN_SELECTED = new Set(), ARCH_POLL = null;
 let ARCH_DIR_PICK = {};   // 归档目录部分勾选: path -> Set('A' | 'A/' | 'A/b' | '')
-let ARCH_TREE_COLLAPSED = new Set();   // 已折叠文件树的归档目录 (默认展开)
+let ARCH_TREE_COLLAPSED = new Set();   // 已折叠文件树的归档目录 (默认收起, 点开展开)
+let ARCH_TREE_KNOWN = new Set();       // 已见过的归档目录, 用于只对首次出现的目录默认收起
 let EXT_BOOT = {};        // 外置卡开机自动挂载配置
 function extCardRender() {
   const box = document.getElementById('ext-card-info');
@@ -8744,7 +8758,7 @@ function archiveScanRender() {
   box.innerHTML =
     (imgs.length ? '<div class="arch-group">车机 U 盘镜像（只读挂载源镜像复制进默认镜像，全部校验通过后自动删除源镜像）</div>' +
       imgs.map(o => row(o.x, o.i)).join('') : '') +
-    (arcs.length ? '<div class="arch-group">归档目录（按分类文件树勾选，点目录名可收起/展开；同一存储介质用硬链接、跨介质先复制，逐文件校验后删除源文件）</div>' +
+    (arcs.length ? '<div class="arch-group">归档目录（点开目录展开分类目录树，可多选；右侧显示容量与文件数量，删除按钮可删单个目录）</div>' +
       arcs.map(o => row(o.x, o.i) + (o.x.tree && o.x.tree.length && !ARCH_TREE_COLLAPSED.has(o.x.path)
         ? '<div class="arch-tree">' + o.x.tree.map(n => archNodeRow(o.x, n, 0) +
           (n.children || []).map(c => archNodeRow(o.x, c, 1)).join('')).join('') + '</div>' : '')).join('') : '') +
@@ -8763,6 +8777,11 @@ async function archiveScan(force) {
   try {
     const j = await (await fetch('/api/archive/scan' + (force ? '?force=1' : ''), { cache: 'no-store' })).json();
     ARCH_SCAN_ITEMS = j.items || [];
+    // 归档目录默认收起: 点开目录后才展开分类目录树供多选
+    for (const x of ARCH_SCAN_ITEMS) {
+      if (x.type === 'archive' && !ARCH_TREE_KNOWN.has(x.path)) ARCH_TREE_COLLAPSED.add(x.path);
+    }
+    ARCH_TREE_KNOWN = new Set(ARCH_SCAN_ITEMS.map(x => x.path));
     const alive = new Set(ARCH_SCAN_ITEMS.map(x => x.path));
     for (const path of [...ARCH_SCAN_SELECTED]) if (!alive.has(path)) ARCH_SCAN_SELECTED.delete(path);
     for (const path of Object.keys(ARCH_DIR_PICK)) if (!alive.has(path)) delete ARCH_DIR_PICK[path];
@@ -9609,10 +9628,35 @@ async function delAudio(f, isDone) {
   await fetch('/api/audio/' + encodeURIComponent(f) + '?done=' + (isDone ? 1 : 0), { method: 'DELETE' });
   refreshAudio();
 }
+let audioPreviewURL = null;
 document.getElementById('audio-file').onchange = async function () {
+  const file = this.files && this.files[0];
+  const prev = document.getElementById('audio-preview');
+  if (file && prev) {
+    // 选择文件后先生成本地预览, 可直接播放试听
+    if (audioPreviewURL) URL.revokeObjectURL(audioPreviewURL);
+    audioPreviewURL = URL.createObjectURL(file);
+    prev.src = audioPreviewURL;
+    prev.hidden = false;
+  }
   const j = await uploadFile(this, '/api/upload/audio');
   if (j && j.ok) refreshAudio();
 };
+async function audioWriteNow() {
+  const btn = document.getElementById('audio-write-btn'), msg = document.getElementById('audio-write-msg');
+  btn.disabled = true;
+  msg.textContent = '正在写入车机 U 盘…';
+  try {
+    const j = await (await fetch('/api/audio/write', { method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: '{}' })).json();
+    msg.textContent = j.msg || (j.ok ? '已写入' : '写入失败');
+    toast((j.ok ? '✅ ' : '❌ ') + (j.msg || ''));
+  } catch (e) {
+    msg.textContent = '写入失败: ' + e;
+  }
+  btn.disabled = false;
+  refreshAudio();
+}
 
 /* 文件管理器 */
 let curDir = '';
@@ -12804,6 +12848,28 @@ SYNC_PAUSE_FLAG = os.environ.get("TSF_SYNC_PAUSE") or os.path.join(APP_HOME, ".s
 def sync_write_paused():
     """测速等场景下暂停所有同步写入 (tesla-live-sync 也检查同一个文件)。"""
     return os.path.exists(SYNC_PAUSE_FLAG)
+
+
+def audio_write_now():
+    """立即把待写入的锁车声音/音效写入车机 U 盘 (复用 tesla-sync.sh, 跳过空闲等待)。"""
+    script = os.path.join(APP_HOME, "tesla-sync.sh")
+    if not os.path.isfile(script):
+        raise ValueError("找不到写入脚本 tesla-sync.sh")
+    if not os.path.isdir(AUDIO_Q) or not any(os.path.isfile(os.path.join(AUDIO_Q, f))
+                                            for f in os.listdir(AUDIO_Q)):
+        return {"ok": False, "msg": "没有待写入的音频，请先上传"}
+    env = os.environ.copy()
+    env["TSF_IDLE"] = "0"          # 立即写入: 不再等 10 分钟空闲
+    env["TSF_DIR"] = APP_HOME
+    env["TSF_LOG_DIR"] = APP_HOME
+    r = subprocess.run(["/bin/sh", script], env=env, capture_output=True, text=True, timeout=240)
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    if "SYNC-DONE" in out:
+        line = [ln for ln in out.splitlines() if "SYNC-DONE" in ln][-1]
+        return {"ok": True, "msg": "已写入车机 U 盘（" + line + "）"}
+    if "SKIP" in out:
+        return {"ok": False, "msg": "暂时无法写入（" + out.splitlines()[-1] + "），请稍后重试"}
+    raise ValueError("写入失败：" + (out[-200:] or "未知错误"))
 # 程序缓存 (缩略图/遥测/多路合成临时) 放在安装目录 cache/ 下, 不占数据卡:
 #   thumbs / tel-cache / stitch-tmp。转码缓存单独放在归档区内 (TRANSCODE_DIR,
 #   见文件顶部定义), 与归档视频一一对应, 删归档视频时自动清理对应缓存。
@@ -13998,7 +14064,7 @@ def card_boot_config():
     return {"automount": os.path.exists(CARD_RC_LINK),
             "delay": max(0, min(300, delay)),
             "device": os.environ.get("TSF_CARD_DEVICE", ""),
-            "mountpoint": os.environ.get("TSF_CARD_MOUNTPOINT") or VIDEO_ROOT,
+            "mountpoint": os.environ.get("TSF_CARD_MOUNTPOINT") or os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard",
             "script": CARD_INIT}
 
 
@@ -14056,7 +14122,9 @@ def external_card_config(body):
         raise ValueError("设备路径不合法")
     if enabled and not device:
         raise ValueError("请先在上方列表里选中要自动挂载的外置卡")
-    mountpoint = str(body.get("mountpoint") or VIDEO_ROOT).strip() or VIDEO_ROOT
+    # 挂载点统一 /mnt/sdcard: 与 tsf-mount / tsf_storage_ready / 看门狗使用同一个挂载点,
+    # 否则会出现"网页显示已挂载, 服务却判定数据卡未就绪"
+    mountpoint = str(body.get("mountpoint") or os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard").strip() or "/mnt/sdcard"
     if not mountpoint.startswith("/") or ".." in mountpoint:
         raise ValueError("挂载点不合法")
     sync_conf({"TSF_CARD_AUTOMOUNT": str(enabled), "TSF_CARD_MOUNT_DELAY": str(delay),
@@ -14205,12 +14273,48 @@ start_service() {
 """
 
 
-def _ensure_watchdog():
-    """确保服务看门狗已安装并运行 (幂等, 失败不影响主服务)。
+# OTA 下发的 init.d 脚本 (先放到程序目录, 启动时同步进 /etc/init.d)
+INITD_DEPLOY = (
+    ("init.d.tesla-viewer", "/etc/init.d/tesla-viewer"),
+    ("init.d.tesla-live", "/etc/init.d/tesla-live"),
+    ("init.d.tsf-mount", "/etc/init.d/tsf-mount"),
+)
 
+
+def _ensure_watchdog():
+    """确保 init.d 启动脚本与服务看门狗已安装并运行 (幂等, 失败不影响主服务)。
+
+    OTA 会把 init.d 脚本下发到程序目录, 这里在启动时同步进 /etc/init.d,
+    因此网页升级后不需要再手动跑 install.sh apply。
     看门狗每 10 秒检查 tesla-viewer/tesla-live, 失败自动 restart;
     连续 6 次失败重启 OpenWrt, 重启 2 次仍失败则停止重启并在系统日志写明原因与建议。
     """
+    app = os.environ.get("TSF_DIR", "/opt/tesla-sentry")
+    for name, dest in INITD_DEPLOY:
+        try:
+            src = os.path.join(app, name)
+            if not os.path.isfile(src):
+                continue
+            with open(src, encoding="utf-8") as f:
+                content = f.read()
+            try:
+                with open(dest, encoding="utf-8") as f:
+                    current = f.read()
+            except OSError:
+                current = ""
+            if current != content:
+                with open(dest, "w", encoding="utf-8") as f:
+                    f.write(content)
+                os.chmod(dest, 0o755)
+                print("init.d 已随 OTA 更新: %s" % dest, flush=True)
+        except Exception as ex:
+            print("deploy %s: %s" % (dest, ex), flush=True)
+    try:
+        for link in ("/etc/rc.d/S08tsf-mount", "/etc/rc.d/K99tsf-mount"):
+            if not os.path.lexists(link):
+                os.symlink("../init.d/tsf-mount", link)
+    except Exception:
+        pass
     try:
         script = os.path.join(os.environ.get("TSF_DIR", "/opt/tesla-sentry"), "tsf-watchdog.sh")
         if not os.path.isfile(script):
@@ -21335,6 +21439,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True})
             else:
                 self._json({"ok": False, "msg": "皮肤不存在"}, 404)
+        elif path == "/api/audio/write":
+            try:
+                self._json(audio_write_now())
+            except (OSError, ValueError, subprocess.SubprocessError) as ex:
+                self._json({"ok": False, "msg": str(ex)[:200]}, 500)
         elif path == "/api/audio/setlockchime":
             body = self._read_json()
             if body == "TOOBIG":
