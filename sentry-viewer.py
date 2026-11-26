@@ -319,7 +319,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "26.0.23"
+APP_VERSION = "26.0.24"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -9943,16 +9943,21 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
                 hi = mid - 1
         return ans
 
-    fr = [fr_at(ss + n) for n in range(dur)] if has_tel else []
+    # 车速/油门是连续量: 底层 SEI 相邻帧只差 ~0.6 km/h, 但整秒取样会把一段匀减速
+    # 画成 36→21→2→0 的大台阶 (用户看到的"车速跨度过大、不线性")。改 0.1s 取样:
+    # spans 仍合并同值区间, 观感与网页播放器一致, 字幕体积也只多几十 KB。
+    TEL_STEP = 0.1
+    tel_n = max(1, int(math.ceil(dur / TEL_STEP)))
+    fr = [fr_at(ss + i * TEL_STEP) for i in range(tel_n)] if has_tel else []
 
     def spans(keyf):
         i = 0
-        while i < dur:
+        while i < tel_n:
             k = keyf(i)
             j = i
-            while j + 1 < dur and keyf(j + 1) == k:
+            while j + 1 < tel_n and keyf(j + 1) == k:
                 j += 1
-            yield i, j + 1, k
+            yield i * TEL_STEP, min(dur, (j + 1) * TEL_STEP), k
             i = j + 1
 
     def blink(a, b, period=0.4):
@@ -9982,10 +9987,10 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
         if seg:
             txt_raw(n, n + 1, 4, pad, yc, f_date, "  ".join(seg))
 
-    # ---- 右: 油门 / 刹车 / 挡位 / 转向灯 (状态相同的连续秒合并, 减小字幕体积) ----
-    for a, b, k in (spans(lambda n: (int(round(fr[n][3])), bool(fr[n][5]), fr[n][1], fr[n][6]))
+    # ---- 右: 油门 / 刹车 / 挡位 (状态相同的连续秒合并, 减小字幕体积) ----
+    for a, b, k in (spans(lambda n: (int(round(fr[n][3])), bool(fr[n][5]), fr[n][1]))
                     if has_tel else ()):
-        thr, brk, gear, turn = k
+        thr, brk, gear = k
         shape(a, b, C_THR, _ass_rrect(thr_x, yc - ph / 2.0, thr_w, ph, ph / 2.0))
         txt(a, b, "WmP", 5, thr_x + thr_w / 2.0, yc, f_pill, C_WHITE, "%d%%" % thr)
         shape(a, b, C_BRK if brk else C_BRK_OFF, _ass_rrect(brk_x, yc - ph / 2.0, brk_w, ph, ph / 2.0),
@@ -9993,9 +9998,13 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
         txt(a, b, "WmP", 5, brk_x + brk_w / 2.0, yc, f_pill, C_WHITE if brk else C_SOFT, "刹车")
         shape(a, b, C_GEAR, _ass_circle(gear_cx, yc, gr, 28))
         txt(a, b, "WmP", 5, gear_cx, yc, f_gear, C_WHITE, gear)
-        if not narrow:
-            rt_path = _ass_pts([(rtri_x, yc - tri * 0.62), (rtri_x, yc + tri * 0.62), (rtri_x + tri, yc)])
-            lt_path = _ass_pts([(ltri_x + tri, yc - tri * 0.62), (ltri_x + tri, yc + tri * 0.62), (ltri_x, yc)])
+
+    # 转向灯单独按"灯状态"切段 (不跟油门/车速变化): 0.1s 取样后油门每变一次就重画
+    # 两颗三角会让字幕体积涨几倍;  blink 相位本身按绝对时间算, 拆开后闪烁更连贯。
+    if has_tel and not narrow:
+        rt_path = _ass_pts([(rtri_x, yc - tri * 0.62), (rtri_x, yc + tri * 0.62), (rtri_x + tri, yc)])
+        lt_path = _ass_pts([(ltri_x + tri, yc - tri * 0.62), (ltri_x + tri, yc + tri * 0.62), (ltri_x, yc)])
+        for a, b, turn in spans(lambda n: fr[n][6]):
             # 底色常亮 (不打灯就是这颗暗灰三角), 亮色再按闪烁相位叠上去
             shape(a, b, C_TRI_OFF, rt_path)
             shape(a, b, C_TRI_OFF, lt_path)
@@ -10018,7 +10027,7 @@ def _wm_ass(fp, ss, dur, meta, size=(1280, 720)):
             txt(a, b, "Wm", 4, num_right + int(round(6 * s)), yc, f_unit, C_SOFT, "km/h")
 
     p = os.path.join(RES_DIR, "wm-%s.ass" % hashlib.md5(
-        ("%s|%d|%d|%dx%d|ap10|t%d" % (fp, int(ss), dur, W, H, len(frames))).encode()).hexdigest()[:16])
+        ("%s|%d|%d|%dx%d|ap12-s10|t%d" % (fp, int(ss), dur, W, H, len(frames))).encode()).hexdigest()[:16])
     with open(p, "w", encoding="utf-8") as fo:
         fo.write("\n".join(lines) + "\n")
     return p
