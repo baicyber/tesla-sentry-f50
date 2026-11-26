@@ -319,7 +319,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "26.0.22"
+APP_VERSION = "26.0.23"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -2080,7 +2080,8 @@ body.watching { overflow:hidden; }
 .player .vgrid { background:#101215; }
 .player .vgrid.loading { display:flex; align-items:center; justify-content:center; gap:10px; min-height:26vh; color:#d0d6dc; }
 .player .vcell { aspect-ratio:auto; min-width:0; min-height:0; }
-.player .vcell video { object-fit:contain; }
+/* 画面铺满格子: 格子高度由 layoutPlayer 按片源比例定, cover 兜底任意比例都不留黑边 */
+.player .vcell video { object-fit:cover; }
 .player .vgrid.one .vcell { cursor:default; }
 .player .clabel { z-index:2; left:10px; top:10px; right:auto; bottom:auto; letter-spacing:.05em; }
 /* Keep the last frame visible during brief decoder and network waits. */
@@ -2088,7 +2089,7 @@ body.watching { overflow:hidden; }
   animation:show-buffering 0s .65s backwards; }
 @keyframes show-buffering { from { visibility:hidden; } to { visibility:visible; } }
 .player .cload button { pointer-events:auto; padding:6px; }
-.player .vcell canvas.hold { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; pointer-events:none; }
+.player .vcell canvas.hold { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; pointer-events:none; }
 .player .cambar { order:1; justify-content:flex-start; flex-wrap:nowrap; overflow-x:auto; padding:2px 0; }
 .player .cambar button { white-space:nowrap; border-radius:6px; padding:7px 13px; min-height:38px; }
 .player .cambar button.on { background:var(--text); color:var(--bg); border-color:var(--text); }
@@ -3805,6 +3806,16 @@ function dropPrefetch() {
   prefetch = null;
 }
 
+// 四路行高算法 (纯函数, 便于回归): 画面铺满优先, 行高按片源真实比例算,
+// 不被竖屏视口 limit 压扁成 16:9 留黑边; 仅沉浸/全屏模式用 limit 兜底。
+function gridRowHeight(width, cols, rows, ratio, limit, immersive) {
+  const naturalRow = width / cols * ratio;
+  const rowGaps = Math.max(0, rows - 1) * 3;
+  return immersive
+    ? Math.max(1, Math.min(naturalRow, Math.max(1, limit - rowGaps) / rows))
+    : naturalRow;
+}
+
 function layoutPlayer() {
   const grid = byId('vgrid'), count = grid.children.length;
   const player = byId('player');
@@ -3826,11 +3837,7 @@ function layoutPlayer() {
   const limit = landscapePhone ? Math.max(100, innerHeight - top - telemetryHeight - 22) :
     immersive ? Math.max(160, available) : Math.max(160, Math.min(innerHeight * .58, available));
   grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0,1fr))';
-  const rowGaps = Math.max(0, rows - 1) * 3;
-  const rowHeight = rows === 2
-    ? (Math.min(width / cols * ratio * rows, limit) - rowGaps) / rows
-    : Math.min(width / cols * ratio, Math.max(1, limit - rowGaps) / rows);
-  grid.style.gridAutoRows = Math.max(1, rowHeight) + 'px';
+  grid.style.gridAutoRows = Math.max(1, gridRowHeight(width, cols, rows, ratio, limit, immersive)) + 'px';
 }
 
 function toggleLibrary(show) {
