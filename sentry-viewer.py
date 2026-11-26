@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.26.043"
+APP_VERSION = "2026.11.26.044"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3184,6 +3184,11 @@ body.settings-open { overflow:hidden; }
 #storage-retention { margin-top:0; }
 #storage-retention .storage-row { max-width:420px; }
 #storage-prewarm .storage-row { max-width:none; grid-template-columns:minmax(0,1fr) minmax(88px,150px) minmax(0,auto); }
+/* 播放设置与转码任务并排: 等宽等高的两张卡片, 移动端自动上下排列 */
+.play-cols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; align-items:stretch; margin-top:6px; }
+.play-cols > section { display:flex; flex-direction:column; min-width:0; margin:0; }
+.play-cols > section > .hint:last-child { margin-bottom:0; }
+@media (max-width:860px) { .play-cols { grid-template-columns:minmax(0,1fr); gap:14px; } }
 .storage-settings-columns { margin-top:26px; align-items:stretch; }
 #storage-retention .storage-nested .storage-row { max-width:408px; }
 #storage-paths > summary { font-size:17px; color:var(--text); font-weight:600; padding:0 0 18px; cursor:pointer; list-style-position:inside; }
@@ -3511,7 +3516,7 @@ body.settings-open { overflow:hidden; }
 <div class="ffwarn" id="ffwarn" role="status" hidden><div class="ffwarn-head"><b id="ffwarn-title">FFmpeg 未配置</b><button class="ffwarn-fix" id="ffwarn-fix" type="button" onclick="ffmpegFix()">一键修复</button></div><span class="ffwarn-text" id="ffwarn-text">列表缩略图和清晰度转码都用不了（视频会退化成原画，容易一直缓冲）。点「一键修复」自动安装完整版；也可在设备上执行 <code>apk add ffmpeg</code> 后运行 <code>install.sh apply --ffmpeg /usr/bin/ffmpeg</code> 写入配置。</span></div>
 <nav class="storwrap status-only" id="storwrap">
   <div class="storcard" id="storcard">
-<span id="live" title="车机在线只读同步状态" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:4px 10px;white-space:nowrap"><span id="livedot" style="width:7px;height:7px;border-radius:50%;background:#5f6b76"></span><span id="livetxt">同步状态</span></span>
+<span id="live" title="实时同步状态" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:4px 10px;white-space:nowrap"><span id="livedot" style="width:7px;height:7px;border-radius:50%;background:#5f6b76"></span><span id="livetxt">同步状态</span></span>
 <div class="storage-brief"><div class="storrow"><span class="storlab">车机 U 盘</span><span class="storval" id="storvusb"></span></div>
 <div class="storbar"><i id="storvusbbar"></i></div>
 </div><div class="storage-brief"><div class="storrow"><span class="storlab">归档区</span><span class="storval" id="storarc"></span></div>
@@ -3675,7 +3680,7 @@ body.settings-open { overflow:hidden; }
     <div class="usage-chart-box" id="usage-chart-box">
       <div class="usage-chart-row"><span class="usage-chart-label">整卡</span><div class="usage-chart" id="usage-chart" role="img" aria-label="存储卡容量与占用"></div></div>
       <div class="usage-legend" id="usage-legend"></div>
-      <div class="hint" style="margin-top:7px">整卡图只显示车机 U 盘设定容量、归档区总上限与剩余空间，不显示归档区实际占用。归档总上限及各分类上限随下方设置实时联动，且不能超过整卡扣除车机 U 盘后的容量。</div>
+      <div class="hint" style="margin-top:7px">整卡图显示车机 U 盘设定容量、归档区总上限、安全预留与剩余空间，不显示归档区实际占用；随下方容量设置实时联动。</div>
     </div>
     <details class="storage-quota storage-tools" id="storage-extcard">
       <summary>外置卡管理</summary>
@@ -3694,18 +3699,6 @@ body.settings-open { overflow:hidden; }
       <div class="updbtns"><button class="mini primary" id="card-config-save" onclick="extCardSaveConfig()">保存自动挂载设置</button></div>
       <div class="hint" id="card-config-msg" role="status" aria-live="polite"></div>
     </details>
-    <div id="storage-plan" hidden>
-      <div class="storage-summary"><span>分配预览 · 整卡 <output id="storage-total">—</output> G</span><span>可分配 <output id="storage-available">—</output> G</span></div>
-      <div class="storage-bar" id="storage-bar" role="img" aria-label="容量分配">
-        <span class="storage-usb-color" data-storage-segment="usb"></span><span class="storage-archive-color" data-storage-segment="archive"></span><span class="storage-reserve-color" data-storage-segment="reserve"></span><span class="storage-free-color" data-storage-segment="free"></span>
-      </div>
-      <div class="storage-legend">
-        <div><i class="storage-usb-color"></i>车机 U 盘<output data-storage-value="usb"></output></div>
-        <div><i class="storage-archive-color"></i>归档区<output data-storage-value="archive"></output></div>
-        <div><i class="storage-reserve-color"></i>安全预留<output data-storage-value="reserve"></output></div>
-        <div><i class="storage-free-color"></i>未分配<output data-storage-value="free"></output></div>
-      </div>
-    </div>
     <div class="hint" id="storage-budget" role="status"></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
     <div class="storage-row cap"><label for="storage-archive">归档区总上限</label><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
@@ -3758,7 +3751,7 @@ body.settings-open { overflow:hidden; }
       <div class="hint" id="retention-msg" role="status" aria-live="polite"></div>
     </section>
     <section class="storage-quota storage-tools" id="storage-archive-sync">
-      <h3>归档区手动同步</h3>
+      <h3>手动同步</h3>
       <div class="hint">手动把车机 U 盘镜像里的文件同步到归档区，带实时进度与复制速度。下方会扫描全盘里不在默认位置的 teslacam.img 与 archive 文件夹：镜像与归档目录分开勾选，归档目录可按分类（文件树）选择迁移内容。迁移先复制/硬链接到默认位置并逐文件校验，校验通过才删除源文件，中途断电不会损坏或丢失源数据。</div>
       <div class="tool-actions">
         <button class="mini primary" id="arch-sync-btn" onclick="archiveSyncStart()">立即同步到归档区</button>
@@ -3885,18 +3878,18 @@ body.settings-open { overflow:hidden; }
   </div>
   <div id="tab-play" style="display:none">
     <div class="hint">内网访问自动用原画，不转码，加载最快；外网访问默认用下面选择的画质。选择非「原画」时，设备会在空闲时按该画质预先转码哨兵/手动保存事件的片段（实时滚动记录影像不预热）。</div>
-    <label class="nrow"><span>外网默认画质</span>
-      <select class="ninput" id="play-quality" onchange="playSave()">
-        <option value="orig">原画 — 不转码，最清晰；码率约 5～8 Mbps，外网流量大</option>
-        <option value="720p">720p — 清晰，约 2.2 Mbps</option>
-        <option value="480p">480p — 均衡（推荐），约 1.2 Mbps</option>
-        <option value="360p">360p — 省流量，约 0.7 Mbps</option>
-      </select>
-    </label>
-    <div class="hint" id="play-net"></div>
-    <div class="hint" id="play-msg"></div>
+    <div class="play-cols">
     <section class="storage-quota" id="storage-prewarm">
       <h3>播放设置</h3>
+      <label class="nrow"><span>外网默认画质</span>
+        <select class="ninput" id="play-quality" onchange="playSave()">
+          <option value="orig">原画 — 不转码，最清晰；码率约 5～8 Mbps，外网流量大</option>
+          <option value="720p">720p — 清晰，约 2.2 Mbps</option>
+          <option value="480p">480p — 均衡（推荐），约 1.2 Mbps</option>
+          <option value="360p">360p — 省流量，约 0.7 Mbps</option>
+        </select>
+      </label>
+      <div class="hint" id="play-net"></div>
       <div class="hint">提前把哨兵录像、手动保存里的最新事件转成上面的外网默认画质，点开即可播放，不用等转码。这里设置每个模块预转码缓存几个事件（每个事件包括事件发生前 1 分钟到事件发生后 1 分钟的全部摄像头视频：新款 6 路、老款 4 路）；填 0 关闭该模块预转码。设置同步写入 /etc/tesla-sentry.conf。</div>
       <div class="hint" id="prewarm-space-4"></div>
       <div class="hint" id="prewarm-space-6"></div>
@@ -3905,7 +3898,9 @@ body.settings-open { overflow:hidden; }
       <div class="storage-row note"><label for="prewarm-saved">手动保存预转码</label><input class="ninput" id="prewarm-saved" type="number" min="0" max="50" step="1" inputmode="numeric" oninput="playSpaceHint()"><span class="retention-unit">个事件</span></div>
       <div class="updbtns"><button class="mini primary" id="prewarm-save" onclick="storageSavePrewarm()" disabled>保存预转码设置</button></div>
       <div class="hint" id="prewarm-msg" role="status" aria-live="polite"></div>
-      <h4 style="margin-top:14px">转码任务</h4>
+    </section>
+    <section class="storage-quota" id="prewarm-task">
+      <h3>转码任务</h3>
       <div class="hint">手动立即转码会把待转码事件一次性转完；暂停转码后，系统连续空闲 10 分钟会自动恢复。转码在后台线程执行，离开或切换页面都不会中断。</div>
       <div class="tool-actions">
         <button class="mini primary" id="prewarm-run" onclick="prewarmStart()">立即转码</button>
@@ -3913,13 +3908,14 @@ body.settings-open { overflow:hidden; }
       </div>
       <div class="sync-progress" id="prewarm-progress">
         <div class="sync-line"><span>状态</span><b id="prewarm-state">—</b></div>
-        <div class="sync-line"><span>当前事件</span><b id="prewarm-cur">—</b></div>
-        <div class="sync-line"><span>事件进度</span><b id="prewarm-cur-pct">—</b></div>
+        <div class="sync-line"><span>当前转码任务</span><b id="prewarm-cur"></b></div>
+        <div class="sync-line"><span>当前转码进度</span><b id="prewarm-cur-pct"></b></div>
         <div class="sync-line"><span>总进度</span><b id="prewarm-total-pct">—</b></div>
-        <div class="sync-bar"><i id="prewarm-fill"></i></div>
         <div class="sync-line"><span>预计剩余时间</span><b id="prewarm-eta">—</b></div>
       </div>
     </section>
+    </div>
+    <div class="hint" id="play-msg"></div>
     <section class="storage-danger" style="margin-top:18px"><h3>转码诊断</h3>
     <div class="hint">转码失败或没有缩略图时点一下，会现场测试目录写入、ffmpeg 编码器/解码器、温度热区，并真的抽一帧、编 2 秒视频；结果可直接复制反馈。</div>
     <button class="mini" id="storage-diag" onclick="storageDiag()">运行诊断</button>
@@ -4576,8 +4572,8 @@ let LIVE_AGO = null;
 function paintLiveText() {
   const txt = document.getElementById('livetxt');
   if (!txt || !LIVE_AGO) return;
-  if (LIVE_AGO.pending > 0) { txt.textContent = `${t('实时同步中')} · ${LIVE_AGO.pending} ${t('待确认')}`; return; }
-  txt.textContent = t('实时同步中');
+  if (LIVE_AGO.pending > 0) { txt.textContent = `${t('实时同步开启')} · ${LIVE_AGO.pending} ${t('待确认')}`; return; }
+  txt.textContent = t('实时同步开启');
 }
 /* 首次进入引导: 还没有车机镜像时提示去存储分配完成设置 */
 let SETUP_GUIDE_SEEN = false;
@@ -4610,7 +4606,7 @@ async function refreshLive() {
   } else {
     dot.style.background = '#e8443f';
     LIVE_AGO = null;
-    txt.textContent = t('同步服务未运行');
+    txt.textContent = t('实时同步未开启');
   }
   // 同步状态常驻；容量尚未读到时只隐藏容量摘要。
   const sw = document.getElementById('storwrap');  const dk = live.disk;
@@ -7265,6 +7261,12 @@ function fmtSpan(sec) {
   if (h > 0) return h + ' 小时 ' + m + ' 分钟';
   return m + ' 分钟';
 }
+/* 转码剩余时间: 小于 1 分钟显示秒, 更精确 */
+function fmtEta(sec) {
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  if (sec < 60) return sec + ' 秒';
+  return fmtSpan(sec);
+}
 function hideNetSpeed() {
   const el = document.getElementById('netspeed');
   if (el) {
@@ -7772,13 +7774,13 @@ function prewarmPaint(job) {
   state.innerHTML = (working ? '<span class="spin"></span>' : '') +
     (job.state === 'paused' ? '已暂停（空闲 10 分钟自动恢复' + (job.idle_left ? '，约剩 ' + fmtSpan(job.idle_left) : '') + '）'
       : working ? '转码中' : '空闲，没有待转码内容');
-  document.getElementById('prewarm-cur').textContent = job.cur || '—';
-  document.getElementById('prewarm-cur-pct').textContent = job.cur_total
-    ? job.cur_pct + '%（' + job.cur_done + '/' + job.cur_total + ' 个文件）' : '—';
+  document.getElementById('prewarm-cur').textContent = working && job.cur ? job.cur : '';
+  document.getElementById('prewarm-cur-pct').textContent = working && job.cur_total
+    ? job.cur_pct + '%（' + job.cur_done + '/' + job.cur_total + ' 个文件）' : '';
   document.getElementById('prewarm-total-pct').textContent = job.total
     ? job.pct + '%（已完成 ' + job.done + ' / 共 ' + job.total + ' 个文件，剩 ' + job.remain + '）' : '—';
-  document.getElementById('prewarm-fill').style.width = Math.min(100, job.pct || 0) + '%';
-  document.getElementById('prewarm-eta').textContent = working && job.eta > 0 ? fmtSpan(job.eta) : '—';
+  document.getElementById('prewarm-eta').textContent =
+    working && job.eta > 0 ? '约 ' + fmtEta(job.eta) : (working ? '正在估算…' : '—');
   const pauseBtn = document.getElementById('prewarm-pause');
   if (pauseBtn) pauseBtn.textContent = job.paused ? '恢复转码' : '暂停转码';
 }
@@ -7998,9 +8000,7 @@ function storageSyncArchiveLimit() {
   }
 }
 function storageRenderAllocation() {
-  const plan = document.getElementById('storage-plan');
   const budgetText = document.getElementById('storage-budget');
-  plan.hidden = !storageData;
   budgetText.textContent = '';
   budgetText.dataset.error = 'false';
   if (!storageData) return;
@@ -8008,7 +8008,6 @@ function storageRenderAllocation() {
   for (const name of ['usb', 'archive', 'drive', 'reserve', 'minimum']) {
     const input = document.getElementById('storage-' + name);
     if (!input.value || !input.validity.valid) {
-      plan.hidden = true;
       budgetText.dataset.invalid = 'true';
       storageMessage('请输入有效的整数容量');
       return;
@@ -8020,14 +8019,6 @@ function storageRenderAllocation() {
   const unlimited = values.archive === 0;          // 0 = 不设上限, 只受磁盘空闲保护线约束
   const allocated = values.usb + values.archive + values.reserve;
   values.free = Math.max(0, budget - allocated);
-  const scale = Math.max(budget, allocated, 1);
-  document.getElementById('storage-available').textContent = budget.toFixed(1);
-  for (const name of ['usb', 'archive', 'reserve', 'free']) {
-    document.querySelector('[data-storage-segment="' + name + '"]').style.width = values[name] / scale * 100 + '%';
-    document.querySelector('[data-storage-value="' + name + '"]').textContent =
-      (name === 'archive' && unlimited) ? t('无限制') : values[name].toFixed(1) + ' G';
-  }
-  document.getElementById('storage-bar').setAttribute('aria-label', '容量分配：车机 U 盘 ' + values.usb + '，归档区 ' + (unlimited ? '无限制' : values.archive) + '，安全预留 ' + values.reserve + '，未分配 ' + values.free.toFixed(1) + ' G');
   let message = '', blocking = false;
   const actualArchive = Math.max(0, Number(storageData.disk.archive_bytes) || 0) / 1073741824;
   // 调整 U 盘容量只需要为归档的「实际占用」留空间，归档上限只是长期清理策略。
@@ -8073,17 +8064,18 @@ function storageRenderUsage() {
   document.getElementById('storage-used-free').textContent = (disk.free_bytes / G).toFixed(1) + ' G';
   const otherOutput = document.getElementById('storage-used-other');
   if (otherOutput) otherOutput.textContent = disk.other_bytes == null ? '—' : (disk.other_bytes / G).toFixed(2) + ' G';
-  // 单行整卡只画设定容量，不用实际占用叠加；归档不限量时最多占满扣除 U 盘后的空间。
+  // 单行整卡只画设定容量，不用实际占用叠加；归档不限量时最多占满扣除 U 盘与安全预留后的空间。
   const cardGb = gb(disk.total_bytes);
+  const reserveGb = inputNum('storage-reserve', values.free_target_gib);
   const unlimited = archiveLimit <= 0;
-  const availableArchive = Math.max(0, cardGb - usbLimit);
+  const availableArchive = Math.max(0, cardGb - usbLimit - reserveGb);
   const archCap = unlimited ? availableArchive : Math.min(archiveLimit, availableArchive);
-  const freeGb = Math.max(0, cardGb - usbLimit - archCap);
+  const freeGb = Math.max(0, cardGb - usbLimit - archCap - reserveGb);
   const bar = document.getElementById('usage-chart');
   const legend = document.getElementById('usage-legend');
   if (!bar || !legend) return;
   const num = (v) => (Math.round(v * 10) / 10).toFixed(1);
-  const colors = {usb:'#4c8dff', archive:'#2fb3a3', free:'#9aa4b2'};
+  const colors = {usb:'#4c8dff', archive:'#2fb3a3', reserve:'#e0a53c', free:'#9aa4b2'};
   const seg = (basis, color, capGb, title) => {
     if (basis <= 0 || capGb <= 0.005) return '';
     return '<span style="width:' + (capGb / basis * 100).toFixed(2) + '%;background:' + color + '" title="' + title + '"></span>';
@@ -8093,6 +8085,7 @@ function storageRenderUsage() {
   const row = [
     [colors.usb, usbLimit, '车机 U 盘设定容量 ' + num(usbLimit) + ' G'],
     [colors.archive, archCap, '归档区总上限 ' + archiveText],
+    [colors.reserve, reserveGb, '安全预留 ' + num(reserveGb) + ' G'],
     [colors.free, freeGb, '剩余空间 ' + num(freeGb) + ' G']
   ];
   const total = Math.max(cardGb, row.reduce((sum, item) => sum + item[1], 0), 1);
@@ -8100,6 +8093,7 @@ function storageRenderUsage() {
   legend.innerHTML =
     '<span>' + mark(colors.usb) + '车机 U 盘 <b>' + num(usbLimit) + ' G</b></span>' +
     '<span>' + mark(colors.archive) + '归档区总上限 <b>' + archiveText + '</b></span>' +
+    '<span>' + mark(colors.reserve) + '安全预留 <b>' + num(reserveGb) + ' G</b></span>' +
     '<span>' + mark(colors.free) + '剩余空间 <b>' + num(freeGb) + ' G</b></span>';
 }
 // 容量设置变化时同步刷新分配条与图表里的上限标注, 保证与设置联动
@@ -8140,7 +8134,6 @@ async function storageLoad() {
     const data = await storageFetch('/api/storage');
     if (request !== storageRequest) return;
     storageData = data;
-    document.getElementById('storage-total').textContent = (data.disk.total_bytes / 1073741824).toFixed(1);
     const usbInput = document.getElementById('storage-usb');
     usbInput.max = String(Math.max(1, Math.floor(data.disk.total_bytes / 1073741824 / 2)));
     // 首次设置还没有镜像: 给一个不超过整卡一半的默认容量, 方便直接点「调整 U 盘容量」创建
@@ -14171,7 +14164,7 @@ def _scan_archive_locations(force=False):
         return {"ok": True, "items": _ARCH_SCAN["items"], "cached": True}
     roots, seen = [], set()
     allowed = ("ext4", "exfat", "vfat", "ntfs", "ntfs3", "btrfs", "xfs", "fuseblk", "fuse")
-    skip = ("/proc", "/sys", "/dev", "/run", "/tmp", "/var", "/opt")
+    skip = ("/proc", "/sys", "/dev", "/run", "/tmp", "/var", "/opt", "/mnt/mu300-disk")
     for src, lst in _mount_table().items():
         for mp, fs in lst:
             if mp in seen or fs not in allowed and not fs.startswith("fuse"):
@@ -14182,6 +14175,7 @@ def _scan_archive_locations(force=False):
     if "/" not in seen:
         roots.append("/")
     default_root = os.path.abspath(VIDEO_ROOT)
+    exclude = ("/mnt/mu300-disk",)          # 该挂载点不参与扫描/迁移
     items = []
     deadline = time.time() + 10
     for root in roots:
@@ -14192,6 +14186,9 @@ def _scan_archive_locations(force=False):
                 break
             ap = os.path.abspath(dp)
             if ap == default_root or ap.startswith(default_root + os.sep):
+                dns[:] = []
+                continue
+            if any(ap == s or ap.startswith(s + os.sep) for s in exclude):
                 dns[:] = []
                 continue
             dns[:] = [d for d in dns if not d.startswith(".") and d not in ("proc", "sys", "dev", "tmp", "var")]
@@ -17620,10 +17617,49 @@ PREWARM = {"on": os.environ.get("TSF_PREWARM", "1") != "0", "done": 0, "last": "
            # 手动/暂停转码与进度统计
            "paused": False, "idle_since": None, "manual": False, "working": False,
            "cur": "", "cur_done": 0, "cur_total": 0, "total": 0, "remain": 0,
-           "batch_done": 0, "spf": 0.0, "eta": 0, "started": 0.0}
+           "batch_done": 0, "spf": 0.0, "eta": 0, "started": 0.0, "cur_start": 0.0}
 PREWARM_WAKE = threading.Event()
 PREWARM_PAUSE_IDLE_S = 600          # 暂停转码后, 系统连续空闲 10 分钟自动恢复
 PREWARM_CATS = ("SentryClips", "SavedClips")
+PREWARM_STATS = os.path.join(CACHE_ROOT, "prewarm-stats.json")   # 单文件耗时, 重启后仍能立刻估算剩余时间
+PREWARM_DEFAULT_SPF = 15.0          # 还没有历史数据时的兜底估值 (秒/文件)
+
+
+def _prewarm_load_stats():
+    try:
+        with open(PREWARM_STATS) as f:
+            v = float((json.load(f) or {}).get("spf") or 0)
+            if 0.5 < v < 600:
+                PREWARM["spf"] = v
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def _prewarm_save_stats():
+    try:
+        os.makedirs(os.path.dirname(PREWARM_STATS), exist_ok=True)
+        tmp = PREWARM_STATS + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"spf": round(float(PREWARM.get("spf") or 0), 2), "at": int(time.time())}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, PREWARM_STATS)
+    except OSError:
+        pass
+
+
+def _prewarm_eta():
+    """剩余时间 = 剩余文件数的历史平均耗时 - 当前文件已用时间。
+    若还没有历史数据, 用兜底估值, 保证不会一直是横线。"""
+    remain = int(PREWARM.get("remain") or 0)
+    if remain <= 0:
+        return 0
+    spf = float(PREWARM.get("spf") or 0) or PREWARM_DEFAULT_SPF
+    left = (remain - 1) * spf if PREWARM.get("working") else remain * spf
+    if PREWARM.get("working") and PREWARM.get("cur_start"):
+        used = time.time() - PREWARM["cur_start"]
+        left += max(1.0, min(spf, spf - used) if used < spf else 1.0)
+    return max(1, int(round(left)))
 
 
 def prewarm_status():
@@ -17641,7 +17677,7 @@ def prewarm_status():
             "cur": PREWARM.get("cur") or "", "cur_done": cur_done, "cur_total": cur_total,
             "cur_pct": round(cur_done * 100.0 / cur_total) if cur_total else 0,
             "done": done, "total": total, "remain": remain, "pct": min(100, pct),
-            "eta": int(PREWARM.get("eta") or 0), "last": PREWARM.get("last") or "",
+            "eta": _prewarm_eta(), "last": PREWARM.get("last") or "",
             "pause_idle_s": PREWARM_PAUSE_IDLE_S,
             "idle_left": max(0, int(PREWARM_PAUSE_IDLE_S - (time.time() - PREWARM["idle_since"]))
                              if PREWARM["paused"] and PREWARM.get("idle_since") else 0)}
@@ -17808,11 +17844,13 @@ def prewarm_loop():
     """后台把新哨兵/手动保存事件的触发段转成设置里的外网画质。
     有人看视频时让位; 手动「立即转码」本轮不让位; 「暂停转码」空闲 10 分钟自动恢复。"""
     time.sleep(45)                             # 开机先让同步和服务稳定
+    _prewarm_load_stats()
     while True:
         try:
             q = prewarm_quality()
             if not PREWARM["on"] or not q:
-                PREWARM.update(working=False, cur="", cur_done=0, cur_total=0, remain=0, eta=0)
+                PREWARM.update(working=False, cur="", cur_done=0, cur_total=0, remain=0,
+                               eta=0, cur_start=0.0)
                 _prewarm_sleep(60)             # 选原画就关闭预热；一分钟复查一次设置
                 continue
             if PREWARM["paused"]:
@@ -17828,11 +17866,10 @@ def prewarm_loop():
             plan = _prewarm_plan(q)
             remain = sum(len(j[3]) for j in plan)
             done = int(PREWARM.get("batch_done") or 0)
-            spf = float(PREWARM.get("spf") or 0)
-            PREWARM.update(remain=remain, total=done + remain,
-                           eta=int(remain * spf) if spf > 0 else 0)
+            PREWARM.update(remain=remain, total=done + remain)
             if not plan:
-                PREWARM.update(manual=False, working=False, cur="", cur_done=0, cur_total=0, eta=0)
+                PREWARM.update(manual=False, working=False, cur="", cur_done=0, cur_total=0,
+                               eta=0, cur_start=0.0)
                 _prewarm_sleep(12)             # 都转好了, 短轮询以便接住新的哨兵/保存事件
                 continue
             _mt, cat, name, todo = plan[0]
@@ -17846,22 +17883,23 @@ def prewarm_loop():
                 if not Q_SEM.acquire(blocking=False):
                     break                      # 转码槽被用户占着, 让位
                 t0 = time.time()
+                PREWARM["cur_start"] = t0
                 try:
                     get_variant(fp, q, slot=False, wanted=preheat_allowed)
                     if _variant_ready(fp, q):
                         n += 1
                         PREWARM["batch_done"] = int(PREWARM.get("batch_done") or 0) + 1
-                        # 单文件耗时滑动平均, 用来估算剩余时间
+                        # 单文件耗时滑动平均, 用来估算剩余时间; 持久化后重启也能立刻估算
                         dt = time.time() - t0
                         spf = float(PREWARM.get("spf") or 0)
                         PREWARM["spf"] = dt if spf <= 0 else spf * 0.7 + dt * 0.3
+                        _prewarm_save_stats()
                 finally:
                     Q_SEM.release()
                 PREWARM["cur_done"] = n
+                PREWARM["cur_start"] = 0.0
                 remain = max(0, int(PREWARM.get("remain") or 0) - 1)
-                spf = float(PREWARM.get("spf") or 0)
-                PREWARM.update(remain=remain, total=int(PREWARM.get("batch_done") or 0) + remain,
-                               eta=int(remain * spf) if spf > 0 else 0)
+                PREWARM.update(remain=remain, total=int(PREWARM.get("batch_done") or 0) + remain)
                 time.sleep(1)
             if n:
                 PREWARM["done"] += n
