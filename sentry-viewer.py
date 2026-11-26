@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.003"
+APP_VERSION = "2026.11.27.004"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -14333,9 +14333,23 @@ def _ensure_watchdog():
                            stderr=subprocess.DEVNULL, timeout=20)
         r = subprocess.run([WATCHDOG_INIT, "running"], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=20)
+        # 脚本随 OTA 更新后, 正在运行的看门狗还是旧逻辑, 必须重启一次才生效
+        fingerprint = "%s:%s" % (os.path.getsize(script), int(os.path.getmtime(script)))
+        mark = script + ".deployed"
+        try:
+            with open(mark, encoding="utf-8") as f:
+                deployed = f.read().strip()
+        except OSError:
+            deployed = ""
         if r.returncode != 0:
             subprocess.run([WATCHDOG_INIT, "start"], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=30)
+        elif deployed != fingerprint:
+            subprocess.run([WATCHDOG_INIT, "restart"], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30)
+        if deployed != fingerprint:
+            with open(mark, "w", encoding="utf-8") as f:
+                f.write(fingerprint)
     except Exception:
         pass
 
@@ -21440,6 +21454,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json({"ok": False, "msg": "皮肤不存在"}, 404)
         elif path == "/api/audio/write":
+            self._read_json()   # 读掉请求体, 避免 keep-alive 连接上残留数据影响下一个请求
             try:
                 self._json(audio_write_now())
             except (OSError, ValueError, subprocess.SubprocessError) as ex:
