@@ -19,9 +19,10 @@ start_service() {
     procd_set_param stderr 1
     procd_close_instance
 }
-stop() {
+# 不要覆盖 stop(): rc.common 默认的 stop() 会先调 stop_service 再 procd_kill 杀进程。
+# 只挂 stop_service 钩子写手动停止标记, 避免 restart 时旧进程残留。
+stop_service() {
     : > "$STOP_FLAG"
-    stop_service
 }
 disable() {
     mkdir -p "$WATCHDOG_DIR"

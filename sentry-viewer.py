@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.006"
+APP_VERSION = "2026.11.27.007"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1542,6 +1542,12 @@ def ota_apply(force=False):
     except Exception as ex:
         upd, skipped = [], len(OTA_SIDECARS)
         print("ota sidecars error:", ex)
+    # 6.5) init.d 启动脚本在重启服务之前就写入 /etc/init.d。
+    # 只放在启动时部署会有盲区: 一旦新脚本有问题导致起不来, 就再也没有机会自我修正。
+    try:
+        _ensure_watchdog()
+    except Exception as ex:
+        print("ota init.d deploy:", ex)
     # 7) 记账 + 探活守护: pending 让程序起床时能发现"上次装了但没活下来"
     _ota_state_write({"applied": latest, "prev": prev, "at": int(time.time()),
                       "modules": saved, "pending": {"v": latest, "tries": 0,
@@ -14156,6 +14162,16 @@ def _card_job_set(**kw):
         _CARD_JOB.update(kw)
 
 
+def _card_job_claim(kind, message):
+    """原子占用外置卡任务: 检查与置 running 必须在同一把锁里,
+    否则测速/格式化两个请求会同时通过检查并一起写同一张卡。"""
+    with _CARD_JOB_LOCK:
+        if _CARD_JOB["state"] == "running":
+            raise ValueError("正在执行其它外置卡任务")
+        _CARD_JOB.update(state="running", kind=kind, message=message,
+                         write=0.0, read=0.0, pct=0, speed=0.0)
+
+
 def _resolve_mount(target):
     best = "/"
     for mp in ("/mnt/sdcard", VIDEO_ROOT, target, "/"):
@@ -14174,10 +14190,7 @@ def external_card_speed(body):
     mp = target if (target and os.path.ismount(target)) else _resolve_mount(VIDEO_ROOT)
     if not os.path.isdir(mp):
         raise ValueError("找不到可写的存储卡挂载点")
-    if _CARD_JOB["state"] == "running":
-        raise ValueError("正在执行其它外置卡任务")
-    _card_job_set(state="running", kind="speed", message="正在写入测试文件（已暂停同步写入）",
-                  write=0.0, read=0.0, pct=0, speed=0.0)
+    _card_job_claim("speed", "正在写入测试文件（已暂停同步写入）")
 
     def work():
         fp = os.path.join(mp, ".tsf-speedtest.bin")
@@ -14559,11 +14572,9 @@ def external_card_format(body):
         raise ValueError("设备路径不合法")
     if storage_busy():
         raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
-    if _CARD_JOB["state"] == "running":
-        raise ValueError("正在执行其它外置卡任务")
     if _ARCH_SYNC["state"] == "running":
         raise ValueError("正在同步归档区，请稍后再试")
-    _card_job_set(state="running", kind="format", message="正在准备格式化…", write=0.0, read=0.0)
+    _card_job_claim("format", "正在准备格式化…")
 
     def work():
         mounts = _device_mounts(dev)
@@ -15168,9 +15179,13 @@ def archive_migrate(body):
         return {"ok": False, "need_policy": True, "conflicts": conflicts[:200],
                 "conflict_count": len(conflicts), "total": total, "free": arc_free,
                 "msg": "发现 %d 个同名文件。选择全部覆盖或自动重命名后再继续。" % len(conflicts)}
-    _ARCH_SYNC.update(state="running", message="正在迁移…", total=total, done=0, pct=0,
-                      bps=0, sources=[i["path"] for i in items], conflicts=conflicts,
-                      copied=0, failed=[])
+    with _ARCH_SYNC_LOCK:
+        # 扫描/比对耗时较长, 期间可能已有同步或迁移启动; 持锁复查避免任务互相覆盖
+        if _ARCH_SYNC["state"] == "running":
+            raise ValueError("已有同步任务在进行")
+        _ARCH_SYNC.update(state="running", message="正在迁移…", total=total, done=0, pct=0,
+                          bps=0, sources=[i["path"] for i in items], conflicts=conflicts,
+                          copied=0, failed=[])
     threading.Thread(target=_migrate_work, args=(items, plans, policy, total), daemon=True,
                      name="archive-migrate").start()
     return {"ok": True, "job": dict(_ARCH_SYNC)}
@@ -15344,6 +15359,8 @@ def _migrate_work(items, plans, policy, total):
 def archive_node_delete(body):
     """删除扫描到的归档目录里的某个分类/子目录/文件 (迁移文件树的删除按钮)。"""
     body = body if isinstance(body, dict) else {}
+    if _ARCH_SYNC["state"] == "running":
+        raise ValueError("正在同步/迁移，为避免删到正在读写的文件，请任务结束后再删除")
     if body.get("confirm") is not True:
         raise ValueError("请先确认删除")
     path = os.path.abspath(str(body.get("path") or ""))
@@ -15362,6 +15379,8 @@ def archive_node_delete(body):
 
 def archive_migrate_delete(body):
     """迁移并校验完成后, 按用户确认删除非默认位置的源镜像/归档目录。"""
+    if _ARCH_SYNC["state"] == "running":
+        raise ValueError("正在同步/迁移，请任务结束后再删除源文件")
     items = _migrate_items(body)
     if (body or {}).get("confirm") is not True:
         raise ValueError("请确认删除源文件后再继续")
