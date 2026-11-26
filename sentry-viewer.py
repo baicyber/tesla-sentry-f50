@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.004"
+APP_VERSION = "2026.11.27.005"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3277,6 +3277,8 @@ body.settings-open { overflow:hidden; }
 .scan-actions { flex-wrap:wrap; }
 /* 迁移: 镜像/归档分组与分类文件树 */
 .func-divider { border:none; border-top:1px solid var(--line); margin:18px 0 4px; }
+.arch-card { border:1px solid var(--line); border-radius:12px; padding:6px 10px; margin:8px 0; }
+.arch-card .arch-tree { border-top:1px dashed var(--line); margin-top:6px; padding-top:4px; }
 .arch-group { font-size:12.5px; font-weight:600; color:var(--text); margin:12px 0 6px; line-height:1.6; }
 .arch-tree { margin:-2px 0 8px; padding:4px 0 4px; border:1px dashed var(--line); border-radius:7px; background:var(--panel2); }
 .scan-item .p.foldable { cursor:pointer; flex:1 1 auto; user-select:none; }
@@ -8758,10 +8760,13 @@ function archiveScanRender() {
   box.innerHTML =
     (imgs.length ? '<div class="arch-group">车机 U 盘镜像（只读挂载源镜像复制进默认镜像，全部校验通过后自动删除源镜像）</div>' +
       imgs.map(o => row(o.x, o.i)).join('') : '') +
-    (arcs.length ? '<div class="arch-group">归档目录（点开目录展开分类目录树，可多选；右侧显示容量与文件数量，删除按钮可删单个目录）</div>' +
-      arcs.map(o => row(o.x, o.i) + (o.x.tree && o.x.tree.length && !ARCH_TREE_COLLAPSED.has(o.x.path)
-        ? '<div class="arch-tree">' + o.x.tree.map(n => archNodeRow(o.x, n, 0) +
-          (n.children || []).map(c => archNodeRow(o.x, c, 1)).join('')).join('') + '</div>' : '')).join('') : '') +
+    (arcs.length ? '<div class="arch-group">归档目录（每个目录一张独立卡片，点开卡片标题展开分类目录树，可多选；右侧显示容量与文件数量，删除按钮可删单个目录）</div>' +
+      // 目录行与展开的分类树放在同一个 .arch-card 里, 不同归档目录的卡片互不影响
+      arcs.map(o => '<div class="arch-card">' + row(o.x, o.i) +
+        (o.x.tree && o.x.tree.length && !ARCH_TREE_COLLAPSED.has(o.x.path)
+          ? '<div class="arch-tree">' + o.x.tree.map(n => archNodeRow(o.x, n, 0) +
+            (n.children || []).map(c => archNodeRow(o.x, c, 1)).join('')).join('') + '</div>' : '') +
+        '</div>').join('') : '') +
     '<div class="hint">勾选后可批量迁移到默认位置或删除源文件（删除不可恢复）。迁移前会先比对同名文件，可选择全部覆盖或自动重命名；只有目标校验通过后才会删除源文件，中途断电不会丢失数据。</div>';
   if (acts) acts.innerHTML = '<div class="tool-actions scan-actions">' +
     '<button class="mini" onclick="archSelectAll()">' + (picked === ARCH_SCAN_ITEMS.length ? '取消全选' : '全选') + '</button>' +
@@ -14519,6 +14524,24 @@ def _wait_device_free(dev, timeout=8.0):
         time.sleep(0.4)
 
 
+WATCHDOG_PAUSE_FLAG = "/tmp/tsf-watchdog.pause"
+
+
+def _watchdog_pause(on):
+    """格式化等需要独占数据卡的操作期间暂停看门狗。
+
+    看门狗发现 /mnt/sdcard 未挂载时会主动 tsf-mount 重新挂载, 若不在卸载前暂停它,
+    mkfs 会被这次"自动挂回"反复打出 Resource busy。"""
+    try:
+        if on:
+            with open(WATCHDOG_PAUSE_FLAG, "w", encoding="utf-8") as f:
+                f.write("card-format\n")
+        else:
+            os.unlink(WATCHDOG_PAUSE_FLAG)
+    except OSError:
+        pass
+
+
 def external_card_format(body):
     """初始格式化外置卡为 ext4。会清空该卡全部内容, 需前端二次确认。"""
     dev = str((body or {}).get("device") or "").strip()
@@ -14539,9 +14562,13 @@ def external_card_format(body):
         was_data = any(os.path.abspath(mp) == os.path.abspath(VIDEO_ROOT) or
                        os.path.abspath(VIDEO_ROOT).startswith(os.path.abspath(mp).rstrip("/") + "/")
                        for mp in mounts)
+        watchdog_paused = False
         try:
             if usb_attached or os.path.ismount(MNT):
                 raise ValueError("请先恢复车机导出再格式化外置卡")
+            # 卸载后立刻暂停看门狗, 防止它把刚卸载的卡自动挂回导致 mkfs Resource busy
+            _watchdog_pause(True)
+            watchdog_paused = True
             mkfs = _ensure_mkfs_ext4(lambda message: _card_job_set(message=message))
             _card_job_set(message="正在卸载外置卡…")
             _force_unmount_device(dev, lambda message: _card_job_set(message=message))
@@ -14591,6 +14618,9 @@ def external_card_format(body):
                     pass
         except Exception as ex:
             _card_job_set(state="error", message=str(ex)[:200])
+        finally:
+            if watchdog_paused:
+                _watchdog_pause(False)
 
     threading.Thread(target=work, daemon=True, name="card-format").start()
     return {"ok": True, "job": dict(_CARD_JOB)}
@@ -14775,6 +14805,14 @@ def _archive_sync_plan(mod):
     return ex, cur, tasks, total
 
 
+def _close_exfat(ex):
+    """关闭只读 exFAT 解析器的镜像句柄 (每条同步路径都必须走到, 否则每次同步泄漏一个 fd)。"""
+    try:
+        os.close(ex.fd)
+    except (OSError, AttributeError):
+        pass
+
+
 def archive_sync_start():
     if _ARCH_SYNC["state"] == "running":
         raise ValueError("归档区同步正在进行")
@@ -14793,12 +14831,19 @@ def archive_sync_start():
         free = 0
     need = total + FREE_MIN_MB * 1048576
     if total and free < need:
+        _close_exfat(ex)
         raise ValueError("归档区空间不足：待复制约 %s，需连同保护线共 %s，当前空闲仅 %s。"
                          "请先清理归档或调低保留时间后再同步。"
                          % (_fmt_size(total), _fmt_size(need), _fmt_size(free)))
-    _ARCH_SYNC.update(state="running", message="正在同步…", total=total, done=0, pct=0,
-                      bps=0, eta=0, copied=0, failed=[], files=len(tasks))
+    with _ARCH_SYNC_LOCK:
+        # 扫描可能耗时几秒, 期间另一个请求可能已启动同步; 加锁复查避免两个线程写同一批文件
+        if _ARCH_SYNC["state"] == "running":
+            _close_exfat(ex)
+            raise ValueError("归档区同步正在进行")
+        _ARCH_SYNC.update(state="running", message="正在同步…", total=total, done=0, pct=0,
+                          bps=0, eta=0, copied=0, failed=[], files=len(tasks))
     if not tasks:
+        _close_exfat(ex)
         _ARCH_SYNC.update(state="done", pct=100, done=0, message="归档区已是最新，无需复制")
         return {"ok": True, "job": dict(_ARCH_SYNC)}
 
@@ -14858,6 +14903,8 @@ def archive_sync_start():
                               message="同步完成，复制 %d 个文件（%s）" % (copied, _fmt_size(total)))
         except Exception as ex2:
             _ARCH_SYNC.update(state="error", failed=failed, message=str(ex2)[:200])
+        finally:
+            _close_exfat(ex)
 
     threading.Thread(target=work, daemon=True, name="archive-sync").start()
     return {"ok": True, "job": dict(_ARCH_SYNC)}
