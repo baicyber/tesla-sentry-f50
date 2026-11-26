@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.010"
+APP_VERSION = "2026.11.27.011"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -14397,14 +14397,19 @@ def _ensure_watchdog():
         pass
 
 
-def _device_mounts(dev):
-    """列出该设备(含同一块卡的分区)当前的所有挂载点, 长的优先, 便于从深到浅卸载。"""
+def _dev_match(src, dev):
+    """src 是否为 dev 本身或同一张卡上的其它分区。"""
     rp = os.path.realpath(dev)
     base = re.sub(r"p?[0-9]+$", "", rp)
+    srp = os.path.realpath(src) if src.startswith("/dev/") else src
+    return bool(srp == rp or (base and srp.startswith(base)))
+
+
+def _device_mounts(dev):
+    """列出该设备(含同一块卡的分区)当前的所有挂载点, 长的优先, 便于从深到浅卸载。"""
     out = set()
     for src, lst in _mount_table().items():
-        srp = os.path.realpath(src) if src.startswith("/dev/") else src
-        if srp == rp or (base and srp.startswith(base)):
+        if _dev_match(src, dev):
             out.update(mp for mp, _ in lst)
     return sorted(out, key=len, reverse=True)
 

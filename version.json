@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.27.010",
+  "version": "2026.11.27.011",
   "date": "2026-11-27",
   "files": [
     "storage_allocation.py",
@@ -7,6 +7,8 @@
     "tesla-live-sync.py"
   ],
   "notes": [
+    "修复外置卡初始格式化提示 name '_dev_match' is not defined：补齐设备匹配函数，挂载、swap 与占用诊断统一复用",
+    "—— 以下为 2026.11.27.010 更新 ——",
     "OTA/服务启动绑定端口后立即提供网页，再执行存储、FFmpeg 与 USB 初始化，避免初始化阻塞导致只能重启 OpenWrt",
     "外置卡格式化前停止 blockd/tesla-live 并关闭卡上 swap，失败时报告挂载点、占用进程与其它命名空间挂载",
     "一键迁移的归档目录标题与文件树无缝合并，仅不同归档目录卡片之间保留分隔",
