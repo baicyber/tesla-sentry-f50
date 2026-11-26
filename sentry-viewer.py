@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.26.048"
+APP_VERSION = "2026.11.27.001"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1989,7 +1989,7 @@ SPONSOR_BYTES = {k: base64.b64decode(v.split(",", 1)[1]) for k, v in SPONSOR_IMG
 HTML = r"""<!DOCTYPE html>
 <html lang="zh"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>__BRAND__</title>
+<title>__TITLE__</title>
 <style id="base">
 :root {
   color-scheme: dark;
@@ -3008,6 +3008,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,[role="button"]:fo
 .app-header { height:var(--app-header); box-sizing:border-box; flex-wrap:nowrap; gap:16px; padding:0 28px; z-index:220; background:var(--headbg); box-shadow:none; border-bottom:1px solid var(--line); }
 .app-header h1 { font-size:19px; gap:9px; min-width:0; flex:0 1 220px; max-width:220px; }
 .app-header #bname { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.app-header #bname:empty { display:none; }
 .app-header .blogo { flex-shrink:0; }
 .app-header .blogo { width:28px; height:28px; border-radius:5px; }
 #stat { display:none; }
@@ -3820,10 +3821,10 @@ body.settings-open { overflow:hidden; }
   </div>
   <div id="tab-skin" style="display:none">
     <h3>品牌</h3>
-    <div class="hint">标题栏左侧的图标与名称 · 改完立即生效, 访客刷新页面后看到新的; 名称留空即用默认「哨兵一剪梅」</div>
+    <div class="hint">标题栏左侧的图标与名称 · 改完立即生效, 访客刷新页面后看到新的; 名称留空则标题栏只显示图标（浏览器标签仍用默认名）</div>
     <div class="brandbox">
       <img class="blogo" id="brand-prev" src="/api/brand/logo" alt="">
-      <div class="brandmeta"><b id="brand-prevname">哨兵一剪梅</b><span>当前效果</span></div>
+      <div class="brandmeta"><b id="brand-prevname"></b><span>当前效果</span></div>
     </div>
     <div class="brandrow">
       <input class="ninput" id="brand-name" maxlength="24" placeholder="哨兵一剪梅" autocomplete="off" autocapitalize="none" onkeydown="if(event.key==='Enter')saveBrandName()">
@@ -9523,17 +9524,17 @@ document.getElementById('skin-file').onchange = async function () {
 };
 
 /* 品牌: 标题栏的图标与名称 (服务端存 settings.json, 所有访客共用一套) */
-const BRAND = { custom: '', logo: '', ver: 0 };
-const BRAND_DEFAULT_NAME = '哨兵一剪梅';
-function brandName() { return BRAND.custom || BRAND_DEFAULT_NAME; }
+const BRAND = { custom: '', logo: '', ver: 0, loaded: false };
 function brandLogoURL() { return '/api/brand/logo?v=' + (BRAND.ver || 'd'); }
 function applyBrand() {
-  const nm = brandName();
+  // 标题栏名称完全跟随品牌设置: 留空则只显示图标, 不再塞默认名
+  if (!BRAND.loaded) return;   // 设置没拉到(请求失败)时保留服务端已渲染的名称
+  const nm = BRAND.custom;
   const n = document.getElementById('bname');
   if (n) n.textContent = nm;
   const p = document.getElementById('brand-prevname');
-  if (p) p.textContent = nm;
-  document.title = nm;
+  if (p) p.textContent = nm || '仅图标';
+  if (nm) document.title = nm;
   const u = brandLogoURL();
   ['blogo', 'brand-prev'].forEach(id => {
     const el = document.getElementById(id);
@@ -9546,7 +9547,8 @@ async function refreshBrand() {
     BRAND.custom = (j.brand_name || '').trim();
     BRAND.logo = j.brand_logo || '';
     BRAND.ver = j.brand_logo_v || 0;
-  } catch (e) { /* 拿不到就用默认 */ }
+    BRAND.loaded = true;
+  } catch (e) { /* 拿不到设置: 保持服务端已渲染的品牌, 不被默认值覆盖 */ }
   applyBrand();
   const inp = document.getElementById('brand-name');
   if (inp) inp.value = BRAND.custom;
@@ -9557,9 +9559,9 @@ async function saveBrandName() {
   const j = await (await fetch('/api/brand/name', { method: 'POST',
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: v }) })).json();
   if (!j.ok) { toast('❌ ' + (j.msg || '保存失败')); return; }
-  BRAND.custom = v;
+  BRAND.custom = v; BRAND.loaded = true;
   applyBrand();
-  toast(v ? '✅ 名称已改为 ' + v : '✅ 已恢复默认名称');
+  toast(v ? '✅ 名称已改为 ' + v : '✅ 已清空名称，标题栏只显示图标');
 }
 document.getElementById('brand-file').onchange = async function () {
   const j = await uploadFile(this, '/api/upload/brand-logo');
@@ -9569,7 +9571,7 @@ async function resetBrand() {
   if (!confirm('恢复默认图标与名称?')) return;
   const j = await (await fetch('/api/brand/reset', { method: 'POST' })).json();
   if (!j.ok) { toast('❌ ' + (j.msg || '操作失败')); return; }
-  BRAND.custom = ''; BRAND.logo = ''; BRAND.ver = Date.now();
+  BRAND.custom = ''; BRAND.logo = ''; BRAND.ver = Date.now(); BRAND.loaded = true;
   const inp = document.getElementById('brand-name');
   if (inp) inp.value = '';
   applyBrand();
@@ -19975,11 +19977,13 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             # 二维码 URL 带内容版本号: 换码后旧图缓存立即失效, 避免浏览器显示未裁剪的旧二维码
             sponsor_ver = hashlib.md5(b"".join(SPONSOR_BYTES[k] for k in sorted(SPONSOR_BYTES))).hexdigest()[:10]
-            brand_html = str(load_settings().get("brand_name") or BRAND_NAME_DEFAULT)
+            brand_html = str(load_settings().get("brand_name") or "")
             brand_html = brand_html.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            title_html = (brand_html or BRAND_NAME_DEFAULT)
             html = (HTML.replace("__CAT_NAMES__", json.dumps(CAT_NAMES, ensure_ascii=False))
                     .replace("__I18N__", I18N_JS).replace("__LANGS__", LANG_JS)
                     .replace("__APP_VER__", VIEWER_BUILD)
+                    .replace("__TITLE__", title_html)
                     .replace("__BRAND__", brand_html)
                     .replace("__SPONSOR_VER__", sponsor_ver))
             self._send(200, html.encode())
