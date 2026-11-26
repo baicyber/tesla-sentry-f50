@@ -55,6 +55,14 @@ def _load_conf(path="/etc/tesla-sentry.conf"):
 
 _load_conf()
 
+# 外置卡测速时由网页端创建该标志文件: 存在期间暂停一切同步写入, 删除后自动恢复
+SYNC_PAUSE_FLAG = os.environ.get("TSF_SYNC_PAUSE") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".sync-pause")
+
+
+def sync_write_paused():
+    return os.path.exists(SYNC_PAUSE_FLAG)
+
 VIDEO_ROOT = os.environ.get("TSF_VIDEO_ROOT", "/mnt/sdcard/tesla-sentry")
 IMG = os.environ.get("TSF_IMG", VIDEO_ROOT + "/img/teslacam.img")
 ARCHIVE = os.environ.get("TSF_ARCHIVE", VIDEO_ROOT + "/archive")
@@ -872,6 +880,9 @@ def do_sync(exfat, state, quiet=False, cats=CATS, recent=None):
     copied = 0
     bytes_ = 0
     for (cat, ev, name), e in cur.items():
+        if sync_write_paused():
+            # 外置卡测速等场景要求暂停所有同步写入; 本轮剩下的片段下一轮再补
+            break
         if ev == "_event":
             continue            # 平铺目录的 event.json 由片段复制时顺带写入
         if "%s/%s" % (cat, ev) in pruned:
@@ -1004,6 +1015,9 @@ def main():
         return 0
 
     if args.once:
+        if sync_write_paused():
+            log("外置卡测速中，暂停同步写入")
+            return 0
         if exfat is None:
             return 1
         state = load_state()
@@ -1031,6 +1045,12 @@ def main():
         for cat in cats:
             next_scan[cat] = recent.next_check(now) if cat == "RecentClips" else now + intervals[cat]
         refresh_storage_settings()
+        if sync_write_paused():
+            now = time.time()
+            if now >= free_log_at:
+                log("外置卡测速中，暂停同步写入")
+                free_log_at = now + FREE_LOG_INTERVAL
+            continue
         free_mb = archive_free_mb()
         if free_mb < FREE_MIN_MB:
             now = time.time()

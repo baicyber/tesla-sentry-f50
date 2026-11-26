@@ -239,6 +239,11 @@ CONF_DOCS = {
     "TSF_SYNC_FAIL_RETRY_MAX_SEC": "同步失败后的最长重试秒数",
     "TSF_PREWARM_SENTRY": "哨兵录像预转码缓存事件数, 0=关闭",
     "TSF_PREWARM_SAVED": "手动保存预转码缓存事件数, 0=关闭",
+    "TSF_CARD_AUTOMOUNT": "开机自动挂载外置卡, 1=启用 (网页「外置卡管理」设置)",
+    "TSF_CARD_MOUNT_DELAY": "开机自动挂载前的延迟秒数, 建议 20 (15–30)",
+    "TSF_CARD_DEVICE": "开机自动挂载的设备路径, 如 /dev/mmcblk1p1",
+    "TSF_CARD_MOUNTPOINT": "开机自动挂载的挂载点, 默认视频存储根目录",
+    "TSF_SYNC_PAUSE": "暂停所有同步写入的标志文件路径 (测速时使用, 一般不用改)",
     "TSF_ARCHIVE_TOTAL_GB": "归档区总容量上限 G, 0=不限",
     "TSF_DRIVE_MAX_GB": "驾驶记录容量上限 G, 0=不限",
     "TSF_STORAGE_SETTINGS": "网页存储分配的 settings.json 路径 (留空=程序目录)",
@@ -504,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.26.042"
+APP_VERSION = "2026.11.26.043"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2203,6 +2208,16 @@ html:has(body.watching) { overflow:hidden; }
 body.watching { overscroll-behavior:none; }
 .vwrap { position:relative; border-radius:14px; overflow:hidden; max-width:980px; width:100%; margin:0 auto; background:var(--stage); }
 .netspeed { padding:0; color:var(--muted); font-variant-numeric:tabular-nums; }
+/* 顶栏实时同步状态指示点 */
+#copyspeed { display:inline-flex; align-items:center; gap:4px; }
+#copyspeed.sync-off { color:var(--muted); }
+.syncdot { width:7px; height:7px; border-radius:50%; display:inline-block; flex:0 0 auto; background:#9aa3ad; }
+.syncdot.on { background:#34c759; box-shadow:0 0 0 3px rgba(52,199,89,.16); }
+.syncdot.off { background:#c6ccd4; }
+.syncdot.idle { background:#7aa7d9; }
+/* 进行中的转圈提示 (USB 等待/转码等) */
+.spin { display:inline-block; width:12px; height:12px; border:2px solid rgba(128,128,128,.35); border-top-color:currentColor; border-radius:50%; animation:tsfspin 1s linear infinite; vertical-align:-2px; margin-right:6px; }
+@keyframes tsfspin { to { transform:rotate(360deg); } }
 .netspeed[hidden] { display:none; }
 .netspeed .netk { color:inherit; font-weight:inherit; margin-right:4px; }
 .netspeed strong { color:var(--text); font-weight:500; }
@@ -2822,7 +2837,7 @@ body.watching { overflow:hidden; }
 .player .ptitle { color:var(--text); font-size:14px; font-weight:600; }
 .player .pscroll { padding:16px clamp(12px,3vw,32px) max(18px,env(safe-area-inset-bottom)); gap:10px; }
 .player .vwrap { order:0; border-radius:8px; }
-.player .vgrid { background:#101215; }
+.player .vgrid { background:#101215; touch-action:none; -webkit-touch-callout:none; user-select:none; -webkit-user-select:none; }
 .player .vgrid.loading { display:flex; align-items:flex-end; justify-content:flex-end; gap:10px; min-height:26vh; padding:12px; color:#d0d6dc; }
 .player .vgrid.loading.load-error { align-items:center; justify-content:center; }
 .player .vcell { aspect-ratio:auto; min-width:0; min-height:0; }
@@ -2858,9 +2873,12 @@ body.watching { overflow:hidden; }
 #trigger-marker::after { content:''; position:absolute; left:50%; top:100%; transform:translateX(-50%); margin-top:-1px; border:4px solid transparent; border-top-color:#e5382c; }
 #trigger-marker:hover { filter:brightness(1.08); }
 .timeline-row { display:flex; align-items:flex-start; gap:14px; }
-.playback-help { display:flex; flex-direction:column; justify-content:center; gap:2px; min-height:36px;
-  color:var(--muted); font-size:11px; line-height:1.5; white-space:nowrap; }
-.playback-help .ph-key:not(:last-child)::after { content:'，'; }
+.playback-help { display:flex; flex-direction:column; justify-content:center; gap:1px;
+  max-height:32px; overflow:hidden; color:var(--muted); font-size:10.5px; line-height:1.35; }
+/* 每条功能说明都不换行, 整体高度不超过右侧画质/速率条; 过窄的行可横向滑动 */
+.playback-help .ph-line { display:flex; align-items:center; gap:7px; white-space:nowrap; overflow-x:auto; scrollbar-width:none; }
+.playback-help .ph-line::-webkit-scrollbar { display:none; }
+.playback-help .ph-key,.playback-help .ph-kb-t { white-space:nowrap; flex:0 0 auto; }
 .timeline { position:relative; height:34px; display:flex; align-items:flex-start; flex:1; min-width:0; padding-top:0; }
 #track-bands { position:absolute; left:8px; right:8px; top:16px; height:6px; border-radius:3px; background:linear-gradient(to right,var(--play-accent) var(--played,0%),var(--muted2) var(--played,0%)); pointer-events:none; }
 #track-bands i { position:absolute; inset-block:0; }
@@ -2945,7 +2963,7 @@ body.watching { overflow:hidden; }
 }
 @media (max-width:600px) {
   .playtools { grid-template-columns:minmax(0,1fr) auto; }
-  .playback-help { grid-column:1; grid-row:2; align-self:center; font-size:9.5px; line-height:15px; min-height:0; gap:0; white-space:normal; }
+  .playback-help { grid-column:1; grid-row:2; align-self:center; font-size:9.5px; line-height:14px; gap:1px; max-height:44px; }
 }
 @media (max-width:400px) {
   .playtools { gap:3px; } .playtools button { padding:0 7px; }
@@ -3113,9 +3131,6 @@ body.settings-open { overflow:hidden; }
 .storage-row { grid-template-columns:minmax(0,1fr) 98px 28px; gap:10px; min-height:48px; margin:0; }
 .storage-row input { width:100%; }
 .storage-row > label,.storage-row > span { font-size:14px; }
-.storage-total-row { display:flex; align-items:center; gap:10px; font-size:16px; font-weight:600; }
-.storage-total-row output { margin-left:4px; }
-.storage-total-row .storage-help { margin-left:auto; }
 .storage-columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; margin-top:14px; align-items:stretch; }
 .storage-quota,#storage-usage { padding:18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); margin:0; display:flex; flex-direction:column; }
 .storage-nested { margin-left:12px; padding-left:12px; border-left:1px solid var(--line); }
@@ -3224,6 +3239,13 @@ body.settings-open { overflow:hidden; }
 .scan-pick { width:16px; height:16px; accent-color:var(--accent); }
 .scan-del { flex:0 0 auto; }
 .scan-actions { flex-wrap:wrap; }
+/* 迁移: 镜像/归档分组与分类文件树 */
+.arch-group { font-size:12.5px; font-weight:600; color:var(--text); margin:12px 0 6px; line-height:1.6; }
+.arch-tree { margin:-2px 0 8px; padding:4px 0 4px; border:1px dashed var(--line); border-radius:7px; background:var(--panel2); }
+.arch-node { display:flex; align-items:center; gap:8px; font-size:12px; padding:3px 9px 3px 0; }
+.arch-node .p { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; white-space:nowrap; }
+.arch-node .s { flex:0 0 auto; color:var(--muted); white-space:nowrap; }
+.arch-node input { width:15px; height:15px; accent-color:var(--accent); }
 .support-box { max-width:1200px; border:0; border-top:1px solid var(--line); border-radius:0; box-shadow:none; background:transparent; margin-top:28px; padding:16px 0; }
 .support-box > summary { color:var(--muted); font-size:13px; cursor:pointer; }
 .support-sec { margin-top:18px; }
@@ -3240,7 +3262,6 @@ body.settings-open { overflow:hidden; }
 @media (max-width:1199px) {
   .app-header { padding-inline:18px; gap:10px; }
   .app-header .tabs { gap:6px; }
-  .playback-help { white-space:normal; }
   #grid .card { gap:18px; grid-template-columns:140px minmax(140px,1.5fr) 90px 50px minmax(90px,1fr) 22px; }
   #grid .thumb { width:140px; height:80px; }
   .storage-columns { grid-template-columns:1fr; }
@@ -3309,8 +3330,7 @@ body.settings-open { overflow:hidden; }
   .viewtools #shotbtn,.viewtools #bbtn,.viewtools #screenbtn { width:34px; min-width:34px; padding:0; }
   .viewtools #spdsel { height:44px; font-size:11px; }
   .shuttle #ppbtn { width:44px; height:44px; }
-  .playback-help .ph-kb { display:flex; flex-direction:column; }
-  .playback-help .ph-key:not(:last-child)::after { content:''; }
+  .playback-help { max-height:44px; }
   .player .tpanel { padding:12px; }
   .player .tp-spd { font-size:28px; }
   .player .tp-badge { font-size:12px; padding:4px 6px; }
@@ -3582,7 +3602,7 @@ body.settings-open { overflow:hidden; }
       <div class="clockline"><span id="track-start"></span><output id="ptime">--:--:--</output><span id="track-end"></span></div>
       <div class="timeline-row"><div class="timeline"><div id="track-bands" aria-hidden="true"></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0" aria-label="录像时间"><output id="seek-hover" hidden></output><button id="trigger-marker" hidden>触发时刻</button></div></div>
       <div class="playtools">
-        <div class="playback-help"><span>画面上：单击 播放/暂停，长按 3× 快进</span><span class="ph-kb"><span class="ph-kb-t">键盘：</span><span class="ph-key">空格 播放/暂停</span><span class="ph-key">长按 3×</span><span class="ph-key">←→ 跳转 1s</span><span class="ph-key">↑↓ 跳转 10s</span></span></div>
+        <div class="playback-help"><div class="ph-line"><span class="ph-kb-t">画面：</span><span class="ph-key">单击 播放/暂停</span><span class="ph-key">左半屏长按 <span class="ph-hold-rate">3</span>× 快退</span><span class="ph-key">右半屏长按 <span class="ph-hold-rate">3</span>× 快进</span></div><div class="ph-line"><span class="ph-kb-t">键盘：</span><span class="ph-key">空格 播放/暂停</span><span class="ph-key">长按 <span class="ph-hold-rate">3</span>× 快进</span><span class="ph-key">←→ 跳转 1s</span><span class="ph-key">↑↓ 跳转 10s</span></div></div>
         <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="skip-back-one" aria-label="回退一秒">−1s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next-one" aria-label="前进一秒">+1s</button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
         <div class="viewtools"><div class="qsel" id="bsel"><button class="qbtn" id="bbtn" title="画面亮度" aria-label="画面亮度" aria-expanded="false" onclick="toggleBright(event)"><svg class="ic"><use href="#i-sun"/></svg></button><div class="bpop" id="bpop" onclick="event.stopPropagation()"><output id="bval">1.0×</output><div class="bslider"><input type="range" id="brange" min="1" max="4" step="0.1" value="1" aria-label="画面亮度" oninput="onBrightInput(this.value)" onchange="flashBright()"></div><button type="button" class="breset" onclick="setBright(1)">复位</button></div></div><button id="shotbtn" title="截屏下载" aria-label="截屏下载" onclick="captureFrame()"><svg class="ic"><use href="#i-camera"/></svg></button><div class="qsel" id="qsel"></div><select id="spdsel" aria-label="播放速度" title="播放速度" onchange="setSpeed(Number(this.value))"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
       </div>
@@ -3659,18 +3679,23 @@ body.settings-open { overflow:hidden; }
     </div>
     <details class="storage-quota storage-tools" id="storage-extcard">
       <summary>外置卡管理</summary>
-      <div class="hint">检测外置 TF/SD 卡。插入新卡后可先「初始格式化」（格式化为 ext4 文件系统），再查看容量与测速。</div>
+      <div class="hint">检测外置 TF/SD 卡。插入新卡后可先「初始格式化」（格式化为 ext4 文件系统），再查看容量与测速。测速写入 512MB，期间会暂停所有同步写入以保证数据准确，结束后自动恢复。</div>
       <div id="ext-card-info" class="tool-info">读取中…</div>
       <div class="tool-actions">
         <button class="mini" onclick="extCardInfo()">刷新信息</button>
-        <button class="mini" onclick="extCardSpeed()">速度测试（1G）</button>
+        <button class="mini" onclick="extCardSpeed()">速度测试（512MB）</button>
         <button class="mini tool-danger" onclick="extCardFormat()">初始格式化</button>
       </div>
       <div class="hint" id="ext-card-msg" role="status" aria-live="polite"></div>
+      <h4 style="margin-top:12px">开机自动挂载</h4>
+      <div class="hint">勾选后每次开机会自动把上面选中的卡挂载到视频存储根目录。延迟建议 <b>20 秒</b>（15–30 秒都合适）：TF 卡和 USB 控制器需要几秒钟就绪，太短可能挂载失败，太长会推迟录像与同步启动。</div>
+      <div class="storage-row note"><label for="card-automount">开机自动挂载</label><input type="checkbox" id="card-automount" style="width:18px;height:18px;accent-color:var(--accent)"><span class="retention-unit">选中上方那张卡</span></div>
+      <div class="storage-row note"><label for="card-mount-delay">挂载延迟</label><input class="ninput" id="card-mount-delay" type="number" min="0" max="300" step="1" inputmode="numeric"><span class="retention-unit">秒（建议 20）</span></div>
+      <div class="updbtns"><button class="mini primary" id="card-config-save" onclick="extCardSaveConfig()">保存自动挂载设置</button></div>
+      <div class="hint" id="card-config-msg" role="status" aria-live="polite"></div>
     </details>
     <div id="storage-plan" hidden>
-      <div class="storage-total-row"><span>存储卡实际容量</span><output id="storage-total">—</output><span>G</span><button class="storage-help" type="button" aria-label="存储卡实际容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="total">?</button></div>
-      <div class="storage-summary"><span>分配预览</span><span>可分配 <output id="storage-available">—</output> G</span></div>
+      <div class="storage-summary"><span>分配预览 · 整卡 <output id="storage-total">—</output> G</span><span>可分配 <output id="storage-available">—</output> G</span></div>
       <div class="storage-bar" id="storage-bar" role="img" aria-label="容量分配">
         <span class="storage-usb-color" data-storage-segment="usb"></span><span class="storage-archive-color" data-storage-segment="archive"></span><span class="storage-reserve-color" data-storage-segment="reserve"></span><span class="storage-free-color" data-storage-segment="free"></span>
       </div>
@@ -3733,17 +3758,18 @@ body.settings-open { overflow:hidden; }
       <div class="hint" id="retention-msg" role="status" aria-live="polite"></div>
     </section>
     <section class="storage-quota storage-tools" id="storage-archive-sync">
-      <h3>归档区同步</h3>
-      <div class="hint">把车机 U 盘镜像里的文件一键同步到归档区。同步前会扫描全盘里不在默认位置的 teslacam.img 与 archive 文件夹，可迁移到默认位置。</div>
+      <h3>归档区手动同步</h3>
+      <div class="hint">手动把车机 U 盘镜像里的文件同步到归档区，带实时进度与复制速度。下方会扫描全盘里不在默认位置的 teslacam.img 与 archive 文件夹：镜像与归档目录分开勾选，归档目录可按分类（文件树）选择迁移内容。迁移先复制/硬链接到默认位置并逐文件校验，校验通过才删除源文件，中途断电不会损坏或丢失源数据。</div>
       <div class="tool-actions">
-        <button class="mini primary" id="arch-sync-btn" onclick="archiveSyncStart()">一键同步到归档区</button>
+        <button class="mini primary" id="arch-sync-btn" onclick="archiveSyncStart()">立即同步到归档区</button>
         <button class="mini" onclick="archiveScan(true)">重新扫描</button>
       </div>
       <div class="sync-progress" id="arch-sync-progress" hidden>
-        <div class="sync-line"><span>镜像实际占用</span><b id="arch-sync-total">—</b></div>
+        <div class="sync-line"><span>总量</span><b id="arch-sync-total">—</b></div>
+        <div class="sync-line"><span>已复制</span><b id="arch-sync-done">—</b></div>
         <div class="sync-line"><span>写入进度</span><b id="arch-sync-pct">0%</b></div>
         <div class="sync-bar"><i id="arch-sync-fill"></i></div>
-        <div class="sync-line"><span>同步速率</span><b id="arch-sync-rate">0 MB/s</b></div>
+        <div class="sync-line"><span>复制速度</span><b id="arch-sync-rate">0 MB/s</b></div>
         <div class="hint" id="arch-sync-msg" role="status" aria-live="polite"></div>
       </div>
       <div id="arch-scan-box" class="scan-box"></div>
@@ -3760,9 +3786,10 @@ body.settings-open { overflow:hidden; }
       <div class="updbtns"><button class="mini primary" id="paths-save" onclick="storageSavePaths()" disabled>保存路径设置</button></div>
       <div class="hint" id="paths-msg" role="status" aria-live="polite"></div>
     </details>
-    <section class="storage-danger"><h3>重启服务</h3>
-    <div class="hint">修改存储路径、容量分配后，点此重启服务让设置生效。重启期间网页会短暂断开（约 5 秒），刷新后自动恢复。</div>
-    <button class="mini" id="storage-restart" onclick="storageRestartService()">重启服务</button><div id="storage-restart-status"></div></section>
+    <section class="storage-danger"><h3>重启服务 / 系统</h3>
+    <div class="hint">修改存储路径、容量分配后，点此重启服务让设置生效。重启期间网页会短暂断开（约 5 秒），刷新后自动恢复。遇到挂载失败、格式化失败或系统长时间运行异常时，可以重启整个 OpenWrt 系统（约 1–2 分钟，期间网页与车机录像都会中断）。</div>
+    <div class="tool-actions"><button class="mini" id="storage-restart" onclick="storageRestartService()">重启服务</button>
+    <button class="mini tool-danger" id="system-reboot" onclick="systemReboot()">重启整个系统</button></div><div id="storage-restart-status"></div></section>
   </div>
   <div id="tab-skin" style="display:none">
     <h3>品牌</h3>
@@ -3812,6 +3839,10 @@ body.settings-open { overflow:hidden; }
       <button id="area-archive" class="stab" style="flex:1" onclick="switchArea('archive')"><svg class="ic"><use href="#i-archive"/></svg>归档区</button>
     </div>
     <div id="usb-status" style="display:none;margin-bottom:10px"></div>
+    <div id="usb-wait-box" hidden style="background:#122c3a;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#7cc7f0;line-height:1.6;margin-bottom:10px">
+      <span class="spin"></span><span id="usb-wait-msg">正在连接车机 U 盘…</span><br>
+      <button onclick="usbAttachCancel()" style="background:#2a4658;border:none;color:#cfe9fa;border-radius:8px;padding:6px 14px;font-size:12.5px;cursor:pointer;margin-top:6px">取消重试</button>
+    </div>
     <div id="usb-hint" class="hint">浏览和管理车机U盘 (特斯拉写入的镜像)。连接后会临时断开车机读取几秒，5 分钟无操作自动恢复。</div>
     <div id="arch-hint" class="hint" style="display:none">归档区 (F50 内部存储): 查看器用的视频副本、皮肤、文件中转。</div>
     <div id="purge-box" class="fm-purge">
@@ -3874,6 +3905,20 @@ body.settings-open { overflow:hidden; }
       <div class="storage-row note"><label for="prewarm-saved">手动保存预转码</label><input class="ninput" id="prewarm-saved" type="number" min="0" max="50" step="1" inputmode="numeric" oninput="playSpaceHint()"><span class="retention-unit">个事件</span></div>
       <div class="updbtns"><button class="mini primary" id="prewarm-save" onclick="storageSavePrewarm()" disabled>保存预转码设置</button></div>
       <div class="hint" id="prewarm-msg" role="status" aria-live="polite"></div>
+      <h4 style="margin-top:14px">转码任务</h4>
+      <div class="hint">手动立即转码会把待转码事件一次性转完；暂停转码后，系统连续空闲 10 分钟会自动恢复。转码在后台线程执行，离开或切换页面都不会中断。</div>
+      <div class="tool-actions">
+        <button class="mini primary" id="prewarm-run" onclick="prewarmStart()">立即转码</button>
+        <button class="mini" id="prewarm-pause" onclick="prewarmPause()">暂停转码</button>
+      </div>
+      <div class="sync-progress" id="prewarm-progress">
+        <div class="sync-line"><span>状态</span><b id="prewarm-state">—</b></div>
+        <div class="sync-line"><span>当前事件</span><b id="prewarm-cur">—</b></div>
+        <div class="sync-line"><span>事件进度</span><b id="prewarm-cur-pct">—</b></div>
+        <div class="sync-line"><span>总进度</span><b id="prewarm-total-pct">—</b></div>
+        <div class="sync-bar"><i id="prewarm-fill"></i></div>
+        <div class="sync-line"><span>预计剩余时间</span><b id="prewarm-eta">—</b></div>
+      </div>
     </section>
     <section class="storage-danger" style="margin-top:18px"><h3>转码诊断</h3>
     <div class="hint">转码失败或没有缩略图时点一下，会现场测试目录写入、ffmpeg 编码器/解码器、温度热区，并真的抽一帧、编 2 秒视频；结果可直接复制反馈。</div>
@@ -4556,7 +4601,7 @@ async function refreshLive() {
   try { live = await (await fetch('/api/live')).json(); } catch (e) { updateSystemStatus(null); return; }
   updateSystemStatus(live.sys);
   maybeShowSetup(live.setup_needed === true);
-  showCopySpeed(live.copy_bps);
+  showSyncStatus(live);
   const dot = document.getElementById('livedot'), txt = document.getElementById('livetxt');
   if (live.running) {
     dot.style.background = '#4cc38a';
@@ -7195,14 +7240,23 @@ function showNetSpeed(bps) {
   el.hidden = false;
   clearTimeout(NET.timer); NET.timer = 0;
 }
-/* 归档同步的复制速度: 由同步服务在最近一次复制完成时记录, 20 秒内视为有效 */
-function showCopySpeed(bps) {
+/* 顶栏实时同步状态: 绿点+同步中+复制速度(MB/s); 车机断开或文件管理占用时显示未同步 */
+function showSyncStatus(live) {
   const el = document.getElementById('copyspeed');
   if (!el) return;
-  const text = fmtBitrate(bps);
-  if (!text) { el.hidden = true; return; }
-  el.innerHTML = '<span class="netk">复制</span><strong>' + esc(text) + '</strong>';
+  const s = (live && live.sync) ||
+    (live && live.copy_bps > 0 ? { state: 'syncing', bps: live.copy_bps } : { state: 'idle', bps: 0 });
   el.hidden = false;
+  el.classList.toggle('sync-off', s.state === 'offline');
+  el.title = s.reason || '';
+  if (s.state === 'syncing') {
+    el.innerHTML = '<span class="syncdot on"></span><span class="netk">同步中</span><strong>' +
+      ((s.bps || 0) / 1048576).toFixed(1) + ' MB/s</strong>';
+  } else if (s.state === 'offline') {
+    el.innerHTML = '<span class="syncdot off"></span><span class="netk">未同步</span>';
+  } else {
+    el.innerHTML = '<span class="syncdot idle"></span><span class="netk">同步待机</span>';
+  }
 }
 function fmtSpan(sec) {
   sec = Math.max(0, Math.round(Number(sec) || 0));
@@ -7285,9 +7339,17 @@ function setSpeed(r) {
   baseRate = SPEEDS.indexOf(r) >= 0 ? r : 1;
   applyRate(baseRate);
   updateControls();
+  updateHoldHints();
   flashPlayer(baseRate + '×');
   try { localStorage.setItem('tsf-speed', String(baseRate)); } catch (e) {}
 }
+/* 长按倍率: 播放速率设成非 1× 时跟随设定, 1× 时默认 3× */
+function holdRate() { return baseRate && Math.abs(baseRate - 1) > 0.001 ? baseRate : 3; }
+function updateHoldHints() {
+  const r = String(holdRate());
+  document.querySelectorAll('.ph-hold-rate').forEach(el => { el.textContent = r; });
+}
+updateHoldHints();
 
 /* 操作反馈: 在画面中心显示 1 秒 */
 let flashTimer = 0;
@@ -7511,8 +7573,10 @@ async function togglePlayerFullscreen() {
 }
 byId('screenbtn').onclick = togglePlayerFullscreen;
 let pictureHoldTimer = 0, pictureHolding = false, picturePrevPlaying = false, suppressPictureClick = false;
+let pictureRewindTimer = 0;
 function releasePictureSpeed() {
   clearTimeout(pictureHoldTimer); pictureHoldTimer = 0;
+  clearInterval(pictureRewindTimer); pictureRewindTimer = 0;
   if (!pictureHolding) return;
   pictureHolding = false; suppressPictureClick = true;
   applyRate(baseRate);
@@ -7521,16 +7585,33 @@ function releasePictureSpeed() {
   else if (!wantedPlay) playAll();
   flashPlayer(baseRate + '×');
 }
+/* 画面支持鼠标与触屏: 单击播放/暂停; 左半屏长按快退, 右半屏长按快进。
+   倍率跟随右下方播放速率 (1× 时默认 3×)。 */
 byId('vgrid').addEventListener('pointerdown', event => {
   if (event.button !== 0 || event.target.closest('button') || !curClips.length) return;
   suppressPictureClick = false;
+  const rect = byId('vgrid').getBoundingClientRect();
+  const dir = (event.clientX - rect.left) < rect.width / 2 ? -1 : 1;
   clearTimeout(pictureHoldTimer);
   pictureHoldTimer = setTimeout(() => {
     pictureHolding = true;
     picturePrevPlaying = wantedPlay && !atEnd;
-    if (!picturePrevPlaying) playAll();
-    applyRate(3);
-    flashPlayer('3× 快进');
+    const rate = holdRate();
+    if (dir > 0) {
+      if (!picturePrevPlaying) playAll();
+      applyRate(rate);
+    } else {
+      // 浏览器不支持倒放, 快退用按倍率周期性回跳实现
+      pauseAll();
+      let last = 0;
+      pictureRewindTimer = setInterval(() => {
+        const now = performance.now();
+        const dt = last ? Math.min(1, (now - last) / 1000) : 0.25;
+        last = now;
+        seekRelative(-rate * dt);
+      }, 250);
+    }
+    flashPlayer(rate + '× ' + (dir > 0 ? '快进' : '快退'));
   }, 450);
 });
 byId('vgrid').addEventListener('pointerup', releasePictureSpeed);
@@ -7568,8 +7649,8 @@ document.addEventListener('keydown', e => {
       spaceHoldTimer = setTimeout(() => {
         spaceHolding = true;
         if (!spacePrevPlaying) playAll();
-        applyRate(3);
-        flashPlayer('3× 快进');
+        applyRate(holdRate());
+        flashPlayer(holdRate() + '× 快进');
       }, 450);
       return;
     }
@@ -7681,7 +7762,56 @@ function playSpaceHint() {
     ' 个事件，约需 ' + compact(perEvent6 * events * 1048576) + '。';
   el.textContent = '以上均包含事件前后各 1 分钟的全部摄像头；存储紧张时请调小事件数或填 0 关闭。';
 }
+/* 转码任务: 立即转码/暂停转码 + 实时进度 (后台线程执行, 切页不影响) */
+let PREWARM_POLL = null;
+function prewarmPaint(job) {
+  if (!job) return;
+  const state = document.getElementById('prewarm-state');
+  if (!state) return;
+  const working = job.state === 'working';
+  state.innerHTML = (working ? '<span class="spin"></span>' : '') +
+    (job.state === 'paused' ? '已暂停（空闲 10 分钟自动恢复' + (job.idle_left ? '，约剩 ' + fmtSpan(job.idle_left) : '') + '）'
+      : working ? '转码中' : '空闲，没有待转码内容');
+  document.getElementById('prewarm-cur').textContent = job.cur || '—';
+  document.getElementById('prewarm-cur-pct').textContent = job.cur_total
+    ? job.cur_pct + '%（' + job.cur_done + '/' + job.cur_total + ' 个文件）' : '—';
+  document.getElementById('prewarm-total-pct').textContent = job.total
+    ? job.pct + '%（已完成 ' + job.done + ' / 共 ' + job.total + ' 个文件，剩 ' + job.remain + '）' : '—';
+  document.getElementById('prewarm-fill').style.width = Math.min(100, job.pct || 0) + '%';
+  document.getElementById('prewarm-eta').textContent = working && job.eta > 0 ? fmtSpan(job.eta) : '—';
+  const pauseBtn = document.getElementById('prewarm-pause');
+  if (pauseBtn) pauseBtn.textContent = job.paused ? '恢复转码' : '暂停转码';
+}
+async function prewarmStatus() {
+  const tab = document.getElementById('tab-play');
+  if (!tab || tab.style.display === 'none') return;
+  try {
+    const j = await (await fetch('/api/prewarm/status', { cache: 'no-store' })).json();
+    prewarmPaint(j.job || {});
+  } catch (e) {}
+}
+async function prewarmStart() {
+  try {
+    const j = await (await fetch('/api/prewarm/start', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' }, body: '{}' })).json();
+    if (!j.ok) throw Error(j.msg || '启动失败');
+    toast('✅ 已开始转码，离开页面不影响后台执行');
+    prewarmPaint(j.job || {});
+    prewarmStatus();
+  } catch (e) { toast('❌ ' + e.message); }
+}
+async function prewarmPause() {
+  try {
+    const j = await (await fetch('/api/prewarm/pause', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' }, body: '{}' })).json();
+    if (!j.ok) throw Error(j.msg || '操作失败');
+    toast(j.msg || '');
+    prewarmPaint(j.job || {});
+  } catch (e) { toast('❌ ' + e.message); }
+}
+PREWARM_POLL = setInterval(prewarmStatus, 2500);
 function playLoad() {
+  prewarmStatus();
   const sel = document.getElementById('play-quality');
   const net = document.getElementById('play-net'), msg = document.getElementById('play-msg');
   if (net) net.textContent = localAddress
@@ -7793,7 +7923,6 @@ function playSave() {
 }
 
 const STORAGE_HELP = {
-  total: '设备识别到的文件系统容量。可分配空间已扣除其他文件和文件系统保留量。1 G = 1024³ 字节，通常小于存储卡包装上的 GB 数值。哨兵、手动保存、驾驶记录中与实时滚动记录重复的片段会自动改为硬链接，同一段视频只占一份数据块。',
   usb: '车机可用的录像 U 盘容量，最大为存储卡实际容量的一半。归档区要与车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件，所以镜像不能超过整卡容量的一半。调整会清空车机 U 盘中的全部内容，归档区保留；期间车机暂停录像。',
   archive: '哨兵、手动保存、实时滚动记录和驾驶记录共用的容量上限，不代表已经占用的空间。超限后按现有规则清理旧录像，正在写入和受保护片段可能延后清理。填 0 表示不设上限：不再按总量清理，只保留磁盘空闲保护线兜底。四个分类中内容完全相同的片段会自动替换为硬链接，只计一份占用。',
   recentmax: '实时滚动记录单独的容量上限，已包含在归档总容量内。6 路 1 小时约 12 G；填 0 表示不限制，只按保留分钟数滚动清理。',
@@ -8314,6 +8443,23 @@ async function storageRestartService() {
     if (button) button.disabled = false;
   }
 }
+async function systemReboot() {
+  const status = document.getElementById('storage-restart-status');
+  const button = document.getElementById('system-reboot');
+  if (!confirm('确定重启整个 OpenWrt 系统吗？\n用于解决挂载失败、格式化失败、系统长时间运行异常。\n重启期间网页、WiFi 与车机录像都会中断，约 1–2 分钟后自动恢复。')) return;
+  if (button) button.disabled = true;
+  if (status) status.textContent = '系统正在重启…';
+  try {
+    const j = await (await fetch('/api/system/reboot', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' }, body: '{}' })).json();
+    if (!j.ok) throw Error(j.msg || '重启失败');
+    if (status) status.textContent = '系统正在重启，请等待 1–2 分钟后刷新页面（车机会在系统起来后自动恢复录像）。';
+    setTimeout(() => { location.reload(); }, 90000);
+  } catch (e) {
+    if (status) status.textContent = '重启失败：' + e.message;
+    if (button) button.disabled = false;
+  }
+}
 async function storageResize() {
   if (!storageData || !document.getElementById('storage-usb').reportValidity()) return;
   const first = !(storageData.disk && storageData.disk.usb_bytes > 0);
@@ -8346,6 +8492,8 @@ function storageFail(error) {
 
 /* ---------- 外置卡与归档同步 ---------- */
 let EXT_CARDS = [], EXT_CARD = null, ARCH_SCAN_ITEMS = [], ARCH_SCAN_SELECTED = new Set(), ARCH_POLL = null;
+let ARCH_DIR_PICK = {};   // 归档目录部分勾选: path -> Set('A' | 'A/' | 'A/b' | '')
+let EXT_BOOT = {};        // 外置卡开机自动挂载配置
 function extCardRender() {
   const box = document.getElementById('ext-card-info');
   if (!box) return;
@@ -8368,6 +8516,10 @@ async function extCardInfo() {
   try {
     const j = await (await fetch('/api/card/info', { cache: 'no-store' })).json();
     EXT_CARDS = j.cards || [];
+    EXT_BOOT = j.boot || EXT_BOOT || {};
+    const auto = document.getElementById('card-automount'), delay = document.getElementById('card-mount-delay');
+    if (auto) auto.checked = !!EXT_BOOT.automount;
+    if (delay) delay.value = EXT_BOOT.delay != null ? EXT_BOOT.delay : 20;
     if (!EXT_CARD || !EXT_CARDS.some(c => c.device === EXT_CARD.device)) EXT_CARD = EXT_CARDS[0] || null;
     extCardRender();
   } catch (e) { if (box) box.textContent = '读取失败: ' + e; }
@@ -8400,12 +8552,30 @@ async function extCardJobPoll(then) {
 async function extCardSpeed() {
   if (!EXT_CARD) { toast('未检测到外置卡'); return; }
   const msg = document.getElementById('ext-card-msg');
-  if (msg) msg.textContent = '正在测速（写入 1G 并读回）…';
+  if (msg) msg.textContent = '正在测速（写入 512MB 并读回，期间暂停所有同步写入，结束后自动恢复）…';
   try {
     const j = await (await fetch('/api/card/speed', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
       body: JSON.stringify({ mount: EXT_CARD.mount || '' }) })).json();
     if (!j.ok) throw Error(j.msg || '启动失败');
     extCardJobPoll();
+  } catch (e) { if (msg) msg.textContent = '❌ ' + e.message; }
+}
+async function extCardSaveConfig() {
+  const auto = document.getElementById('card-automount').checked;
+  const delay = Number(document.getElementById('card-mount-delay').value || 20);
+  const msg = document.getElementById('card-config-msg');
+  if (auto && !EXT_CARD) { if (msg) msg.textContent = '请先在上方列表选中要自动挂载的外置卡'; return; }
+  if (delay < 0 || delay > 300) { if (msg) msg.textContent = '延迟建议 15–30 秒，范围 0–300 秒'; return; }
+  if (auto && delay < 5 && msg) msg.textContent = '延迟太短可能挂载失败，建议 15–30 秒';
+  try {
+    const j = await (await fetch('/api/card/config', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
+      body: JSON.stringify({ automount: auto, delay: delay,
+        device: EXT_CARD ? EXT_CARD.device : '',
+        mountpoint: (EXT_BOOT && EXT_BOOT.mountpoint) || '' }) })).json();
+    if (!j.ok) throw Error(j.msg || '保存失败');
+    EXT_BOOT = j.boot || EXT_BOOT;
+    if (msg) msg.textContent = '✅ ' + (j.msg || '已保存') + (EXT_CARD ? '（' + EXT_CARD.device + '）' : '');
   } catch (e) { if (msg) msg.textContent = '❌ ' + e.message; }
 }
 async function extCardFormat() {
@@ -8424,7 +8594,79 @@ async function extCardFormat() {
   } catch (e) { if (msg) msg.textContent = '❌ ' + e.message; }
 }
 function archSelectedItems() {
-  return ARCH_SCAN_ITEMS.filter(x => ARCH_SCAN_SELECTED.has(x.path));
+  const out = [];
+  for (const x of ARCH_SCAN_ITEMS) {
+    if (ARCH_SCAN_SELECTED.has(x.path)) out.push({ type: x.type, path: x.path, size: x.size });
+    else {
+      const set = ARCH_DIR_PICK[x.path];
+      if (set && set.size) out.push({ type: x.type, path: x.path, size: x.size, dirs: [...set] });
+    }
+  }
+  return out;
+}
+/* 归档分类文件树的勾选模型:
+   'A' = 整个分类, 'A/' = 只要 A 的直接文件, 'A/b' = 只要子目录 b, '' = 根目录散落文件 */
+function archDirChecked(x, rel) {
+  if (ARCH_SCAN_SELECTED.has(x.path)) return true;
+  const set = ARCH_DIR_PICK[x.path];
+  if (!set) return false;
+  if (set.has(rel)) return true;
+  return !!rel && set.has(rel.split('/')[0]);
+}
+function archAllExcept(item, except) {
+  const set = new Set();
+  (item.tree || []).forEach(n => {
+    if (n.path === except) return;
+    if (except && n.path && except.startsWith(n.path + '/')) {
+      set.add(n.path + '/');
+      (n.children || []).forEach(c => { if (c.path !== except) set.add(c.path); });
+      return;
+    }
+    set.add(n.path);
+  });
+  return set;
+}
+function archDirToggle(path, rel, checked) {
+  const item = ARCH_SCAN_ITEMS.find(x => x.path === path);
+  if (!item) return;
+  const set = ARCH_SCAN_SELECTED.has(path) ? archAllExcept(item, checked ? null : rel)
+    : new Set(ARCH_DIR_PICK[path] || []);
+  ARCH_SCAN_SELECTED.delete(path);
+  if (checked) {
+    set.add(rel);
+    // 勾了父级就不再需要保留拆分出来的后代/'A/' 标记
+    for (const v of [...set]) if (rel && v !== rel && v.startsWith(rel + '/')) set.delete(v);
+    if (rel) set.delete(rel + '/');
+    // 某分类的直接文件与全部子目录都勾上时合并回整个分类
+    (item.tree || []).forEach(n => {
+      const kids = n.children || [];
+      if (!n.path || set.has(n.path) || !set.has(n.path + '/') || !kids.length) return;
+      if (kids.every(c => set.has(c.path))) {
+        set.delete(n.path + '/'); kids.forEach(c => set.delete(c.path)); set.add(n.path);
+      }
+    });
+  } else {
+    set.delete(rel);
+    const top = rel.split('/')[0];
+    // 父级已勾选时取消子级: 父级拆成「直接文件 + 其它子目录」
+    if (rel !== top && set.has(top)) {
+      set.delete(top);
+      const node = (item.tree || []).find(n => n.path === top);
+      if (node) {
+        set.add(top + '/');
+        (node.children || []).forEach(c => { if (c.path !== rel) set.add(c.path); });
+      }
+    }
+  }
+  if (set.size) ARCH_DIR_PICK[path] = set; else delete ARCH_DIR_PICK[path];
+  archiveScanRender();
+}
+function archNodeRow(x, n, depth) {
+  return '<div class="arch-node" style="padding-left:' + (26 + depth * 20) + 'px">' +
+    '<label class="scan-pick-wrap"><input type="checkbox" class="arch-dir" data-ap="' + esc(x.path) +
+    '" data-rel="' + esc(n.path) + '"' + (archDirChecked(x, n.path) ? ' checked' : '') + '></label>' +
+    '<span class="p">' + (depth ? '└ ' : '') + esc(n.name) + '</span>' +
+    '<span class="s">' + fmtBytes(n.size) + (n.files ? ' · ' + n.files + ' 个文件' : '') + '</span></div>';
 }
 function archiveScanRender() {
   const box = document.getElementById('arch-scan-box'), acts = document.getElementById('arch-migrate-actions');
@@ -8435,22 +8677,31 @@ function archiveScanRender() {
     return;
   }
   const picked = archSelectedItems().length;
-  box.innerHTML = ARCH_SCAN_ITEMS.map((x, i) =>
+  const row = (x, i) =>
     '<div class="scan-item' + (ARCH_SCAN_SELECTED.has(x.path) ? ' sel' : '') + '">' +
     '<label class="scan-pick-wrap"><input type="checkbox" class="scan-pick" data-arch="' + i + '"' +
     (ARCH_SCAN_SELECTED.has(x.path) ? ' checked' : '') + '></label>' +
     '<span class="p"><b>' + (x.type === 'img' ? '镜像' : '归档目录') + '</b> ' +
     esc(x.path) + '</span><span class="s">' + fmtBytes(x.size) + '</span>' +
-    '<button type="button" class="mini tool-danger scan-del" data-del="' + i + '" title="删除该源文件">删除</button></div>').join('') +
-    '<div class="hint">勾选后可批量迁移到默认位置或删除源文件（删除不可恢复）。</div>';
+    '<button type="button" class="mini tool-danger scan-del" data-del="' + i + '" title="删除该源文件">删除</button></div>';
+  const imgs = [], arcs = [];
+  ARCH_SCAN_ITEMS.forEach((x, i) => (x.type === 'img' ? imgs : arcs).push({ x, i }));
+  box.innerHTML =
+    (imgs.length ? '<div class="arch-group">车机 U 盘镜像（只读挂载源镜像复制进默认镜像，全部校验通过后自动删除源镜像）</div>' +
+      imgs.map(o => row(o.x, o.i)).join('') : '') +
+    (arcs.length ? '<div class="arch-group">归档目录（按分类文件树勾选；同一存储介质用硬链接、跨介质先复制，逐文件校验后删除源文件）</div>' +
+      arcs.map(o => row(o.x, o.i) + (o.x.tree && o.x.tree.length
+        ? '<div class="arch-tree">' + o.x.tree.map(n => archNodeRow(o.x, n, 0) +
+          (n.children || []).map(c => archNodeRow(o.x, c, 1)).join('')).join('') + '</div>' : '')).join('') : '') +
+    '<div class="hint">勾选后可批量迁移到默认位置或删除源文件（删除不可恢复）。迁移只在目标校验通过后才删除源文件，中途断电不会丢失源数据。</div>';
   if (acts) acts.innerHTML = '<div class="tool-actions scan-actions">' +
     '<button class="mini" onclick="archSelectAll()">' + (picked === ARCH_SCAN_ITEMS.length ? '取消全选' : '全选') + '</button>' +
     '<button class="mini primary" onclick="archiveMigrate()"' + (picked ? '' : ' disabled') + '>迁移选中（' + picked + '）</button>' +
     '<button class="mini tool-danger" onclick="archiveDeleteSelected()"' + (picked ? '' : ' disabled') + '>删除选中</button></div>';
 }
 function archSelectAll() {
-  if (ARCH_SCAN_SELECTED.size === ARCH_SCAN_ITEMS.length) ARCH_SCAN_SELECTED.clear();
-  else ARCH_SCAN_ITEMS.forEach(x => ARCH_SCAN_SELECTED.add(x.path));
+  if (ARCH_SCAN_SELECTED.size === ARCH_SCAN_ITEMS.length) { ARCH_SCAN_SELECTED.clear(); ARCH_DIR_PICK = {}; }
+  else { ARCH_DIR_PICK = {}; ARCH_SCAN_ITEMS.forEach(x => ARCH_SCAN_SELECTED.add(x.path)); }
   archiveScanRender();
 }
 async function archiveScan(force) {
@@ -8459,6 +8710,7 @@ async function archiveScan(force) {
     ARCH_SCAN_ITEMS = j.items || [];
     const alive = new Set(ARCH_SCAN_ITEMS.map(x => x.path));
     for (const path of [...ARCH_SCAN_SELECTED]) if (!alive.has(path)) ARCH_SCAN_SELECTED.delete(path);
+    for (const path of Object.keys(ARCH_DIR_PICK)) if (!alive.has(path)) delete ARCH_DIR_PICK[path];
     archiveScanRender();
   } catch (e) {
     const box = document.getElementById('arch-scan-box');
@@ -8473,11 +8725,14 @@ document.getElementById('arch-scan-box').addEventListener('click', event => {
     if (item) archiveDeleteItems([item]);
     return;
   }
+  const dir = event.target.closest('input.arch-dir');
+  if (dir) { archDirToggle(dir.dataset.ap, dir.dataset.rel, dir.checked); return; }
   const pick = event.target.closest('input.scan-pick');
   if (!pick) return;
   const item = ARCH_SCAN_ITEMS[Number(pick.dataset.arch)];
   if (!item) return;
-  if (pick.checked) ARCH_SCAN_SELECTED.add(item.path); else ARCH_SCAN_SELECTED.delete(item.path);
+  if (pick.checked) { ARCH_SCAN_SELECTED.add(item.path); delete ARCH_DIR_PICK[item.path]; }
+  else ARCH_SCAN_SELECTED.delete(item.path);
   archiveScanRender();
 });
 function archiveSyncPaint(job) {
@@ -8485,6 +8740,7 @@ function archiveSyncPaint(job) {
   if (!box) return;
   box.hidden = false;
   document.getElementById('arch-sync-total').textContent = fmtBytes(job.total || 0);
+  document.getElementById('arch-sync-done').textContent = fmtBytes(job.done || job.copied || 0);
   document.getElementById('arch-sync-pct').textContent = (job.pct || 0) + '%';
   document.getElementById('arch-sync-fill').style.width = Math.min(100, job.pct || 0) + '%';
   document.getElementById('arch-sync-rate').textContent = ((job.bps || 0) / 1048576).toFixed(1) + ' MB/s';
@@ -8501,7 +8757,7 @@ async function archiveSyncPoll() {
     if (job.state === 'running') return;
     clearInterval(ARCH_POLL);
     document.getElementById('arch-sync-btn').disabled = false;
-    document.getElementById('arch-sync-btn').textContent = job.state === 'done' ? '再同步一次' : '一键同步到归档区';
+    document.getElementById('arch-sync-btn').textContent = job.state === 'done' ? '再同步一次' : '立即同步到归档区';
     try { refreshLive(); } catch (e) {}
   }, 1200);
 }
@@ -8516,7 +8772,7 @@ async function archiveSyncStart() {
     archiveSyncPaint(j.job || {});
     archiveSyncPoll();
   } catch (e) {
-    if (btn) { btn.disabled = false; btn.textContent = '一键同步到归档区'; }
+    if (btn) { btn.disabled = false; btn.textContent = '立即同步到归档区'; }
     toast('❌ ' + e.message);
   }
 }
@@ -8532,6 +8788,8 @@ async function archiveMigrate(policy) {
       const ans = confirm('发现 ' + j.conflict_count + ' 个同名文件：\n' + list + '\n\n点「确定」= 全部覆盖；点「取消」= 自动重命名。');
       return archiveMigrate(ans ? 'overwrite' : 'rename');
     }
+    // 默认镜像缺失/空间不足: 直接展示后端给出的解决方案
+    if (j.need_img || j.no_space) { alert(j.msg || '暂时无法迁移'); return; }
     if (!j.ok) { toast('❌ ' + (j.msg || '迁移失败')); return; }
     if (btn) { btn.disabled = true; btn.textContent = '正在迁移…'; }
     archiveSyncPaint(j.job || {});
@@ -8543,10 +8801,12 @@ async function archiveMigrate(policy) {
       archiveSyncPaint(job);
       if (job.state === 'running') return;
       clearInterval(ARCH_POLL);
+      if (btn) { btn.disabled = false; btn.textContent = '迁移选中'; }
       if (job.state === 'done') {
-        if (job.failed && job.failed.length) toast('迁移完成，' + job.failed.length + ' 个文件失败');
-        if (confirm('迁移完成。是否删除这次迁移的源文件？\n此操作不可恢复。')) await archiveDeleteItems(items, true);
-        else archiveScan(true);
+        if (job.failed && job.failed.length) toast('迁移完成，' + job.failed.length + ' 个文件失败，对应源文件已保留');
+        else toast('✅ 迁移完成，源文件已在校验通过后删除');
+        ARCH_SCAN_SELECTED.clear(); ARCH_DIR_PICK = {};
+        archiveScan(true);
       } else {
         toast('❌ ' + (job.message || '迁移失败'));
         archiveScanRender();
@@ -8567,7 +8827,7 @@ async function archiveDeleteItems(items, quiet) {
     const d = await (await fetch('/api/archive/migrate/delete', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
       body: JSON.stringify({ items, confirm: true }) })).json();
     toast(d.ok ? '✅ 已删除源文件' : '❌ ' + (d.msg || '删除失败'));
-    if (d.ok) items.forEach(x => ARCH_SCAN_SELECTED.delete(x.path));
+    if (d.ok) items.forEach(x => { ARCH_SCAN_SELECTED.delete(x.path); delete ARCH_DIR_PICK[x.path]; });
     archiveScan(true);
   } catch (e) { toast('❌ ' + e.message); archiveScanRender(); }
 }
@@ -9536,6 +9796,8 @@ function switchArea(a) {
   document.getElementById('settings-title').textContent = '文件管理';
   document.getElementById('area-usb').classList.toggle('active', a === 'usb');
   document.getElementById('area-archive').classList.toggle('active', a === 'archive');
+  const waitBox = document.getElementById('usb-wait-box');
+  if (waitBox && a !== 'usb') waitBox.hidden = true;
   document.getElementById('usb-hint').style.display = a === 'usb' ? '' : 'none';
   document.getElementById('arch-hint').style.display = a === 'archive' ? '' : 'none';
   document.getElementById('purge-box').style.display = a === 'usb' ? 'flex' : 'none';
@@ -9555,10 +9817,39 @@ function usbStatusHtml(attached, msg) {
 }
 async function usbAttach() {
   toast('⏳ 正在连接 (车机读取将断开几秒)...');
-  const r = await fetch('/api/usb/attach', { method: 'POST' });
+  const r = await fetch('/api/usb/attach', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ wait: true }) });
   const j = await r.json();
-  toast(j.ok ? '✅ 已连接车机U盘' : '❌ ' + j.msg);
-  curDir = '';
+  if (!j.ok) { toast('❌ ' + j.msg); refreshFiles(); return; }
+  // 被占用时服务端自动重试, 这里轮询等待进度, 用户可随时取消
+  usbWaitPaint(j.job || { state: 'running' });
+  clearInterval(USB_WAIT_POLL);
+  USB_WAIT_POLL = setInterval(async () => {
+    let s;
+    try { s = await (await fetch('/api/usb/job', { cache: 'no-store' })).json(); } catch (e) { return; }
+    const job = s.job || {};
+    usbWaitPaint(job);
+    if (job.state === 'running') return;
+    clearInterval(USB_WAIT_POLL); USB_WAIT_POLL = null;
+    usbWaitPaint(job);
+    if (job.state === 'done') { toast('✅ 已连接车机U盘'); curDir = ''; }
+    else if (job.state === 'error') toast('❌ ' + (job.message || '连接失败'));
+    refreshFiles();
+  }, 1000);
+}
+let USB_WAIT_POLL = null;
+function usbWaitPaint(job) {
+  const box = document.getElementById('usb-wait-box');
+  if (!box) return;
+  box.hidden = job.state !== 'running';
+  if (!box.hidden) document.getElementById('usb-wait-msg').textContent = job.message || '正在连接…';
+}
+async function usbAttachCancel() {
+  clearInterval(USB_WAIT_POLL); USB_WAIT_POLL = null;
+  try { await fetch('/api/usb/attach/cancel', { method: 'POST' }); } catch (e) {}
+  const box = document.getElementById('usb-wait-box');
+  if (box) box.hidden = true;
+  toast('已取消连接重试');
   refreshFiles();
 }
 async function usbDetach() {
@@ -10819,6 +11110,64 @@ def usb_detach():
         return True, "detached"
 
 
+_USB_JOB_LOCK = threading.Lock()
+_USB_JOB = {"state": "idle", "message": "", "elapsed": 0, "attempts": 0, "cancel": False}
+USB_ATTACH_WAIT_MAX = 300   # 自动重试最长等待秒数
+
+
+def usb_job():
+    with _USB_JOB_LOCK:
+        return {k: v for k, v in _USB_JOB.items() if k != "cancel"}
+
+
+def usb_attach_async():
+    """连接车机 U 盘; 被占用时每 2 秒自动重试并报告等待进度, 可取消。"""
+    with _USB_JOB_LOCK:
+        if _USB_JOB["state"] == "running":
+            return {"ok": True, "job": usb_job(), "msg": "正在等待连接"}
+        _USB_JOB.update(state="running", message="正在连接车机 U 盘…", elapsed=0,
+                        attempts=0, cancel=False)
+
+    def work():
+        t0 = time.time()
+        try:
+            while True:
+                with _USB_JOB_LOCK:
+                    if _USB_JOB["cancel"]:
+                        _USB_JOB.update(state="idle", message="已取消连接")
+                        return
+                    _USB_JOB["attempts"] += 1
+                    attempts = _USB_JOB["attempts"]
+                try:
+                    ok, msg = usb_attach()
+                except Exception as ex:
+                    ok, msg = False, str(ex)[:120]
+                if ok:
+                    _USB_JOB.update(state="done", message="已连接车机 U 盘",
+                                    elapsed=int(time.time() - t0))
+                    return
+                waited = int(time.time() - t0)
+                if waited >= USB_ATTACH_WAIT_MAX:
+                    _USB_JOB.update(state="error",
+                                    message="等待 %d 秒仍被占用：%s" % (waited, msg))
+                    return
+                _USB_JOB.update(elapsed=waited,
+                                message="U 盘正被占用（%s），自动重试中：第 %d 次，已等待 %d 秒"
+                                        % (msg, attempts, waited))
+                time.sleep(2)
+        except Exception as ex:
+            _USB_JOB.update(state="error", message=str(ex)[:160])
+
+    threading.Thread(target=work, daemon=True, name="usb-attach-wait").start()
+    return {"ok": True, "job": usb_job()}
+
+
+def usb_attach_cancel():
+    with _USB_JOB_LOCK:
+        _USB_JOB["cancel"] = True
+    return {"ok": True, "msg": "已请求取消"}
+
+
 def _force_image_offline():
     """调整/格式化前强制停掉网页 U 盘管理和 loop 挂载, 不再要求用户先手动恢复导出。"""
     global usb_attached, usb_timer
@@ -11899,6 +12248,45 @@ def disk_usage():
     return d
 
 
+def _usb_host_state():
+    """USB gadget 与车机的连接状态: configured=已连接, not attached=未插车, ''=未导出。"""
+    try:
+        with open(os.path.join(GADGET_DIR, "UDC")) as f:
+            bound = f.read().strip()
+        if not bound:
+            return ""
+        try:
+            with open("/sys/class/udc/%s/state" % bound) as f:
+                return f.read().strip()
+        except OSError:
+            return "unknown"
+    except OSError:
+        return "unknown"
+
+
+def live_sync_state(copy_bps):
+    """顶栏实时同步状态: syncing=正在从车机 U 盘复制到归档区, idle=在线待机, offline=未同步。"""
+    reason = ""
+    if usb_attached or os.path.ismount(MNT):
+        reason = "文件管理已连接车机 U 盘，暂停同步"
+    elif not os.path.isfile(IMG):
+        reason = "车机 U 盘镜像尚未创建"
+    else:
+        host = _usb_host_state()
+        if host == "":
+            reason = "USB 未导出到车机"
+        elif host in ("not attached", "disconnected"):
+            reason = "车机 U 盘已断开连接"
+    if reason:
+        return {"state": "offline", "bps": 0, "reason": reason}
+    if _ARCH_SYNC.get("state") == "running":
+        return {"state": "syncing", "bps": int(_ARCH_SYNC.get("bps") or copy_bps or 0),
+                "reason": "手动同步/迁移进行中"}
+    if copy_bps > 0:
+        return {"state": "syncing", "bps": int(copy_bps), "reason": "正在复制车机 U 盘新片段到归档区"}
+    return {"state": "idle", "bps": 0, "reason": "在线，等待车机新片段"}
+
+
 def live_status():
     """车机在线只读同步的健康状态 (给页面显示心跳)"""
     running = _proc_running(LIVE_SCRIPT)
@@ -11938,7 +12326,8 @@ def live_status():
     if _ARCH_SYNC.get("state") == "running" and _ARCH_SYNC.get("bps"):
         copy_bps = max(copy_bps, int(_ARCH_SYNC["bps"]))
     return {"running": running, "pending": pending, "ago": ago, "last": last,
-            "copy_bps": copy_bps, "disk": disk_usage(), "sys": sys_status(),
+            "copy_bps": copy_bps, "sync": live_sync_state(copy_bps),
+            "disk": disk_usage(), "sys": sys_status(),
             # 全新安装尚未创建车机镜像: 前端据此引导到「存储分配」完成首次设置
             "setup_needed": not os.path.isfile(IMG)}
 
@@ -12309,6 +12698,13 @@ def require_encoder_args(preset="superfast"):
     return args
 
 APP_HOME = os.path.dirname(os.path.realpath(__file__))
+# 外置卡测速时创建该标志文件, 在线同步/手动同步见到它就暂停写入, 测速结束删除即恢复
+SYNC_PAUSE_FLAG = os.environ.get("TSF_SYNC_PAUSE") or os.path.join(APP_HOME, ".sync-pause")
+
+
+def sync_write_paused():
+    """测速等场景下暂停所有同步写入 (tesla-live-sync 也检查同一个文件)。"""
+    return os.path.exists(SYNC_PAUSE_FLAG)
 # 程序缓存 (缩略图/遥测/多路合成临时) 放在安装目录 cache/ 下, 不占数据卡:
 #   thumbs / tel-cache / stitch-tmp。转码缓存单独放在归档区内 (TRANSCODE_DIR,
 #   见文件顶部定义), 与归档视频一一对应, 删归档视频时自动清理对应缓存。
@@ -12953,6 +13349,18 @@ def cleanup_archive():
                 msg='已清空归档区 (%d 个文件, %.1f MiB)' % (removed, freed / (1 << 20)))
 
 
+def reboot_system():
+    """重启整个 OpenWrt 系统, 用于挂载失败/格式化失败/长时间运行异常。
+    先同步磁盘, 延迟 2 秒执行, 让网页来得及收到响应。"""
+    try:
+        subprocess.Popen(['sh', '-c', 'sync; sleep 2; reboot'],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
+
+
 def restart_service():
     """重启本服务进程, 让存储路径/容量分配等启动期设置生效。
 
@@ -13475,7 +13883,71 @@ def external_card_info():
                      "label": _blkid(path, "LABEL"), "uuid": _blkid(path, "UUID"),
                      "free": free, "removable": removable}
             cards.append(entry)
-    return {"ok": True, "cards": cards, "data_root": VIDEO_ROOT}
+    return {"ok": True, "cards": cards, "data_root": VIDEO_ROOT, "boot": card_boot_config()}
+
+
+def card_boot_config():
+    """开机自动挂载外置卡的配置 (网页可改, 写入 /etc/tesla-sentry.conf)。"""
+    try:
+        delay = int(os.environ.get("TSF_CARD_MOUNT_DELAY", "20") or 20)
+    except ValueError:
+        delay = 20
+    return {"automount": os.environ.get("TSF_CARD_AUTOMOUNT", "0") == "1",
+            "delay": max(0, min(300, delay)),
+            "device": os.environ.get("TSF_CARD_DEVICE", ""),
+            "mountpoint": os.environ.get("TSF_CARD_MOUNTPOINT") or VIDEO_ROOT}
+
+
+def external_card_config(body):
+    """保存开机自动挂载设置; 挂载延迟建议 15–30 秒, 等 TF 卡与 USB 就绪。"""
+    body = body if isinstance(body, dict) else {}
+    enabled = 1 if body.get("automount") else 0
+    try:
+        delay = int(body.get("delay", 20) or 0)
+    except (TypeError, ValueError):
+        raise ValueError("延迟秒数必须是数字")
+    delay = max(0, min(300, delay))
+    device = str(body.get("device") or "")
+    if device and not re.match(r"^/dev/(mmcblk\d+(p\d+)?|sd[a-z]+\d*)$", device):
+        raise ValueError("设备路径不合法")
+    if enabled and not device:
+        raise ValueError("请先在上方列表里选中要自动挂载的外置卡")
+    mountpoint = str(body.get("mountpoint") or VIDEO_ROOT).strip() or VIDEO_ROOT
+    if not mountpoint.startswith("/") or ".." in mountpoint:
+        raise ValueError("挂载点不合法")
+    sync_conf({"TSF_CARD_AUTOMOUNT": str(enabled), "TSF_CARD_MOUNT_DELAY": str(delay),
+               "TSF_CARD_DEVICE": device, "TSF_CARD_MOUNTPOINT": mountpoint})
+    os.environ["TSF_CARD_AUTOMOUNT"] = str(enabled)
+    os.environ["TSF_CARD_MOUNT_DELAY"] = str(delay)
+    os.environ["TSF_CARD_DEVICE"] = device
+    os.environ["TSF_CARD_MOUNTPOINT"] = mountpoint
+    return {"ok": True, "msg": "已保存，下次开机生效（建议延迟 15–30 秒）", "boot": card_boot_config()}
+
+
+def _card_boot_mount():
+    """开机后按配置的延迟自动挂载外置卡; 已挂载或未启用时直接返回。"""
+    try:
+        if os.environ.get("TSF_CARD_AUTOMOUNT", "0") != "1":
+            return
+        dev = os.environ.get("TSF_CARD_DEVICE", "")
+        if not dev:
+            return
+        mp = os.environ.get("TSF_CARD_MOUNTPOINT") or VIDEO_ROOT
+        try:
+            delay = max(0, min(300, int(os.environ.get("TSF_CARD_MOUNT_DELAY", "20") or 20)))
+        except ValueError:
+            delay = 20
+        time.sleep(delay)
+        if os.path.ismount(mp):
+            return
+        os.makedirs(mp, exist_ok=True)
+        r = _run_cmd(["mount", dev, mp], timeout=60)
+        if r.returncode != 0:
+            print("card automount failed: %s -> %s: %s" % (dev, mp, (r.stderr or "").strip()[:120]), flush=True)
+        else:
+            print("card automount ok: %s -> %s" % (dev, mp), flush=True)
+    except Exception as ex:
+        print("card automount: %s" % ex, flush=True)
 
 
 def _card_job_set(**kw):
@@ -13493,7 +13965,8 @@ def _resolve_mount(target):
 
 
 def external_card_speed(body):
-    """在存储卡上写 1G 再读回, 给出顺序写/读速度 (MB/s)。"""
+    """在存储卡上写 512MB 再读回, 给出顺序写/读速度 (MB/s)。
+    测速期间通过标志文件暂停所有同步写入, 结束后自动恢复, 保证数据准确。"""
     if not isinstance(body, dict):
         body = {}
     target = str(body.get("mount") or "").strip()
@@ -13502,13 +13975,23 @@ def external_card_speed(body):
         raise ValueError("找不到可写的存储卡挂载点")
     if _CARD_JOB["state"] == "running":
         raise ValueError("正在执行其它外置卡任务")
-    _card_job_set(state="running", kind="speed", message="正在写入测试文件", write=0.0, read=0.0, pct=0, speed=0.0)
+    _card_job_set(state="running", kind="speed", message="正在写入测试文件（已暂停同步写入）",
+                  write=0.0, read=0.0, pct=0, speed=0.0)
 
     def work():
         fp = os.path.join(mp, ".tsf-speedtest.bin")
-        size = 1024 * 1024 * 1024
+        size = 512 * 1024 * 1024
         chunk = b"\0" * (1024 * 1024)
+        paused = False
         try:
+            try:
+                with open(SYNC_PAUSE_FLAG, "w") as f:
+                    f.write("card-speed\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                paused = True
+            except OSError:
+                pass
             t0 = time.monotonic()
             with open(fp, "wb", buffering=0) as f:
                 for index in range(size // len(chunk)):
@@ -13516,7 +13999,7 @@ def external_card_speed(body):
                     if index % 32 == 31:
                         elapsed = max(.001, time.monotonic() - t0)
                         written = (index + 1) * len(chunk)
-                        _card_job_set(message="正在写入测试文件", pct=round(written / size * 50),
+                        _card_job_set(message="正在写入测试文件（同步已暂停）", pct=round(written / size * 50),
                                       speed=round(written / elapsed / 1048576, 1))
                 f.flush()
                 os.fsync(f.fileno())
@@ -13531,13 +14014,13 @@ def external_card_speed(body):
                     read += len(block)
                     if read % (32 * len(chunk)) == 0:
                         elapsed = max(.001, time.monotonic() - t1)
-                        _card_job_set(message="正在读回测试", pct=50 + round(read / size * 50),
+                        _card_job_set(message="正在读回测试（同步已暂停）", pct=50 + round(read / size * 50),
                                       speed=round(read / elapsed / 1048576, 1))
             rt = time.monotonic() - t1
             w = size / wt / 1048576 if wt > 0 else 0
             r = size / rt / 1048576 if rt > 0 else 0
             _card_job_set(state="done", write=round(w, 1), read=round(r, 1), pct=100, speed=0.0,
-                          message="写入 %.1f MB/s，读取 %.1f MB/s" % (w, r))
+                          message="写入 %.1f MB/s，读取 %.1f MB/s（512MB，同步写入已恢复）" % (w, r))
         except Exception as ex:
             _card_job_set(state="error", message="测速失败: %s" % str(ex)[:120])
         finally:
@@ -13545,6 +14028,11 @@ def external_card_speed(body):
                 os.unlink(fp)
             except OSError:
                 pass
+            if paused:
+                try:
+                    os.unlink(SYNC_PAUSE_FLAG)     # 测速结束, 恢复同步写入
+                except OSError:
+                    pass
 
     threading.Thread(target=work, daemon=True, name="card-speed").start()
     return {"ok": True, "job": dict(_CARD_JOB)}
@@ -13634,6 +14122,49 @@ def external_card_format(body):
     return {"ok": True, "job": dict(_CARD_JOB)}
 
 
+def _archive_dir_tree(path):
+    """归档目录的分类文件树: 顶层分类 + 一层子目录, 带大小/文件数, 供按分类勾选迁移。
+    根目录散落的文件用 path='' 的伪节点表示。"""
+    sizes, counts = {}, {}
+    loose = loose_n = 0
+    try:
+        for dp, dns, fns in os.walk(path):
+            dns[:] = [d for d in dns if not d.startswith(".")]
+            rel = os.path.relpath(dp, path)
+            parts = [] if rel == "." else rel.split(os.sep)
+            for fn in fns:
+                if fn.startswith("."):
+                    continue
+                try:
+                    sz = os.path.getsize(os.path.join(dp, fn))
+                except OSError:
+                    continue
+                if not parts:
+                    loose += sz
+                    loose_n += 1
+                    continue
+                key = parts[0]
+                sizes[key] = sizes.get(key, 0) + sz
+                counts[key] = counts.get(key, 0) + 1
+                if len(parts) >= 2:
+                    sub = key + "/" + parts[1]
+                    sizes[sub] = sizes.get(sub, 0) + sz
+                    counts[sub] = counts.get(sub, 0) + 1
+    except OSError:
+        pass
+    tree = []
+    for name in sorted(k for k in sizes if "/" not in k):
+        children = [{"name": k.split("/", 1)[1], "path": k, "size": sizes[k],
+                     "files": counts[k], "children": []}
+                    for k in sorted(sizes) if k.startswith(name + "/") and k.count("/") == 1]
+        tree.append({"name": name, "path": name, "size": sizes[name],
+                     "files": counts[name], "children": children})
+    if loose:
+        tree.append({"name": "根目录散落文件", "path": "", "size": loose,
+                     "files": loose_n, "children": []})
+    return tree
+
+
 def _scan_archive_locations(force=False):
     now = time.time()
     if not force and _ARCH_SCAN["t"] and now - _ARCH_SCAN["t"] < 30:
@@ -13679,7 +14210,12 @@ def _scan_archive_locations(force=False):
                     sz = _dir_size(ap)
                 except Exception:
                     sz = 0
-                items.append({"type": "archive", "path": ap, "size": sz})
+                tree = []
+                try:
+                    tree = _archive_dir_tree(ap)
+                except Exception:
+                    tree = []
+                items.append({"type": "archive", "path": ap, "size": sz, "tree": tree})
                 dns[:] = []
     _ARCH_SCAN.update(t=now, items=items)
     return {"ok": True, "items": items, "cached": False,
@@ -13691,6 +14227,8 @@ def archive_sync_start():
         raise ValueError("归档区同步正在进行")
     if storage_busy():
         raise ValueError("正在调整容量或格式化 U 盘，请稍后再试")
+    if sync_write_paused():
+        raise ValueError("正在进行外置卡测速，已暂停所有同步写入，请测速结束后再试")
     if not usb_img_ready():
         raise ValueError("镜像未就绪: 车机可能正在格式化 U 盘，请稍后再试")
     du = disk_usage()
@@ -13724,6 +14262,8 @@ def archive_sync_start():
             env = dict(os.environ, TSF_LIVE_LOG=LIVE_LOG)
             quiet = 0
             for _ in range(8):
+                if sync_write_paused():
+                    raise ValueError("外置卡测速开始，已暂停同步写入，测速结束后请重新同步")
                 r = _run_cmd([sys.executable, "-B", script, "--once"], timeout=180, env=env)
                 if r.returncode != 0 and not quiet:
                     raise ValueError("同步失败: " + (r.stderr or r.stdout or "").strip()[:160])
@@ -13819,95 +14359,209 @@ def _migrate_items(body):
     items = []
     for x in raw if isinstance(raw, list) else []:
         p = str((x or {}).get("path") or "")
-        if p in known:
-            items.append(known[p])
+        if p not in known:
+            continue
+        it = dict(known[p])
+        # 归档目录支持只迁移勾选的分类子目录; None 表示整个目录
+        dirs = (x or {}).get("dirs")
+        if it["type"] == "archive" and isinstance(dirs, list):
+            valid = set()
+            for node in it.get("tree") or []:
+                valid.add(node["path"])
+                if node["path"]:
+                    # 'A/' 表示只要 A 目录下的直接文件 (取消勾选某个子目录后由前端拆分出来)
+                    valid.add(node["path"] + "/")
+                for child in node.get("children") or []:
+                    valid.add(child["path"])
+            picked = []
+            for d in dirs:
+                d = str(d or "").replace("\\", "/")
+                if d == ".":
+                    d = ""
+                if d in valid:
+                    picked.append(d)
+            if not picked:
+                continue
+            it["dirs"] = picked
+        else:
+            it["dirs"] = None
+        items.append(it)
     if not items:
         raise ValueError("没有可迁移的项目，请先重新扫描")
     return items
 
 
-def _image_relpaths(image):
-    """只读挂载镜像并返回内部文件相对路径集合 (用于迁移前检测同名文件)。"""
+def _archive_selected_files(it):
+    """按勾选的分类筛选归档目录里的文件。返回 (绝对路径, 相对路径, 大小) 列表。
+    勾选规则: 'A' = 整个分类, 'A/' = 只要 A 的直接文件, 'A/b' = 只要子目录 b, '' = 根目录散落文件。"""
+    picked = it.get("dirs")
+    out = []
+    for fp, rel, size in _walk_files(it["path"]):
+        if picked is not None:
+            parts = rel.replace("\\", "/").split("/")
+            top = parts[0]
+            if len(parts) == 1:
+                if "" not in picked:
+                    continue
+            elif len(parts) == 2:
+                if top not in picked and top + "/" not in picked:
+                    continue
+            elif top not in picked and top + "/" + parts[1] not in picked:
+                continue
+        out.append((fp, rel, size))
+    return out
+
+
+def _fsync_dir(path):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _image_files(image):
+    """只读挂载镜像, 返回内部文件 (相对路径, 大小) 列表。"""
     dev = _mount_loop(image, readonly=True)
     try:
         if not _mount_fs(dev, "/tmp/tsf-migrate-probe", readonly=True):
-            return set()
-        return {rel for _, rel, _ in _walk_files("/tmp/tsf-migrate-probe")}
+            raise ValueError("无法只读挂载镜像 " + image)
+        return [(rel, size) for _, rel, size in _walk_files("/tmp/tsf-migrate-probe")]
     finally:
         _unmount_loop(dev, "/tmp/tsf-migrate-probe")
 
 
+def _image_relpaths(image):
+    """只读挂载镜像并返回内部文件相对路径集合 (用于迁移前检测同名文件)。"""
+    try:
+        return {rel for rel, _ in _image_files(image)}
+    except Exception:
+        return set()
+
+
 def archive_migrate(body):
-    """把非默认位置的 teslacam.img / archive 迁移到默认镜像与归档区。"""
+    """把非默认位置的 teslacam.img / archive 迁移到默认镜像与归档区。
+    镜像: 只读挂载源镜像复制进默认镜像, 全部校验通过后才删除源镜像;
+    归档: 同一存储介质用硬链接、跨介质先复制, 逐文件校验通过后才删除源文件。"""
     items = _migrate_items(body)
     policy = str((body or {}).get("policy") or "")
     if policy not in ("", "overwrite", "rename"):
         raise ValueError("覆盖策略不合法")
     if _ARCH_SYNC["state"] == "running":
         raise ValueError("已有同步任务在进行")
-    total = sum(i.get("size") or 0 for i in items)
-    du = disk_usage()
-    if any(i["type"] == "img" for i in items) and du.get("img_used") is None:
-        raise ValueError("镜像未就绪，暂时无法迁移镜像文件")
-    free = (du.get("img_nominal") or 0) - (du.get("img_used") or 0) if any(i["type"] == "img" for i in items) else 0
-    arc_free = 0
+    if storage_busy():
+        raise ValueError("正在调整容量或格式化 U 盘，请稍后再试")
+    if sync_write_paused():
+        raise ValueError("正在进行外置卡测速，已暂停所有同步写入，请测速结束后再试")
+    img_items = [i for i in items if i["type"] == "img"]
+    if img_items and not os.path.isfile(IMG):
+        return {"ok": False, "need_img": True,
+                "msg": "默认车机 U 盘镜像不存在，无法接收迁移内容。请先到「存储分配 → 调整车机 U 盘容量」"
+                       "按源镜像容量创建默认镜像（创建后即可直接插车使用），再重新执行迁移。"}
+    conflicts, plans = [], []
+    total = 0
+    arc_need = 0
     try:
-        st = os.statvfs(ARCHIVE)
-        arc_free = st.f_bavail * st.f_frsize
+        arc_dev = os.stat(ARCHIVE).st_dev
     except OSError:
-        pass
-    free = max(free, 0) + max(arc_free, 0)
-    if total > free:
-        return {"ok": False, "no_space": True, "total": total, "free": free,
-                "msg": "目标空间不足：需要 %s，可用 %s。建议先清理归档区或减少迁移项目。" % (
-                    _fmt_size(total), _fmt_size(free))}
-    conflicts = []
+        arc_dev = None
     for it in items:
-        if it["type"] == "archive":
-            for fp, rel, _ in _walk_files(it["path"]):
-                dst = os.path.join(ARCHIVE, rel)
-                if os.path.exists(dst):
-                    conflicts.append({"src": fp, "dst": dst})
-    # 镜像: 只读挂载两边比对文件名; 该探测会让车机短暂断开导出, 仅在没有策略时做一次
-    if not policy and any(i["type"] == "img" for i in items):
+        if it["type"] != "archive":
+            continue
+        files = _archive_selected_files(it)
+        it["files"] = files
         try:
-            for _ in range(20):
-                if _acquire_usb_flock():
-                    break
-                time.sleep(0.5)
-            else:
-                raise ValueError("busy")
+            it["same_dev"] = arc_dev is not None and os.stat(it["path"]).st_dev == arc_dev
+        except OSError:
+            it["same_dev"] = False
+        for fp, rel, size in files:
+            total += size
+            # 同一介质走硬链接, 不额外占空间, 不需要预留双倍容量
+            if not it["same_dev"]:
+                arc_need += size
+            dst = os.path.join(ARCHIVE, rel)
+            if os.path.exists(dst):
+                conflicts.append({"src": fp, "dst": dst})
+    img_need = 0
+    img_free = 0
+    if img_items:
+        du = disk_usage()
+        if du.get("img_used") is None:
+            raise ValueError("镜像未就绪，暂时无法迁移镜像文件")
+        img_free = max(0, (du.get("img_nominal") or 0) - (du.get("img_used") or 0))
+        # 只读挂载两边比对文件名与实际内容大小; 探测会让车机短暂断开导出
+        dst_names = set()
+        for _ in range(20):
+            if _acquire_usb_flock():
+                break
+            time.sleep(0.5)
+        else:
+            raise ValueError("U 盘正被其它任务占用，请稍后再试")
+        try:
             _gadget_rebind(False)
             time.sleep(1)
             try:
                 dst_names = _image_relpaths(IMG)
             finally:
                 _gadget_rebind(True)
-                _release_usb_flock()
-            for it in items:
-                if it["type"] != "img":
-                    continue
-                for rel in _image_relpaths(it["path"]):
-                    if rel in dst_names:
-                        conflicts.append({"src": os.path.join(it["path"], rel),
-                                          "dst": os.path.join(IMG, rel)})
-        except Exception:
-            pass
+        finally:
+            _release_usb_flock()
+        for it in img_items:
+            try:
+                files = _image_files(it["path"])
+            except Exception as ex:
+                return {"ok": False, "msg": "读取源镜像失败：%s（%s）" % (it["path"], str(ex)[:100])}
+            plans.append({"item": it, "files": files})
+            for rel, size in files:
+                img_need += size
+                total += size
+                if rel in dst_names:
+                    conflicts.append({"src": os.path.join(it["path"], rel),
+                                      "dst": os.path.join(IMG, rel)})
+    if img_need > img_free:
+        need_gib = math.ceil(((du.get("img_used") or 0) + img_need) / (1 << 30))
+        return {"ok": False, "no_space": True, "img_short": True,
+                "total": img_need, "free": img_free,
+                "msg": "默认车机 U 盘空间不足：待迁入内容 %s，镜像内剩余 %s。解决方案：\n"
+                       "1）到「存储分配 → 调整车机 U 盘容量」把容量调到至少 %dG 再迁移"
+                       "（会清空默认镜像内现有内容，归档区不受影响，建议先点「立即同步到归档区」）；\n"
+                       "2）或减少勾选的镜像/分类，分批迁移；\n"
+                       "3）或先在文件管理里删除默认镜像中不需要的录像。"
+                       % (_fmt_size(img_need), _fmt_size(img_free), need_gib)}
+    arc_free = 0
+    try:
+        st = os.statvfs(ARCHIVE)
+        arc_free = st.f_bavail * st.f_frsize
+    except OSError:
+        pass
+    if arc_need > arc_free:
+        return {"ok": False, "no_space": True, "total": arc_need, "free": arc_free,
+                "msg": "归档区空间不足：需要 %s，可用 %s。建议先清理归档区、减少勾选的分类，"
+                       "或把源目录移到与归档区同一张存储卡后用硬链接迁移（不占额外空间）。"
+                       % (_fmt_size(arc_need), _fmt_size(arc_free))}
     if conflicts and not policy:
         return {"ok": False, "need_policy": True, "conflicts": conflicts[:200],
-                "conflict_count": len(conflicts), "total": total, "free": free,
+                "conflict_count": len(conflicts), "total": total, "free": arc_free,
                 "msg": "发现 %d 个同名文件。选择全部覆盖或自动重命名后再继续。" % len(conflicts)}
     _ARCH_SYNC.update(state="running", message="正在迁移…", total=total, done=0, pct=0,
                       bps=0, sources=[i["path"] for i in items], conflicts=conflicts,
                       copied=0, failed=[])
-    threading.Thread(target=_migrate_work, args=(items, policy, total), daemon=True,
+    threading.Thread(target=_migrate_work, args=(items, plans, policy, total), daemon=True,
                      name="archive-migrate").start()
     return {"ok": True, "job": dict(_ARCH_SYNC)}
-
-
-def _migrate_work(items, policy, total):
+def _migrate_work(items, plans, policy, total):
+    """迁移执行。断电安全原则:
+    - 复制一律先写 .tsf-migrating 临时文件, fsync 后原子改名, 再校验大小;
+    - 同一介质用硬链接 (不复制数据), 链接并校验后才删源;
+    - 源文件只有在目标校验通过后才会被删除, 中途断电最坏情况是两边同时存在, 不会丢数据。"""
     done = 0
     failed = []
+    removed = []
     t0 = time.time()
 
     def progress(nbytes):
@@ -13915,7 +14569,7 @@ def _migrate_work(items, policy, total):
         done += nbytes
         pct = 0 if total <= 0 else min(100, round(done * 100.0 / total))
         el = max(0.001, time.time() - t0)
-        _ARCH_SYNC.update(done=done, pct=pct, bps=done / el)
+        _ARCH_SYNC.update(done=done, pct=pct, bps=done / el, copied=done)
 
     def dest_for(dst):
         if not os.path.exists(dst):
@@ -13928,25 +14582,74 @@ def _migrate_work(items, policy, total):
             i += 1
         return "%s (%d)%s" % (base, i, ext)
 
+    def copy_verified(src, dst, size):
+        tmp = dst + ".tsf-migrating"
+        try:
+            with open(src, "rb") as fi, open(tmp, "wb") as fo:
+                shutil.copyfileobj(fi, fo, 1024 * 1024)
+                fo.flush()
+                os.fsync(fo.fileno())
+            if os.path.getsize(tmp) != size:
+                raise OSError("复制后大小不一致")
+            os.replace(tmp, dst)
+            _fsync_dir(os.path.dirname(dst))
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+
+    def put_file(src, dst, size, same_dev):
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if same_dev:
+            try:
+                if os.path.exists(dst):
+                    # 覆盖: 先删目标再链接, 源文件始终还在, 断电也不丢
+                    os.unlink(dst)
+                os.link(src, dst)
+                st = os.stat(dst)
+                if st.st_size != size or not os.path.samefile(src, dst):
+                    raise OSError("硬链接校验失败")
+                _fsync_dir(os.path.dirname(dst))
+                return "link"
+            except OSError:
+                # 跨设备/不支持硬链接的文件系统退回复制
+                pass
+        copy_verified(src, dst, size)
+        return "copy"
+
+    def drop_source(src):
+        os.unlink(src)
+        _fsync_dir(os.path.dirname(src))
+
     try:
-        # 归档文件夹: 直接合并复制
+        # 归档目录: 同介质硬链接, 跨介质复制, 逐文件校验后再删源文件
         for it in items:
             if it["type"] != "archive":
                 continue
-            for fp, rel, size in _walk_files(it["path"]):
-                dst = dest_for(os.path.join(ARCHIVE, rel))
+            _ARCH_SYNC.update(message="正在迁移归档目录 " + it["path"])
+            for fp, rel, size in it.get("files") or []:
                 try:
-                    os.makedirs(os.path.dirname(dst), exist_ok=True)
-                    shutil.copyfile(fp, dst)
-                    shutil.copystat(fp, dst)
+                    dst = dest_for(os.path.join(ARCHIVE, rel))
+                    put_file(fp, dst, size, it.get("same_dev"))
                     if os.path.getsize(dst) != size:
-                        raise OSError("复制后大小不一致")
+                        raise OSError("目标校验失败")
+                    drop_source(fp)
                     progress(size)
                 except Exception as ex:
                     failed.append("%s: %s" % (fp, str(ex)[:60]))
-        # 镜像文件: 只读挂载源, 短暂断开导出后写入默认镜像
-        imgs = [it for it in items if it["type"] == "img"]
-        if imgs:
+            # 只清理空目录, 未勾选的分类原样保留
+            for dp, dns, fns in os.walk(it["path"], topdown=False):
+                try:
+                    os.rmdir(dp)
+                except OSError:
+                    pass
+            if not os.path.isdir(it["path"]):
+                removed.append(it["path"])
+        # 镜像: 只读挂载源, 短暂断开导出后写入默认镜像, 全部校验通过才删除源镜像
+        if plans:
+            _ARCH_SYNC.update(message="正在迁移镜像到默认车机 U 盘")
             for _ in range(20):
                 if _acquire_usb_flock():
                     break
@@ -13961,27 +14664,35 @@ def _migrate_work(items, policy, total):
                 dstdev = _mount_loop(IMG, readonly=False)
                 if not _mount_fs(dstdev, "/tmp/tsf-migrate-dst", readonly=False):
                     raise ValueError("默认镜像挂载失败")
-                for it in imgs:
-                    srcdev = _mount_loop(it["path"], readonly=True)
-                    srcdevs.append(srcdev)
-                    if not _mount_fs(srcdev, "/tmp/tsf-migrate-src", readonly=True):
-                        failed.append("%s: 无法只读挂载" % it["path"])
-                        _unmount_loop(srcdev, "/tmp/tsf-migrate-src"); srcdevs.pop()
-                        continue
+                for plan in plans:
+                    it = plan["item"]
+                    bad = 0
+                    srcdev = ""
                     try:
-                        for fp, rel, size in _walk_files("/tmp/tsf-migrate-src"):
-                            dst = dest_for(os.path.join("/tmp/tsf-migrate-dst", rel))
+                        srcdev = _mount_loop(it["path"], readonly=True)
+                        srcdevs.append(srcdev)
+                        if not _mount_fs(srcdev, "/tmp/tsf-migrate-src", readonly=True):
+                            raise ValueError("无法只读挂载")
+                        for rel, size in plan["files"]:
+                            src = os.path.join("/tmp/tsf-migrate-src", rel)
                             try:
-                                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                                shutil.copyfile(fp, dst)
-                                progress(size)
+                                dst = dest_for(os.path.join("/tmp/tsf-migrate-dst", rel))
+                                copy_verified(src, dst, size)
                                 if os.path.getsize(dst) != size:
-                                    raise OSError("复制后大小不一致")
+                                    raise OSError("目标校验失败")
+                                progress(size)
                             except Exception as ex:
-                                failed.append("%s: %s" % (fp, str(ex)[:60]))
+                                bad += 1
+                                failed.append("%s(%s): %s" % (it["path"], rel, str(ex)[:60]))
+                        if not bad:
+                            removed.append(it["path"])
+                    except Exception as ex:
+                        failed.append("%s: %s" % (it["path"], str(ex)[:60]))
                     finally:
-                        _unmount_loop(srcdev, "/tmp/tsf-migrate-src")
-                        srcdevs.pop()
+                        if srcdev:
+                            _unmount_loop(srcdev, "/tmp/tsf-migrate-src")
+                            if srcdev in srcdevs:
+                                srcdevs.remove(srcdev)
             finally:
                 try:
                     _run_cmd(["umount", "/tmp/tsf-migrate-dst"], timeout=30)
@@ -13994,8 +14705,18 @@ def _migrate_work(items, policy, total):
                 _gadget_rebind(True)
                 _release_usb_flock()
                 _IMG_USED_CACHE.update(t=0.0, path="", v=None)
-        _ARCH_SYNC.update(state="done", pct=100, done=done, failed=failed,
-                          message="迁移完成" if not failed else "迁移完成，%d 个文件失败" % len(failed))
+            # 只有全部文件都校验通过的源镜像才删除; 有失败的保留源镜像便于重试
+            for plan in plans:
+                path = plan["item"]["path"]
+                if path in removed and os.path.isfile(path):
+                    try:
+                        drop_source(path)
+                    except OSError as ex:
+                        failed.append("%s: 删除源镜像失败 %s" % (path, str(ex)[:60]))
+        _ARCH_SCAN.update(t=0.0)
+        _ARCH_SYNC.update(state="done", pct=100, done=done, failed=failed, removed=removed,
+                          message="迁移完成，源文件已在校验通过后删除" if not failed
+                          else "迁移完成，%d 个文件失败（对应源文件已保留）" % len(failed))
     except Exception as ex:
         _ARCH_SYNC.update(state="error", failed=failed, message=str(ex)[:200])
 
@@ -14010,9 +14731,23 @@ def archive_migrate_delete(body):
         try:
             if it["type"] == "img":
                 os.unlink(it["path"])
+                removed.append(it["path"])
+            elif it.get("dirs") is not None:
+                # 只删除勾选的分类内容, 其余分类保留
+                for fp, rel, size in _archive_selected_files(it):
+                    try:
+                        os.unlink(fp)
+                    except OSError:
+                        pass
+                for dp, dns, fns in os.walk(it["path"], topdown=False):
+                    try:
+                        os.rmdir(dp)
+                    except OSError:
+                        pass
+                removed.append(it["path"])
             else:
                 shutil.rmtree(it["path"])
-            removed.append(it["path"])
+                removed.append(it["path"])
         except OSError:
             pass
     _ARCH_SCAN.update(t=0.0, items=[])
@@ -16881,8 +17616,79 @@ def order_files(names):
 #   * 每路 触发段 + 前后各一段: 新款 6 路最多 18 个文件, 老款 4 路最多 12 个
 #   * 串行转码, 且只借 Q_SEM 一个名额: 有人在看视频 / 有人在等转码就让位
 #   * 最近 2 分钟还在写的事件跳过, 免得转半截文件
-PREWARM = {"on": os.environ.get("TSF_PREWARM", "1") != "0", "done": 0, "last": "", "skip": {}}
+PREWARM = {"on": os.environ.get("TSF_PREWARM", "1") != "0", "done": 0, "last": "", "skip": {},
+           # 手动/暂停转码与进度统计
+           "paused": False, "idle_since": None, "manual": False, "working": False,
+           "cur": "", "cur_done": 0, "cur_total": 0, "total": 0, "remain": 0,
+           "batch_done": 0, "spf": 0.0, "eta": 0, "started": 0.0}
+PREWARM_WAKE = threading.Event()
+PREWARM_PAUSE_IDLE_S = 600          # 暂停转码后, 系统连续空闲 10 分钟自动恢复
 PREWARM_CATS = ("SentryClips", "SavedClips")
+
+
+def prewarm_status():
+    """给「播放设置」的实时转码状态: 当前事件进度、总进度、预计剩余时间。"""
+    total = int(PREWARM.get("total") or 0)
+    done = int(PREWARM.get("batch_done") or 0)
+    remain = int(PREWARM.get("remain") or 0)
+    pct = round(done * 100.0 / total) if total > 0 else (100 if not remain else 0)
+    cur_total = int(PREWARM.get("cur_total") or 0)
+    cur_done = int(PREWARM.get("cur_done") or 0)
+    return {"on": PREWARM["on"], "quality": prewarm_quality(),
+            "paused": bool(PREWARM["paused"]), "manual": bool(PREWARM["manual"]),
+            "working": bool(PREWARM["working"]),
+            "state": "paused" if PREWARM["paused"] else ("working" if PREWARM["working"] else "idle"),
+            "cur": PREWARM.get("cur") or "", "cur_done": cur_done, "cur_total": cur_total,
+            "cur_pct": round(cur_done * 100.0 / cur_total) if cur_total else 0,
+            "done": done, "total": total, "remain": remain, "pct": min(100, pct),
+            "eta": int(PREWARM.get("eta") or 0), "last": PREWARM.get("last") or "",
+            "pause_idle_s": PREWARM_PAUSE_IDLE_S,
+            "idle_left": max(0, int(PREWARM_PAUSE_IDLE_S - (time.time() - PREWARM["idle_since"]))
+                             if PREWARM["paused"] and PREWARM.get("idle_since") else 0)}
+
+
+def prewarm_start():
+    """手动立即转码: 立刻唤醒后台线程, 本轮不再因为有人观看而让位。"""
+    if not PREWARM["on"]:
+        return {"ok": False, "msg": "预转码已被 TSF_PREWARM=0 关闭"}
+    if not prewarm_quality():
+        return {"ok": False, "msg": "当前外网默认画质是「原画」，不需要转码；先在上方选择 720p/480p/360p"}
+    PREWARM["paused"] = False
+    PREWARM["idle_since"] = None
+    PREWARM["manual"] = True
+    PREWARM_WAKE.set()
+    return {"ok": True, "msg": "已开始转码，可在本页实时查看进度；离开页面不影响后台转码",
+            "job": prewarm_status()}
+
+
+def prewarm_pause_toggle():
+    """暂停/继续转码。暂停期间若系统连续空闲 10 分钟会自动恢复。"""
+    PREWARM["paused"] = not PREWARM["paused"]
+    PREWARM["idle_since"] = None
+    if not PREWARM["paused"]:
+        PREWARM_WAKE.set()
+    return {"ok": True, "msg": "已暂停转码（系统空闲 10 分钟后自动恢复）" if PREWARM["paused"] else "已恢复转码",
+            "job": prewarm_status()}
+
+
+def _prewarm_sleep(seconds):
+    PREWARM_WAKE.wait(seconds)
+    PREWARM_WAKE.clear()
+
+
+def _prewarm_pause_tick():
+    """暂停状态下: 有播放/转码活动就重新计时, 连续空闲 10 分钟自动取消暂停。"""
+    if MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0:
+        PREWARM["idle_since"] = None
+        return
+    now = time.time()
+    if not PREWARM.get("idle_since"):
+        PREWARM["idle_since"] = now
+        return
+    if now - PREWARM["idle_since"] >= PREWARM_PAUSE_IDLE_S:
+        PREWARM["paused"] = False
+        PREWARM["idle_since"] = None
+        print('prewarm: 系统空闲 10 分钟, 自动恢复转码', flush=True)
 
 
 def prewarm_quality():
@@ -16952,10 +17758,10 @@ def _prewarm_limits():
             "SavedClips": max(0, int(saved.get("prewarm_saved", 0)))}
 
 
-def _prewarm_pick(q):
-    """挑一个还有 q 档位没转的事件 (新的优先), 返回 (mtime, cat, name, [待转文件])"""
+def _prewarm_plan(q):
+    """列出所有还有 q 档位没转的事件 (新的优先), 返回 [(mtime, cat, name, [待转文件])]"""
     limits = _prewarm_limits()
-    best = None
+    jobs = []
     for cat in PREWARM_CATS:
         limit = limits.get(cat, 0)
         if limit <= 0:
@@ -16982,46 +17788,80 @@ def _prewarm_pick(q):
             if len(candidates) >= limit:
                 break                      # 只预转码最新 N 个事件
         for mt, name in candidates:
-            if best is not None and mt <= best[0]:
-                continue                   # 已经有更新的事件排在前面
             todo = [f for f in _prewarm_targets(cat, name) if not _variant_ready(f, q)]
             if todo:
-                best = (mt, cat, name, todo)
-    return best
+                jobs.append((mt, cat, name, todo))
+    jobs.sort(key=lambda j: j[0], reverse=True)
+    return jobs
+
+
+def _prewarm_pick(q):
+    """挑一个还有 q 档位没转的事件 (新的优先), 返回 (mtime, cat, name, [待转文件])"""
+    jobs = _prewarm_plan(q)
+    return jobs[0] if jobs else None
 
 
 # 预热白名单: 只有哨兵 + 手动保存。实时滚动记录 (RecentClips) 每分钟新增一段、很快滚动删除,
 # 预转出来的缓存几乎立刻作废, 只会让设备一直满载转码、SoC 长期高温, 所以不预热。
 # 用户真的点开实时滚动记录/实时预览时, /media 仍会按需后台转码 (不挡首帧)。
 def prewarm_loop():
-    """后台把新哨兵/手动保存事件的触发段转成设置里的外网画质; 有人看视频时让位"""
+    """后台把新哨兵/手动保存事件的触发段转成设置里的外网画质。
+    有人看视频时让位; 手动「立即转码」本轮不让位; 「暂停转码」空闲 10 分钟自动恢复。"""
     time.sleep(45)                             # 开机先让同步和服务稳定
     while True:
         try:
             q = prewarm_quality()
             if not PREWARM["on"] or not q:
-                time.sleep(60)                 # 选原画就关闭预热；一分钟复查一次设置
+                PREWARM.update(working=False, cur="", cur_done=0, cur_total=0, remain=0, eta=0)
+                _prewarm_sleep(60)             # 选原画就关闭预热；一分钟复查一次设置
                 continue
-            if MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0 or not preheat_allowed():
-                time.sleep(15)                 # 有人在用, 别抢
+            if PREWARM["paused"]:
+                PREWARM.update(working=False, eta=0)
+                _prewarm_pause_tick()
+                _prewarm_sleep(10)
                 continue
-            job = _prewarm_pick(q)
-            if not job:
-                time.sleep(12)                 # 都转好了, 短轮询以便接住新的哨兵/保存事件
+            manual = PREWARM["manual"]
+            if not manual and (MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0 or not preheat_allowed()):
+                PREWARM.update(working=False)
+                _prewarm_sleep(15)             # 有人在用, 别抢
                 continue
-            _mt, cat, name, todo = job
+            plan = _prewarm_plan(q)
+            remain = sum(len(j[3]) for j in plan)
+            done = int(PREWARM.get("batch_done") or 0)
+            spf = float(PREWARM.get("spf") or 0)
+            PREWARM.update(remain=remain, total=done + remain,
+                           eta=int(remain * spf) if spf > 0 else 0)
+            if not plan:
+                PREWARM.update(manual=False, working=False, cur="", cur_done=0, cur_total=0, eta=0)
+                _prewarm_sleep(12)             # 都转好了, 短轮询以便接住新的哨兵/保存事件
+                continue
+            _mt, cat, name, todo = plan[0]
+            PREWARM.update(working=True, cur="%s/%s" % (cat, name), cur_done=0, cur_total=len(todo))
             n = 0
             for fp in todo:
-                if MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0:
+                if PREWARM["paused"]:
+                    break                      # 暂停立即生效, 剩下的下次再做
+                if not PREWARM["manual"] and (MEDIA_ACTIVE[0] > 0 or USER_TRANS[0] > 0):
                     break                      # 用户来了, 剩下的下次再做
                 if not Q_SEM.acquire(blocking=False):
                     break                      # 转码槽被用户占着, 让位
+                t0 = time.time()
                 try:
                     get_variant(fp, q, slot=False, wanted=preheat_allowed)
                     if _variant_ready(fp, q):
                         n += 1
+                        PREWARM["batch_done"] = int(PREWARM.get("batch_done") or 0) + 1
+                        # 单文件耗时滑动平均, 用来估算剩余时间
+                        dt = time.time() - t0
+                        spf = float(PREWARM.get("spf") or 0)
+                        PREWARM["spf"] = dt if spf <= 0 else spf * 0.7 + dt * 0.3
                 finally:
                     Q_SEM.release()
+                PREWARM["cur_done"] = n
+                remain = max(0, int(PREWARM.get("remain") or 0) - 1)
+                spf = float(PREWARM.get("spf") or 0)
+                PREWARM.update(remain=remain, total=int(PREWARM.get("batch_done") or 0) + remain,
+                               eta=int(remain * spf) if spf > 0 else 0)
                 time.sleep(1)
             if n:
                 PREWARM["done"] += n
@@ -17032,7 +17872,8 @@ def prewarm_loop():
                 PREWARM["skip"][key] = PREWARM["skip"].get(key, 0) + 1
                 time.sleep(30)
         except Exception:
-            time.sleep(60)
+            PREWARM.update(working=False)
+            _prewarm_sleep(60)
 
 
 def probe_duration(path):
@@ -18950,6 +19791,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(external_card_info())
         elif path == "/api/card/job":
             self._json(dict(ok=True, job=dict(_CARD_JOB)))
+        elif path == "/api/prewarm/status":
+            self._json(dict(ok=True, job=prewarm_status()))
         elif path == "/api/archive/scan":
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             try:
@@ -19041,6 +19884,8 @@ class Handler(BaseHTTPRequestHandler):
             relative = os.path.relpath(d, os.path.realpath(ARCHIVE))
             virtual_dir = "/archive" if relative == "." else "/archive/" + relative.replace(os.sep, "/")
             self._json({"ok": True, "dir": d, "virtual_dir": virtual_dir, "dirs": dirs, "files": files})
+        elif path == "/api/usb/job":
+            self._json({"ok": True, "job": usb_job(), "attached": usb_attached})
         elif path == "/api/usb/browse":
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             fp = usb_real(q.get("dir", [""])[0])
@@ -19341,7 +20186,9 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError, TypeError) as exc:
                 self._json(dict(ok=False, msg=str(exc)), 400)
             return
-        if p in ("/api/card/speed", "/api/card/format", "/api/archive/sync",
+        if p in ("/api/card/speed", "/api/card/format", "/api/card/config",
+                 "/api/system/reboot", "/api/archive/sync",
+                 "/api/prewarm/start", "/api/prewarm/pause",
                  "/api/archive/migrate", "/api/archive/migrate/delete"):
             origin = self.headers.get('Origin')
             if (self.headers.get('X-TSF-Storage') != '1' or
@@ -19358,6 +20205,16 @@ class Handler(BaseHTTPRequestHandler):
                     result = external_card_speed(body)
                 elif p == "/api/card/format":
                     result = external_card_format(body)
+                elif p == "/api/card/config":
+                    result = external_card_config(body)
+                elif p == "/api/system/reboot":
+                    ok = reboot_system()
+                    result = {"ok": ok,
+                              "msg": "系统将在 2 秒后重启" if ok else "无法执行 reboot，请 SSH 到设备手动重启"}
+                elif p == "/api/prewarm/start":
+                    result = prewarm_start()
+                elif p == "/api/prewarm/pause":
+                    result = prewarm_pause_toggle()
                 elif p == "/api/archive/sync":
                     result = archive_sync_start()
                 elif p == "/api/archive/migrate":
@@ -19895,8 +20752,17 @@ class Handler(BaseHTTPRequestHandler):
                 f.write(data)
             self._json({"ok": True, "msg": "已加入队列, 归档同步时写入车机U盘"})
         elif path == "/api/usb/attach":
-            ok, msg = usb_attach()
-            self._json({"ok": ok, "msg": "车机U盘已连接 (已临时断开车机读取, 5分钟无操作自动恢复)" if ok and msg != "already" else ("已处于管理状态" if ok else msg)})
+            body = self._read_json()
+            if not isinstance(body, dict):
+                body = {}
+            if body.get("wait"):
+                # 占用时后台自动重试, 前端轮询 /api/usb/job 看进度并可取消
+                self._json(usb_attach_async())
+            else:
+                ok, msg = usb_attach()
+                self._json({"ok": ok, "msg": "车机U盘已连接 (已临时断开车机读取, 5分钟无操作自动恢复)" if ok and msg != "already" else ("已处于管理状态" if ok else msg)})
+        elif path == "/api/usb/attach/cancel":
+            self._json(usb_attach_cancel())
         elif path == "/api/usb/detach":
             ok, msg = usb_detach()
             self._json({"ok": ok, "msg": "已恢复车机导出" if ok else msg})
@@ -20118,5 +20984,6 @@ if __name__ == "__main__":
     threading.Thread(target=notify_loop, daemon=True).start()
     threading.Thread(target=auto_update_loop, daemon=True).start()
     threading.Thread(target=prewarm_loop, daemon=True).start()
+    threading.Thread(target=_card_boot_mount, daemon=True, name="card-automount").start()
     threading.Thread(target=listen_live_ready, daemon=True).start()
     srv.serve_forever()
