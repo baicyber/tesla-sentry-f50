@@ -319,7 +319,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "26.0.25"
+APP_VERSION = "26.0.26"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -8604,7 +8604,7 @@ except OSError:
     pass
 Q_SEM = threading.BoundedSemaphore(1)
 USER_TRANS = [0]      # 正在排队/占用转码槽的用户请求数; 后台预热看到 >0 就让位
-RES_MAX = 2 * 1024 * 1024 * 1024  # 清晰度缓存总量上限 2GB, 超了从最旧开始删
+RES_MAX = 8 * 1024 * 1024 * 1024  # 清晰度缓存总量上限 8GB (缓存落在 207G 虚拟盘, 2GB 上限过早触发清理、命中率白白损失)
 
 
 _res_cleanup_lock = threading.Lock()
@@ -10477,12 +10477,32 @@ def _variant_path(fp, qv):
     return os.path.join(RES_DIR, key + ".mp4")
 
 
+# 变体缓存 LRU: 命中时按节流把 mtime 刷成"最近使用时间", 让 res_cleanup 按热度淘汰,
+# 而不是按生成时间把天天在看的旧片段先删掉 (删了就得重新转码, 首帧从 0.3s 退回 3~6s)。
+# 缓存盘是 noatime 挂载, atime 不可靠; 变体文件 mtime 不参与缓存 key (key 用源文件 mtime), 可安全改写。
+_VARIANT_TOUCH = {}
+_VARIANT_TOUCH_LOCK = threading.Lock()
+_VARIANT_TOUCH_TTL = 60.0   # 同一文件 60s 内只 touch 一次, 避免视频请求频繁写盘
+
+
 def _variant_ready(fp, qv):
     p = _variant_path(fp, qv)
     try:
-        return bool(p) and os.path.getsize(p) > 0
+        if not p or os.path.getsize(p) <= 0:
+            return False
     except OSError:
         return False
+    now = time.monotonic()
+    with _VARIANT_TOUCH_LOCK:
+        if now - _VARIANT_TOUCH.get(p, 0) >= _VARIANT_TOUCH_TTL:
+            if len(_VARIANT_TOUCH) > 512:
+                _VARIANT_TOUCH.clear()
+            _VARIANT_TOUCH[p] = now
+            try:
+                os.utime(p, None)
+            except OSError:
+                pass
+    return True
 
 
 _thermal_lock = threading.Lock()
