@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.26.045"
+APP_VERSION = "2026.11.26.046"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3268,6 +3268,8 @@ body.settings-open { overflow:hidden; }
 /* 迁移: 镜像/归档分组与分类文件树 */
 .arch-group { font-size:12.5px; font-weight:600; color:var(--text); margin:12px 0 6px; line-height:1.6; }
 .arch-tree { margin:-2px 0 8px; padding:4px 0 4px; border:1px dashed var(--line); border-radius:7px; background:var(--panel2); }
+.scan-item .p.foldable { cursor:pointer; flex:1 1 auto; user-select:none; }
+.fold-caret { font-style:normal; color:var(--muted); margin-right:5px; display:inline-block; width:11px; }
 .arch-node { display:flex; align-items:center; gap:8px; font-size:12px; padding:3px 9px 3px 0; }
 .arch-node .p { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; white-space:nowrap; }
 .arch-node .s { flex:0 0 auto; color:var(--muted); white-space:nowrap; }
@@ -8534,6 +8536,7 @@ function storageFail(error) {
 /* ---------- 外置卡与归档同步 ---------- */
 let EXT_CARDS = [], EXT_CARD = null, ARCH_SCAN_ITEMS = [], ARCH_SCAN_SELECTED = new Set(), ARCH_POLL = null;
 let ARCH_DIR_PICK = {};   // 归档目录部分勾选: path -> Set('A' | 'A/' | 'A/b' | '')
+let ARCH_TREE_COLLAPSED = new Set();   // 已折叠文件树的归档目录 (默认展开)
 let EXT_BOOT = {};        // 外置卡开机自动挂载配置
 function extCardRender() {
   const box = document.getElementById('ext-card-info');
@@ -8723,20 +8726,26 @@ function archiveScanRender() {
     return;
   }
   const picked = archSelectedItems().length;
-  const row = (x, i) =>
-    '<div class="scan-item' + (ARCH_SCAN_SELECTED.has(x.path) ? ' sel' : '') + '">' +
-    '<label class="scan-pick-wrap"><input type="checkbox" class="scan-pick" data-arch="' + i + '"' +
-    (ARCH_SCAN_SELECTED.has(x.path) ? ' checked' : '') + '></label>' +
-    '<span class="p"><b>' + (x.type === 'img' ? '镜像' : '归档目录') + '</b> ' +
-    esc(x.path) + '</span><span class="s">' + fmtBytes(x.size) + '</span>' +
-    '<button type="button" class="mini tool-danger scan-del" data-del="' + i + '" title="删除该源文件">删除</button></div>';
+  const row = (x, i) => {
+    const foldable = x.type === 'archive' && x.tree && x.tree.length;
+    const open = foldable && !ARCH_TREE_COLLAPSED.has(x.path);
+    return '<div class="scan-item' + (ARCH_SCAN_SELECTED.has(x.path) ? ' sel' : '') + '">' +
+      '<label class="scan-pick-wrap"><input type="checkbox" class="scan-pick" data-arch="' + i + '"' +
+      (ARCH_SCAN_SELECTED.has(x.path) ? ' checked' : '') + '></label>' +
+      '<span class="p' + (foldable ? ' foldable' : '') + '"' +
+      (foldable ? ' data-fold="' + i + '" title="' + (open ? '收起' : '展开') + '文件树"' : '') + '>' +
+      (foldable ? '<i class="fold-caret">' + (open ? '▾' : '▸') + '</i>' : '') +
+      '<b>' + (x.type === 'img' ? '镜像' : '归档目录') + '</b> ' + esc(x.path) +
+      '</span><span class="s">' + fmtBytes(x.size) + '</span>' +
+      '<button type="button" class="mini tool-danger scan-del" data-del="' + i + '" title="删除该源文件">删除</button></div>';
+  };
   const imgs = [], arcs = [];
   ARCH_SCAN_ITEMS.forEach((x, i) => (x.type === 'img' ? imgs : arcs).push({ x, i }));
   box.innerHTML =
     (imgs.length ? '<div class="arch-group">车机 U 盘镜像（只读挂载源镜像复制进默认镜像，全部校验通过后自动删除源镜像）</div>' +
       imgs.map(o => row(o.x, o.i)).join('') : '') +
-    (arcs.length ? '<div class="arch-group">归档目录（按分类文件树勾选；同一存储介质用硬链接、跨介质先复制，逐文件校验后删除源文件）</div>' +
-      arcs.map(o => row(o.x, o.i) + (o.x.tree && o.x.tree.length
+    (arcs.length ? '<div class="arch-group">归档目录（按分类文件树勾选，点目录名可收起/展开；同一存储介质用硬链接、跨介质先复制，逐文件校验后删除源文件）</div>' +
+      arcs.map(o => row(o.x, o.i) + (o.x.tree && o.x.tree.length && !ARCH_TREE_COLLAPSED.has(o.x.path)
         ? '<div class="arch-tree">' + o.x.tree.map(n => archNodeRow(o.x, n, 0) +
           (n.children || []).map(c => archNodeRow(o.x, c, 1)).join('')).join('') + '</div>' : '')).join('') : '') +
     '<div class="hint">勾选后可批量迁移到默认位置或删除源文件（删除不可恢复）。迁移前会先比对同名文件，可选择全部覆盖或自动重命名；只有目标校验通过后才会删除源文件，中途断电不会丢失数据。</div>';
@@ -8757,6 +8766,7 @@ async function archiveScan(force) {
     const alive = new Set(ARCH_SCAN_ITEMS.map(x => x.path));
     for (const path of [...ARCH_SCAN_SELECTED]) if (!alive.has(path)) ARCH_SCAN_SELECTED.delete(path);
     for (const path of Object.keys(ARCH_DIR_PICK)) if (!alive.has(path)) delete ARCH_DIR_PICK[path];
+    for (const path of [...ARCH_TREE_COLLAPSED]) if (!alive.has(path)) ARCH_TREE_COLLAPSED.delete(path);
     archiveScanRender();
   } catch (e) {
     const box = document.getElementById('arch-scan-box');
@@ -8764,6 +8774,17 @@ async function archiveScan(force) {
   }
 }
 document.getElementById('arch-scan-box').addEventListener('click', event => {
+  const fold = event.target.closest('[data-fold]');
+  if (fold) {
+    event.preventDefault(); event.stopPropagation();
+    const item = ARCH_SCAN_ITEMS[Number(fold.dataset.fold)];
+    if (item) {
+      if (ARCH_TREE_COLLAPSED.has(item.path)) ARCH_TREE_COLLAPSED.delete(item.path);
+      else ARCH_TREE_COLLAPSED.add(item.path);
+      archiveScanRender();
+    }
+    return;
+  }
   const del = event.target.closest('[data-del]');
   if (del) {
     event.preventDefault(); event.stopPropagation();
@@ -14183,23 +14204,136 @@ def _device_mounts(dev):
     return sorted(out, key=len, reverse=True)
 
 
-def _force_unmount_device(dev):
-    """格式化前强制卸载: 先普通 umount, 再 -f / -l, 直到 /proc/mounts 里不再出现该卡。"""
-    for _ in range(3):
+def _card_device_nodes(dev):
+    """该卡主设备与全部分区节点的真实路径 (含 /dev 软链接解析)。"""
+    rp = os.path.realpath(dev)
+    base = re.sub(r"p?[0-9]+$", "", rp)
+    nodes = {rp, base}
+    try:
+        for path in glob.glob(base + "*"):
+            nodes.add(os.path.realpath(path))
+    except OSError:
+        pass
+    return nodes
+
+
+def _card_mount_prefixes(mounts):
+    return [os.path.realpath(mp).rstrip("/") + "/" for mp in mounts if mp]
+
+
+def _card_holders(dev, mounts):
+    """扫描 /proc, 找出打开该卡设备或卡内文件、或以卡内目录为工作目录的进程 (排除自身)。
+    卸载后设备仍被内核标记占用, 多数就是这些残留句柄导致的。"""
+    nodes = _card_device_nodes(dev)
+    prefixes = _card_mount_prefixes(mounts)
+    self_pid = os.getpid()
+    found = {}
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == self_pid or pid <= 1:
+            continue
+        hit = ""
+        fd_dir = "/proc/%s/fd" % name
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            fds = []
+        for fd in fds:
+            try:
+                target = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
+                continue
+            if target in nodes or any(target.startswith(p) for p in prefixes):
+                hit = target
+                break
+        if not hit:
+            try:
+                cwd = os.readlink("/proc/%s/cwd" % name)
+            except OSError:
+                cwd = ""
+            if cwd in nodes or any(cwd.startswith(p) for p in prefixes):
+                hit = cwd
+        if hit:
+            try:
+                with open("/proc/%s/comm" % name, encoding="utf-8", errors="ignore") as stream:
+                    comm = stream.read().strip()
+            except OSError:
+                comm = ""
+            found[pid] = (comm or name, hit)
+    return found
+
+
+def _close_self_card_fds(dev, mounts):
+    """关掉本进程打开着的卡内文件句柄 (格式化会清空内容, 旧句柄没有保留价值)。"""
+    nodes = _card_device_nodes(dev)
+    prefixes = _card_mount_prefixes(mounts)
+    closed = 0
+    try:
+        fds = os.listdir("/proc/self/fd")
+    except OSError:
+        return 0
+    for fd in fds:
+        try:
+            target = os.readlink("/proc/self/fd/" + fd)
+        except OSError:
+            continue
+        if target in nodes or any(target.startswith(p) for p in prefixes):
+            try:
+                os.close(int(fd))
+                closed += 1
+            except OSError:
+                pass
+    return closed
+
+
+def _release_card_holders(dev, mounts):
+    """结束仍占用该卡的其它进程并关闭自身卡内句柄, 返回被结束的进程名列表。"""
+    holders = _card_holders(dev, mounts)
+    names = sorted({v[0] for v in holders.values()})
+    for pid in holders:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                break
+            time.sleep(0.05)
+    _close_self_card_fds(dev, mounts)
+    return names
+
+
+def _force_unmount_device(dev, progress=None):
+    """格式化前强制卸载: 先结束占用该卡的进程, 再普通 umount / -f / -l, 直到完全卸载。"""
+    try:
+        os.sync()
+    except OSError:
+        pass
+    mounts = _device_mounts(dev)
+    if mounts:
+        if progress:
+            progress("正在结束占用外置卡的进程…")
+        names = _release_card_holders(dev, mounts)
+        if names and progress:
+            progress("已结束占用: %s" % "、".join(names[:4]))
+    for _ in range(4):
         mps = _device_mounts(dev)
         if not mps:
-            return
+            break
         for mp in mps:
             for flag in ([], ["-f"], ["-l"]):
                 try:
                     _run_cmd(["umount"] + flag + [mp], timeout=30)
                 except (OSError, subprocess.SubprocessError):
                     pass
-        time.sleep(0.5)
+        time.sleep(0.4)
     left = _device_mounts(dev)
     if left:
         raise ValueError("无法卸载 %s（仍挂载在 %s），请先关闭正在读写该卡的程序后重试"
                          % (dev, "、".join(left)))
+    # 懒卸载后还可能残留句柄, 再清一次并给内核一点时间释放块设备
+    _release_card_holders(dev, mounts)
+    time.sleep(0.3)
 
 
 def external_card_format(body):
@@ -14213,6 +14347,8 @@ def external_card_format(body):
         raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
     if _CARD_JOB["state"] == "running":
         raise ValueError("正在执行其它外置卡任务")
+    if _ARCH_SYNC["state"] == "running":
+        raise ValueError("正在同步归档区，请稍后再试")
     _card_job_set(state="running", kind="format", message="正在准备格式化…", write=0.0, read=0.0)
 
     def work():
@@ -14225,18 +14361,21 @@ def external_card_format(body):
                 raise ValueError("请先恢复车机导出再格式化外置卡")
             mkfs = _ensure_mkfs_ext4(lambda message: _card_job_set(message=message))
             _card_job_set(message="正在卸载外置卡…")
-            _force_unmount_device(dev)
+            _force_unmount_device(dev, lambda message: _card_job_set(message=message))
             _card_job_set(message="正在创建 ext4 文件系统…")
+            # -F 重复两次: 常规的 -F 只放行非块设备/异常参数, 双 -F 才会在设备仍被
+            # 内核标记占用时继续格式化 —— 卸载已完成, 这里的占用只会是残留句柄
             if os.path.basename(mkfs).startswith("mke2fs"):
-                cmd = [mkfs, "-t", "ext4", "-F", "-L", "TESLA_DATA", dev]
+                cmd = [mkfs, "-t", "ext4", "-F", "-F", "-L", "TESLA_DATA", dev]
             else:
-                cmd = [mkfs, "-F", "-L", "TESLA_DATA", dev]
+                cmd = [mkfs, "-F", "-F", "-L", "TESLA_DATA", dev]
             r = _run_cmd(cmd, timeout=600)
             if r.returncode != 0:
                 err = (r.stderr or r.stdout or "未知错误").strip()
-                if "is mounted" in err:
-                    # 仍有进程占用: 再强制卸载一次后重试
-                    _force_unmount_device(dev)
+                if "is mounted" in err or "in use" in err:
+                    # 仍有进程占用: 再强制卸载并结束占用进程后重试
+                    _card_job_set(message="仍有进程占用，正在释放后重试…")
+                    _force_unmount_device(dev, lambda message: _card_job_set(message=message))
                     r = _run_cmd(cmd, timeout=600)
                     err = (r.stderr or r.stdout or "未知错误").strip()
                 if r.returncode != 0:
