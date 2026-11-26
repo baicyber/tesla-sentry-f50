@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.007"
+APP_VERSION = "2026.11.27.008"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -21636,6 +21636,41 @@ class BoundedServer(ThreadingHTTPServer):
             self._slots.release()
 
 
+def _kill_stale_viewers():
+    """绑定端口失败时清理自身残留进程。
+
+    init.d stop 失效或进程异常退出时, 旧实例仍占着 8080, 新实例永远起不来,
+    表现为"OTA 后网页打不开, 只能重启整个 OpenWrt"。这里只杀命令行含
+    sentry-viewer.py 的其它进程, 不影响其它程序。"""
+    if os.name != "posix" or not os.path.isdir("/proc"):
+        return
+    me = os.getpid()
+    killed = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == me:
+            continue
+        try:
+            with open("/proc/%s/cmdline" % pid, "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode(errors="ignore")
+        except OSError:
+            continue
+        if "sentry-viewer.py" not in cmd:
+            continue
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+            killed.append(int(pid))
+        except OSError:
+            pass
+    if killed:
+        print("stale viewer processes terminated: %s" % killed, flush=True)
+        time.sleep(1.0)
+        for pid in killed:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
 if __name__ == "__main__":
     # OTA 自检: 只验证模块能完整加载 (常量/函数定义无误), 不启动服务、不碰硬件
     if "--ota-check" in sys.argv:
@@ -21669,6 +21704,9 @@ if __name__ == "__main__":
         except OSError:
             if attempt == 0:
                 print("port %d in use, retrying for a few seconds..." % PORT, flush=True)
+            if attempt == 3:
+                # 重试几秒仍被占用: 多半是旧实例没被 init.d 停掉, 直接清理残留再绑定
+                _kill_stale_viewers()
             time.sleep(1.0)
     if srv is None:
         print("port %d still in use, another instance running? exit." % PORT)
