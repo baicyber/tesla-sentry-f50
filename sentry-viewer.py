@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.009"
+APP_VERSION = "2026.11.27.010"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3294,7 +3294,9 @@ body.settings-open { overflow:hidden; }
 /* 迁移: 镜像/归档分组与分类文件树 */
 .func-divider { border:none; border-top:1px solid var(--line); margin:18px 0 4px; }
 .arch-card { border:1px solid var(--line); border-radius:12px; padding:6px 10px; margin:8px 0; }
-.arch-card .arch-tree { border-top:1px dashed var(--line); margin-top:6px; padding-top:4px; }
+/* 标题行与目录树共用卡片边框和背景, 内部不再出现两张卡片之间的缝隙 */
+.arch-card > .scan-item { border:0; border-radius:0; background:transparent; margin:0; padding:4px 0; }
+.arch-card .arch-tree { border:0; border-radius:0; background:transparent; margin:0; padding:2px 0 0; }
 .arch-group { font-size:12.5px; font-weight:600; color:var(--text); margin:12px 0 6px; line-height:1.6; }
 .arch-tree { margin:-2px 0 8px; padding:4px 0 4px; border:1px dashed var(--line); border-radius:7px; background:var(--panel2); }
 .scan-item .p.foldable { cursor:pointer; flex:1 1 auto; user-select:none; }
@@ -14563,6 +14565,83 @@ def _wait_device_free(dev, timeout=8.0):
 WATCHDOG_PAUSE_FLAG = "/tmp/tsf-watchdog.pause"
 
 
+def _device_swaps(dev):
+    """该卡上启用的 swap。交换分区不会出现在挂载表里, 但同样会让 mkfs 报 Resource busy。"""
+    out = []
+    try:
+        with open("/proc/swaps", encoding="utf-8", errors="replace") as f:
+            next(f, None)
+            for line in f:
+                parts = line.split()
+                if parts and _dev_match(parts[0], dev):
+                    out.append(parts[0])
+    except OSError:
+        pass
+    return out
+
+
+def _stop_format_services():
+    """格式化期间停掉会自动挂载或持续读写卡的服务, 返回待恢复列表。
+
+    blockd(fstools) 检测到卸载会自动重新挂载; tesla-live 持续写归档,
+    直接 kill 还会被 procd respawn 立刻拉起, 必须走 init.d 正常 stop。"""
+    stopped = []
+    for name in ("tesla-live", "blockd"):
+        script = "/etc/init.d/" + name
+        if not os.path.exists(script):
+            continue
+        try:
+            r = subprocess.run([script, "stop"], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=30)
+            if r.returncode == 0:
+                stopped.append(name)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return stopped
+
+
+def _device_busy_report(dev):
+    """mkfs 仍报 busy 时给出真正的占用者, 便于定位自动挂载/swap/残留句柄。"""
+    info = []
+    mps = _device_mounts(dev)
+    if mps:
+        info.append("仍挂载: " + "、".join(mps))
+    swaps = _device_swaps(dev)
+    if swaps:
+        info.append("swap: " + "、".join(swaps))
+    holders = _device_holders(dev, mps)
+    names = []
+    for pid, _ in holders:
+        try:
+            with open("/proc/%d/comm" % pid, encoding="utf-8", errors="replace") as f:
+                names.append("%s(%d)" % (f.read().strip(), pid))
+        except OSError:
+            names.append(str(pid))
+    if names:
+        info.append("占用进程: " + "、".join(sorted(set(names))[:5]))
+    if not mps and os.path.isdir("/proc"):
+        # 本进程挂载表没有, 可能挂在其它挂载命名空间里, 扫一遍其它进程的 mounts
+        ns_hits = []
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open("/proc/%s/mounts" % pid, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) >= 2 and _dev_match(parts[0], dev):
+                            ns_hits.append("pid%s:%s" % (pid, parts[1]))
+            except OSError:
+                continue
+            if len(ns_hits) >= 4:
+                break
+        if ns_hits:
+            info.append("其它命名空间挂载: " + "、".join(sorted(set(ns_hits))[:4]))
+    if not info:
+        info.append("挂载表/进程句柄均未发现占用, 可能是内核未释放或其它挂载命名空间")
+    return "；".join(info)
+
+
 def _watchdog_pause(on):
     """格式化等需要独占数据卡的操作期间暂停看门狗。
 
@@ -14597,12 +14676,20 @@ def external_card_format(body):
                        os.path.abspath(VIDEO_ROOT).startswith(os.path.abspath(mp).rstrip("/") + "/")
                        for mp in mounts)
         watchdog_paused = False
+        stopped_services = []
         try:
             if usb_attached or os.path.ismount(MNT):
                 raise ValueError("请先恢复车机导出再格式化外置卡")
             # 卸载后立刻暂停看门狗, 防止它把刚卸载的卡自动挂回导致 mkfs Resource busy
             _watchdog_pause(True)
             watchdog_paused = True
+            # 再停掉会自动挂载的 blockd 与持续写卡的 tesla-live, 避免卸载后被立刻拉回
+            stopped_services = _stop_format_services()
+            for sw in _device_swaps(dev):
+                try:
+                    _run_cmd(["swapoff", sw], timeout=30)
+                except (OSError, subprocess.SubprocessError):
+                    pass
             mkfs = _ensure_mkfs_ext4(lambda message: _card_job_set(message=message))
             _card_job_set(message="正在卸载外置卡…")
             _force_unmount_device(dev, lambda message: _card_job_set(message=message))
@@ -14631,8 +14718,9 @@ def external_card_format(body):
             if r.returncode != 0:
                 err = (r.stderr or r.stdout or "未知错误").strip()
                 if re.search(r"mounted|in use|busy", err, re.I):
-                    raise ValueError("格式化失败: 设备仍被系统占用（可能有自动挂载或残留句柄）。"
-                                     "请稍后重试，或先在系统里关闭该卡的自动挂载。原始错误: " + err[:120])
+                    # 把真正的占用者(挂载点/swap/进程名)直接报出来, 便于对症处理
+                    raise ValueError("格式化失败: " + _device_busy_report(dev)
+                                     + "。原始错误: " + err[:80])
                 raise ValueError("格式化失败: " + err[:160])
             target = mounts[0] if mounts else "/mnt/sdcard"
             os.makedirs(target, exist_ok=True)
@@ -14653,6 +14741,13 @@ def external_card_format(body):
         except Exception as ex:
             _card_job_set(state="error", message=str(ex)[:200])
         finally:
+            # 先恢复格式化前停掉的服务, 再解除看门狗暂停, 避免重复拉起
+            for name in reversed(stopped_services):
+                try:
+                    subprocess.run(["/etc/init.d/" + name, "start"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+                except (OSError, subprocess.SubprocessError):
+                    pass
             if watchdog_paused:
                 _watchdog_pause(False)
 
@@ -21695,12 +21790,6 @@ if __name__ == "__main__":
         print("FATAL: %s" % AUTH_CONF_ERR)
         print("为避免无认证暴露, 服务不启动。修复 %s 后重启 (或重跑 install.sh 重新生成密码)。" % AUTH_FILE)
         sys.exit(2)
-    try:
-        ensure_dirs()
-    except OSError as ex:
-        # 存储卡未挂载/只读/路径被占用时不能把整个服务拖死: 先让网页和更新能打开,
-        # 用户才有机会处理存储问题或回滚版本。
-        print("WARN: 存储目录创建失败 (%s), 继续启动网页服务" % ex, flush=True)
     # 降低自身被 OOM 杀掉的概率 (合成任务会自己调高优先级先死)
     try:
         with open("/proc/self/oom_score_adj", "w") as f:
@@ -21726,8 +21815,16 @@ if __name__ == "__main__":
     if srv is None:
         print("port %d still in use, another instance running? exit." % PORT)
         sys.exit(0)
+    # 绑定成功立刻开始对外服务, 再做存储/硬件初始化:
+    # 存储卡异常导致初始化很慢甚至卡住时, 网页/日志/更新入口仍然可用,
+    # 不会再"OTA 后网页打不开, 只能重启整个 OpenWrt"。
+    threading.Thread(target=srv.serve_forever, daemon=True, name="http-server").start()
     print(f"Sentry viewer on 0.0.0.0:{PORT}")
     print("auth: %s (%s)" % ("ON, user=" + AUTH_USER if AUTH_ON else "OFF - 公网可直接访问!", AUTH_FILE))
+    try:
+        ensure_dirs()
+    except OSError as ex:
+        print("WARN: 存储目录创建失败 (%s), 继续启动网页服务" % ex, flush=True)
     if not ffmpeg_ready(refresh=True):
         print("WARN: ffmpeg/ffprobe 不可用 (%s / %s): 缩略图与清晰度转码会失效, "
               "请重跑 install.sh apply 自动安装并配置 FFmpeg" % (FFMPEG_BIN, FFPROBE_BIN), flush=True)
@@ -21765,4 +21862,5 @@ if __name__ == "__main__":
     threading.Thread(target=auto_update_loop, daemon=True).start()
     threading.Thread(target=prewarm_loop, daemon=True).start()
     threading.Thread(target=listen_live_ready, daemon=True).start()
-    srv.serve_forever()
+    # serve_forever 已在后台 http-server 线程运行, 主线程驻留即可
+    threading.Event().wait()
