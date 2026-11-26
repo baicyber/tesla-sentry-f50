@@ -65,7 +65,10 @@ cd tesla-sentry-f50
 sudo ./install.sh check                                                # read-only check
 sudo ./install.sh install --port 8080 --data-mount /mnt/sdcard         # check + install + start
 sudo ./install.sh apply   --port 8080 --data-mount /mnt/sdcard         # check + install, do not start
+sudo ./install.sh rollback                                             # restore the previous release if the web UI is down
 ```
+
+The TF card does not need to be mounted in advance: `install` detects an unmounted/uninitialized card, asks for confirmation and formats it as ext4 then mounts it (the card will be wiped); in non-interactive shells pass `--init-card` to allow formatting. If the web UI does not come back after an upgrade, run `sudo ./install.sh rollback` over SSH to restore the previous program and config.
 
 The installer checks the F50 kernel / gadget / exFAT / Python / FFmpeg, installs into `/opt/tesla-sentry/`, writes `/etc/tesla-sentry.conf`, registers OpenWrt procd services and cron jobs, generates a random password and starts the services.
 

@@ -65,7 +65,10 @@ cd tesla-sentry-f50
 sudo ./install.sh check                                                # 仅预检（只读）
 sudo ./install.sh install --port 8080 --data-mount /mnt/sdcard         # 预检 + 安装 + 启动服务
 sudo ./install.sh apply   --port 8080 --data-mount /mnt/sdcard         # 预检 + 安装，不启动
+sudo ./install.sh rollback                                             # 网页打不开时回滚到上次升级前
 ```
+
+TF 卡不需要提前挂载：`install` 会检测未挂载/未初始化的卡，交互询问后直接格式化为 ext4 并挂载（会清空该卡数据）；非交互环境加 `--init-card` 显式允许格式化。若升级后网页打不开，SSH 执行 `sudo ./install.sh rollback` 即可恢复上一版程序与配置。
 
 安装会：检查 F50 内核 gadget / exFAT / Python / FFmpeg → 装到 `/opt/tesla-sentry/`、写 `/etc/tesla-sentry.conf` → 注册 OpenWrt procd 服务与定时任务 → 生成随机登录密码 → 启动。
 

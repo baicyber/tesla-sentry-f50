@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install into a fresh F50/OpenWrt system with an already mounted ext4 data card."""
+"""Install into a fresh F50/OpenWrt system; the data card is initialized automatically if needed."""
 import argparse
 import hashlib
 import json
@@ -37,6 +37,10 @@ def arguments(argv=None):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--check', action='store_true', help='只检查（默认）')
     mode.add_argument('--apply', action='store_true', help='安装到全新设备')
+    mode.add_argument('--rollback', action='store_true',
+                      help='回滚到最近一次 install 升级前的程序与配置备份')
+    parser.add_argument('--init-card', action='store_true',
+                        help='数据盘未初始化时允许自动格式化为 ext4（会清空该卡数据）；安装时也会交互询问')
     parser.add_argument('--start', action='store_true', help='安装成功后启动；仅与 --apply 一起使用')
     parser.add_argument('--data-mount', default='/mnt/sdcard',
                         help='视频存储（镜像+归档）所在盘的挂载点，建议 TF 卡；F50 默认 /dev/mmcblk1p1 挂载到 /mnt/sdcard')
@@ -127,6 +131,110 @@ class Installer:
         if self.runtime and (self.runtime / 'bin' / name).is_file():
             return str(self.runtime / 'bin' / name)
         return shutil.which(name)
+
+    def mount_rows(self):
+        rows = []
+        for line in self.path('/proc/mounts').read_text().splitlines():
+            parts = line.split()
+            if len(parts) >= 4:
+                rows.append(parts)
+        return rows
+
+    def data_mount_row(self):
+        return next((row for row in self.mount_rows() if row[1] == self.args.data_mount), None)
+
+    @staticmethod
+    def mount_ready(row):
+        return bool(row) and row[2] == 'ext4' and 'rw' in row[3].split(',')
+
+    def card_device(self):
+        """找一块可用的 TF/外置卡设备, 供安装时自动初始化。
+
+        优先分区节点 (mmcblk1p1), 其次整卡与其它常见命名; 只做存在性判断,
+        真正格式化前还会询问或要求 --init-card。
+        """
+        names = ['/dev/mmcblk1p1', '/dev/mmcblk1', '/dev/mmcblk0p1', '/dev/mmcblk0',
+                 '/dev/sda1', '/dev/sda', '/dev/sdb1', '/dev/sdb']
+        for name in names:
+            if os.path.exists(self.path(name)):
+                return name
+        return ''
+
+    def mkfs_ext4_tool(self):
+        for candidate in (self.tool('mkfs.ext4'), '/sbin/mkfs.ext4', '/usr/sbin/mkfs.ext4'):
+            if candidate and os.path.exists(candidate):
+                return candidate
+        raise InstallError('缺少 mkfs.ext4（e2fsprogs）；请先安装 e2fsprogs 后重试')
+
+    def confirm_card_init(self, device, fs):
+        """交互确认是否格式化数据盘; 非交互环境必须显式 --init-card。"""
+        if self.args.init_card:
+            return True
+        if not sys.stdin.isatty():
+            return False
+        state = '未格式化的空卡' if not fs else '当前文件系统 %s' % fs
+        default_yes = not fs
+        prompt = ('检测到 TF 卡 %s（%s）未挂载为 ext4，安装需要先初始化。\n'
+                  '格式化会清空该卡上的全部数据，是否继续？%s '
+                  % (device, state, '[Y/n]' if default_yes else '[y/N]'))
+        try:
+            answer = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        if not answer:
+            return default_yes
+        return answer in ('y', 'yes', '是')
+
+    def prepare_data_mount(self):
+        """安装前准备数据盘: 未挂载则自动挂载; 未初始化则按需格式化为 ext4。
+
+        升级场景默认不做任何破坏性操作, 只有显式 --init-card 才会格式化。
+        """
+        mount = self.args.data_mount
+        device = self.card_device()
+        if not device:
+            raise InstallError('未检测到可用的 TF 卡；请插入 TF 卡后重试，'
+                               '或用 --data-mount 指定已挂载的数据盘')
+        fs = ''
+        blkid = self.tool('blkid')
+        if blkid:
+            try:
+                fs = run([blkid, '-o', 'value', '-s', 'TYPE', device]).strip()
+            except InstallError:
+                fs = ''
+        if fs != 'ext4':
+            if self.upgrade and not self.args.init_card:
+                raise InstallError('数据盘 %s 不是 ext4，升级不会自动格式化以保护已有录像；'
+                                   '确认数据可清空后加 --init-card 重试' % device)
+            if not self.confirm_card_init(device, fs):
+                raise InstallError('数据盘 %s 尚未初始化；执行 `sudo ./install.sh install --init-card` '
+                                   '可格式化为 ext4（会清空该卡数据）' % device)
+            for row in self.mount_rows():
+                if row[0] == device:
+                    try:
+                        run([self.tool('umount'), row[1]], timeout=30)
+                    except (InstallError, TypeError):
+                        pass
+            print('正在把 %s 格式化为 ext4（卷标 TESLA_DATA）…' % device, flush=True)
+            run([self.mkfs_ext4_tool(), '-F', '-F', '-L', 'TESLA_DATA', device], timeout=600)
+        self.path(mount).mkdir(parents=True, exist_ok=True)
+        row = self.data_mount_row()
+        if row and not self.mount_ready(row):
+            try:
+                run([self.tool('mount'), '-o', 'remount,rw', mount], timeout=30)
+            except InstallError:
+                try:
+                    run([self.tool('umount'), mount], timeout=30)
+                except InstallError:
+                    pass
+            row = self.data_mount_row()
+        if not self.mount_ready(row):
+            run([self.tool('mount'), device, mount], timeout=60)
+            row = self.data_mount_row()
+        if not self.mount_ready(row):
+            raise InstallError('挂载 %s 到 %s 失败' % (device, mount))
+        print('数据盘已就绪：%s → %s' % (device, mount), flush=True)
+        return row
 
     def runtime_files(self):
         if not self.runtime:
@@ -650,22 +758,29 @@ class Installer:
                 raise InstallError('安装包缺少：' + str(src))
             if dest.endswith('.py'):
                 compile(src.read_text(encoding='utf-8'), str(src), 'exec')
-        mounts = [line.split() for line in self.path('/proc/mounts').read_text().splitlines()]
-        mounted = next((row for row in mounts if row[1] == self.args.data_mount), None)
-        if not mounted or mounted[2] != 'ext4' or 'rw' not in mounted[3].split(','):
-            raise InstallError('数据盘须预先以 ext4 读写挂载到 ' + self.args.data_mount
-                               + '（F50 默认 TF 卡 /dev/mmcblk1p1，建议视频存储装到 TF 卡）')
-        if self.path(self.args.data_mount).is_symlink():
-            raise InstallError('数据盘挂载路径不能是符号链接')
-        uuid = run([self.tool('blkid'), '-o', 'value', '-s', 'UUID', mounted[0]]).strip()
-        if not re.fullmatch(r'[A-Za-z0-9-]+', uuid):
-            raise InstallError('无法读取数据盘 UUID')
-        usage = shutil.disk_usage(self.path(self.args.data_mount))
-        # 升级不新建镜像, 也不重新分配空间, 只做只读校验。
-        # 全新安装同样不预建镜像或归档目录: 只确认数据盘有最基本的可用空间,
-        # 具体容量与归档位置在首次打开网页时到「设置 → 存储分配」里完成。
-        if not self.upgrade and usage.free < 256 * 1024 * 1024:
-            raise InstallError('数据盘至少需要 256 MiB 空闲空间，用于日志与首次设置')
+        mounted = self.data_mount_row()
+        if not self.mount_ready(mounted):
+            if not self.args.apply:
+                # 检查模式保持只读: 不格式化, 只说明安装时会自动初始化 TF 卡
+                print('提示：数据盘 %s 尚未以 ext4 读写挂载。执行 `sudo ./install.sh install` 时'
+                      '会自动检测 TF 卡、初始化（格式化为 ext4）并挂载，无需提前挂载。'
+                      % self.args.data_mount, flush=True)
+                mounted = None
+            else:
+                mounted = self.prepare_data_mount()
+        uuid = ''
+        if mounted is not None:
+            if self.path(self.args.data_mount).is_symlink():
+                raise InstallError('数据盘挂载路径不能是符号链接')
+            uuid = run([self.tool('blkid'), '-o', 'value', '-s', 'UUID', mounted[0]]).strip()
+            if not re.fullmatch(r'[A-Za-z0-9-]+', uuid):
+                raise InstallError('无法读取数据盘 UUID')
+            usage = shutil.disk_usage(self.path(self.args.data_mount))
+            # 升级不新建镜像, 也不重新分配空间, 只做只读校验。
+            # 全新安装同样不预建镜像或归档目录: 只确认数据盘有最基本的可用空间,
+            # 具体容量与归档位置在首次打开网页时到「设置 → 存储分配」里完成。
+            if not self.upgrade and usage.free < 256 * 1024 * 1024:
+                raise InstallError('数据盘至少需要 256 MiB 空闲空间，用于日志与首次设置')
         app_bytes = sum(info['size'] for info in runtime_files.values()) + 128 * 1024 * 1024
         if shutil.disk_usage(self.path('/opt')).free < app_bytes:
             raise InstallError('/opt 至少需要 %d MiB 空闲空间' % ((app_bytes + (1 << 20) - 1) >> 20))
@@ -737,7 +852,7 @@ class Installer:
                 except OSError as exc:
                     raise InstallError('端口不可用：%s' % self.args.port) from exc
         for value in self.device.values():
-            if not re.fullmatch(r'[A-Za-z0-9_./-]+', value):
+            if value and not re.fullmatch(r'[A-Za-z0-9_./-]+', value):
                 raise InstallError('设备路径或标识包含不支持的字符')
         return True
 
@@ -985,6 +1100,7 @@ class Installer:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
         print('升级完成，旧程序已备份到 %s' % backup)
+        print('若升级后网页打不开，可执行 `sudo ./install.sh rollback` 命令行回滚')
         if conf_backup:
             print('旧配置已备份到 %s' % conf_backup)
         for service in ('tesla-live', 'tesla-viewer'):
@@ -995,6 +1111,52 @@ class Installer:
                 print('已重启 %s' % service)
             except InstallError as exc:
                 print('提示：%s 未运行或重启失败（%s），可稍后手动启动' % (service, exc))
+
+    def rollback(self):
+        """命令行回滚: 恢复最近一次 install 原地升级前的程序目录与配置备份。
+
+        启动不起来时可以 SSH 上设备执行 `./install.sh rollback`，无需网页。
+        """
+        app = self.path(APP)
+        if os.geteuid() != 0:
+            raise InstallError('请用 root 执行回滚')
+        backups = sorted(self.path('/opt').glob('tesla-sentry.bak-*'), key=lambda p: p.name)
+        if not backups:
+            raise InstallError('没有可回滚的程序备份（只有 install 原地升级会生成 '
+                               '%s.bak-时间 目录）' % APP)
+        backup = backups[-1]
+        if not (backup / 'sentry-viewer.py').is_file():
+            raise InstallError('备份目录不完整：%s' % backup)
+        print('回滚目标：%s' % backup, flush=True)
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        broken = app.with_name(app.name + '.broken-' + stamp)
+        if app.exists():
+            app.rename(broken)
+        try:
+            backup.rename(app)
+        except BaseException:
+            if broken.exists() and not app.exists():
+                broken.rename(app)
+            raise
+        try:
+            run([self.python(), '-B', str(app / 'sentry-viewer.py'), '--ota-check'], timeout=120)
+        except InstallError as exc:
+            print('提示：备份程序自检警告（%s），继续恢复' % exc)
+        conf = self.path(CONF)
+        conf_backup = conf.with_name(conf.name + '.bak')
+        if conf_backup.is_file():
+            shutil.copy2(conf_backup, conf)
+            print('配置已恢复自 %s' % conf_backup)
+        for service in ('tesla-live', 'tesla-viewer'):
+            script = str(self.path('/etc/init.d/' + service))
+            try:
+                run([script, 'running'], timeout=15)
+                run([script, 'restart'], timeout=90)
+                print('已重启 %s' % service)
+            except InstallError as exc:
+                print('提示：%s 未运行或重启失败（%s）' % (service, exc))
+        print('回滚完成，已恢复上一版程序与配置。')
+        print('确认新版可用后如需恢复：rm -rf %s；如需回到新版：mv %s %s' % (broken, broken, app))
 
     def start(self):
         # Installation remains intact if startup fails; no blind reinstall or USB rollback.
@@ -1021,13 +1183,17 @@ class Installer:
 def main(argv=None):
     installer = Installer(Path(__file__).resolve().parents[1], arguments(argv))
     try:
+        if installer.args.rollback:
+            installer.rollback()
+            return 0
         if installer.args.apply:
             installed = installer.install()
             # 原地升级已重启服务, 不再跑全新安装的启动校验(镜像路径可能沿用旧配置)
             if installed and installer.args.start and not installer.upgrade:
                 installer.start()
         elif installer.preflight():
-            print('检查通过。全新安装不会预建镜像或归档目录；安装后在网页「设置 → 存储分配」完成首次设置。')
+            print('检查通过。全新安装不会预建镜像或归档目录；安装时会自动初始化 TF 卡（如需要），'
+                  '安装后在网页「设置 → 存储分配」完成首次设置。')
         else:
             print('相同版本已安装，未改动设备。')
         return 0

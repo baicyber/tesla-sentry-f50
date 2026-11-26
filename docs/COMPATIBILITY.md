@@ -38,9 +38,13 @@ ffmpeg / ffprobe 用于缩略图、清晰度转码和水印导出，推荐 `/usr
 sudo ./install.sh                    # 预检、安装并启动
 sudo ./install.sh check              # 仅预检
 sudo ./install.sh apply              # 安装但不启动
-sudo ./install.sh install            # 安装并启动
+sudo ./install.sh install            # 安装并启动（TF 卡未挂载会询问后自动初始化）
+sudo ./install.sh rollback           # 回滚到最近一次升级前的程序与配置
 sudo ./install.sh --help             # 查看容量、端口与依赖参数
 ```
+
+TF 卡无需提前挂载；数据盘未初始化时安装器会交互确认后格式化为 ext4 并挂载，
+非交互环境使用 `sudo ./install.sh install --init-card`。
 
 默认将数据放在 `/mnt/sdcard/tesla-sentry`：
 

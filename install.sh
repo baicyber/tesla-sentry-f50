@@ -5,10 +5,12 @@
 #   sudo ./install.sh check              # 仅预检 (只读): Python / ffmpeg / libx264 / 运行库 / USB Gadget / exFAT
 #   sudo ./install.sh apply              # 预检 + 安装
 #   sudo ./install.sh install            # 预检 + 安装 + 启动服务
+#   sudo ./install.sh rollback           # 回滚到最近一次升级前的程序与配置 (网页打不开时用)
+#   sudo ./install.sh install --init-card  # 数据盘未初始化时直接格式化为 ext4 并挂载
 #   sudo ./install.sh --help             # 查看参数
 #
-# 安装前检查已全部并入本入口与 scripts/install.py, 不再需要单独的 tsf-check.sh。
-# 其他设备与其他 Linux 发行版不再支持。
+# 数据盘 (TF 卡) 不需要提前挂载: install 会检测并交互询问是否直接初始化,
+# 非交互环境用 --init-card 显式允许格式化 (会清空该卡数据)。
 
 set -e
 
@@ -35,10 +37,10 @@ pkg_cmd() {
 sub=install
 if [ $# -gt 0 ]; then
     case "$1" in
-        check|apply|install) sub="$1"; shift ;;
+        check|apply|install|rollback) sub="$1"; shift ;;
         -h|--help) sub=check ;;
         -*) : ;;
-        *) die "仅支持 check、apply 或 install 子命令" ;;
+        *) die "仅支持 check、apply、install 或 rollback 子命令" ;;
     esac
 fi
 
@@ -61,6 +63,7 @@ case "$sub" in
     check)   : ;;
     apply)   set -- --apply "$@" ;;
     install) set -- --apply --start "$@" ;;
+    rollback) set -- --rollback "$@" ;;
 esac
 
 say "调用安装器 ($sub)"

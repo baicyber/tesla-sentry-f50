@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.26.046"
+APP_VERSION = "2026.11.26.048"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -791,7 +791,9 @@ def ota_latest(force=False):
     now = time.time()
     tgt = ota_target()
     key = "%s@%s" % (tgt["repo"], tgt["branch"])
-    if not force and _OTA_CACHE["data"] and _OTA_CACHE.get("key") == key and now - _OTA_CACHE["t"] < 600:
+    # 本地缓存只用于短时间去重: 之前缓存 10 分钟, 刚发布的版本会被旧缓存盖住,
+    # 页面显示成「已是最新」或旧版本号。现在 60 秒内复用, 超过就重新拉实时清单。
+    if not force and _OTA_CACHE["data"] and _OTA_CACHE.get("key") == key and now - _OTA_CACHE["t"] < 60:
         return _OTA_CACHE["data"]
 
     def ok(raw):
@@ -853,7 +855,12 @@ def ota_latest(force=False):
         if j2 and str(j2.get("version") or "").strip():
             fresh.append(j2)
     if fresh:
-        j, base = fresh[0], "https://api.github.com"
+        # GitHub API 的 contents 接口自身也会被 CDN 缓存约 60 秒; 直接源若已拿到更高版本,
+        # 以更高的为准, 避免「API 还在缓存旧清单」把刚发布的新版本盖回去。
+        if _vtuple(fresh[0].get("version")) >= _vtuple(raced.get("version")):
+            j, base = fresh[0], "https://api.github.com"
+        else:
+            j = raced
     else:
         j = raced
     j["_base"] = base
@@ -2514,12 +2521,6 @@ select.ninput { cursor:pointer; }
 .updnotes-wrap { margin:14px 0 6px; }
 .updnotes-title { font-size:12.5px; font-weight:600; margin-bottom:7px; color:var(--text); }
 .updnotes-title span { font-weight:400; color:var(--muted); font-size:11.5px; margin-left:4px; }
-.updprog { margin:10px 0 2px; }
-.updprog[hidden] { display:none; }
-.updprogbar { height:6px; border-radius:999px; background:var(--line); overflow:hidden; }
-.updprogbar i { display:block; height:100%; width:0; border-radius:999px; background:linear-gradient(90deg,var(--accent),#4aa3ff); transition:width .25s ease; }
-.updproginfo { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:6px; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
-.updproginfo span:first-child { color:var(--text); font-weight:600; }
 .updmore { display:inline-block; margin-top:8px; font-size:12px; color:var(--blue); text-decoration:none; }
 .updmore:hover { text-decoration:underline; }
 .updsep { margin:7px 0 3px; color:var(--muted); font-size:11.5px; font-weight:600; }
@@ -4072,10 +4073,6 @@ body.settings-open { overflow:hidden; }
       </div>
       <div class="hint" id="upd-autohint">—</div>
       <div class="hint" id="upd-msg"></div>
-      <div class="updprog" id="upd-prog" hidden>
-        <div class="updprogbar"><i id="upd-progfill"></i></div>
-        <div class="updproginfo"><span id="upd-progpct">0%</span><span id="upd-progsize"></span><span id="upd-progspeed"></span></div>
-      </div>
     </div>
     <div class="updnotes-wrap" id="upd-notes-wrap" style="display:none">
       <div class="updnotes-title">更新记录<span>仅显示最近 3 个版本</span></div>
@@ -9389,11 +9386,8 @@ async function otaApply(force) {
     : '升级到 v' + latest + ' ?\n程序文件会被覆盖, 服务自动重启约 5 秒, 期间页面会短暂打不开。';
   if (!confirm(tip)) return;
   const btn = document.getElementById('upd-go'), msg = document.getElementById('upd-msg');
-  const prog = document.getElementById('upd-prog'), fill = document.getElementById('upd-progfill');
-  const pctEl = document.getElementById('upd-progpct'), sizeEl = document.getElementById('upd-progsize');
-  const speedEl = document.getElementById('upd-progspeed');
   btn.disabled = true;
-  // 下载/安装进度: 显示实际下载百分比、已下载/文件大小和实时速度
+  // 规则: 更新页不画进度条, 只用一行文字显示阶段 · 百分比 · 已下载/大小 · 实时速度
   let pct = 0, seenGot = null, seenAt = 0, speed = 0;
   const fmt = bytes => {
     bytes = Number(bytes) || 0;
@@ -9414,12 +9408,9 @@ async function otaApply(force) {
       if (got > 0) { seenGot = got; seenAt = at; }
       shown = Math.min(100, Math.round(got * 100 / total));
     }
-    if (prog) prog.hidden = false;
-    if (fill) fill.style.width = shown + '%';
-    if (pctEl) pctEl.textContent = (total > 0 ? t('下载') + ' ' : '') + shown + '%';
-    if (sizeEl) sizeEl.textContent = total > 0 ? fmt(got) + ' / ' + fmt(total) : '';
-    if (speedEl) speedEl.textContent = speed > 0 ? fmt(speed) + '/s' : '';
-    msg.textContent = stage + ' ' + shown + '%';
+    msg.textContent = stage + ' ' + shown + '%' +
+      (total > 0 ? ' · ' + fmt(got) + ' / ' + fmt(total) : '') +
+      (speed > 0 ? ' · ' + fmt(speed) + '/s' : '');
   };
   paintProgress(null);
   const timer = setInterval(async () => {
@@ -9435,12 +9426,11 @@ async function otaApply(force) {
     const j = await (await fetch('/api/ota/apply', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({force})})).json();
     clearInterval(timer);
     msg.textContent = j.msg;
-    if (!j.ok) { if (prog) prog.hidden = true; btn.disabled = false; return; }
+    if (!j.ok) { btn.disabled = false; return; }
     otaWaitBack();
   } catch (e) {
     clearInterval(timer);
     msg.textContent = t('升级失败') + ': ' + e;
-    if (prog) prog.hidden = true;
     btn.disabled = false;
   }
 }
@@ -21370,7 +21360,12 @@ if __name__ == "__main__":
         print("FATAL: %s" % AUTH_CONF_ERR)
         print("为避免无认证暴露, 服务不启动。修复 %s 后重启 (或重跑 install.sh 重新生成密码)。" % AUTH_FILE)
         sys.exit(2)
-    ensure_dirs()
+    try:
+        ensure_dirs()
+    except OSError as ex:
+        # 存储卡未挂载/只读/路径被占用时不能把整个服务拖死: 先让网页和更新能打开,
+        # 用户才有机会处理存储问题或回滚版本。
+        print("WARN: 存储目录创建失败 (%s), 继续启动网页服务" % ex, flush=True)
     # 降低自身被 OOM 杀掉的概率 (合成任务会自己调高优先级先死)
     try:
         with open("/proc/self/oom_score_adj", "w") as f:
@@ -21378,11 +21373,20 @@ if __name__ == "__main__":
     except OSError:
         pass
     # 先绑定端口: 若已有实例在跑, 重复实例会在这里直接退出,
-    # 不会执行下面的"启动自愈"而误拆别人正在管理的挂载点
-    try:
-        srv = BoundedServer(("0.0.0.0", PORT), Handler)
-    except OSError:
-        print("port %d in use, another instance running? exit." % PORT)
+    # 不会执行下面的"启动自愈"而误拆别人正在管理的挂载点。
+    # 升级重启时旧进程可能还占着端口几秒, 这里重试而不是立刻退出 ——
+    # 否则网页会长时间打不开, 需要等 procd 下次重新拉起。
+    srv = None
+    for attempt in range(12):
+        try:
+            srv = BoundedServer(("0.0.0.0", PORT), Handler)
+            break
+        except OSError:
+            if attempt == 0:
+                print("port %d in use, retrying for a few seconds..." % PORT, flush=True)
+            time.sleep(1.0)
+    if srv is None:
+        print("port %d still in use, another instance running? exit." % PORT)
         sys.exit(0)
     print(f"Sentry viewer on 0.0.0.0:{PORT}")
     print("auth: %s (%s)" % ("ON, user=" + AUTH_USER if AUTH_ON else "OFF - 公网可直接访问!", AUTH_FILE))
