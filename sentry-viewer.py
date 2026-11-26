@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.005"
+APP_VERSION = "2026.11.27.006"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3197,6 +3197,7 @@ body.settings-open { overflow:hidden; }
 .usage-chart { display:flex; width:100%; height:16px; border-radius:8px; overflow:hidden; background:var(--line); }
 .usage-chart span { position:relative; display:block; height:100%; min-width:0; transition:width .3s ease; }
 .usage-chart span i { display:block; height:100%; transition:width .3s ease; }
+.usage-chart-total { margin-top:8px; font-size:12px; color:var(--text); font-variant-numeric:tabular-nums; }
 .usage-legend { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:9px; font-size:11.5px; color:var(--muted); }
 .usage-legend i { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
 .usage-legend b { color:var(--text); font-weight:600; }
@@ -3713,6 +3714,7 @@ body.settings-open { overflow:hidden; }
   <div id="tab-storage" style="display:none">
     <div class="usage-chart-box" id="usage-chart-box">
       <div class="usage-chart-row"><span class="usage-chart-label">整卡</span><div class="usage-chart" id="usage-chart" role="img" aria-label="存储卡容量与占用"></div></div>
+      <div class="usage-chart-total" id="usage-total">—</div>
       <div class="usage-legend" id="usage-legend"></div>
       <div class="hint" style="margin-top:7px">整卡图显示车机 U 盘设定容量、归档区总上限、安全预留与剩余空间，不显示归档区实际占用；随下方容量设置实时联动。</div>
     </div>
@@ -8154,6 +8156,12 @@ function storageRenderUsage() {
     [colors.free, freeGb, '剩余空间 ' + num(freeGb) + ' G']
   ];
   const total = Math.max(cardGb, row.reduce((sum, item) => sum + item[1], 0), 1);
+  // 容量图上方补上总容量, 否则只能看到各段比例、不知道卡到底多大
+  const totalEl = document.getElementById('usage-total');
+  if (totalEl) {
+    totalEl.textContent = '存储卡总容量 ' + num(cardGb) + ' G（已分配 ' +
+      num(usbLimit + archCap + reserveGb) + ' G，剩余 ' + num(freeGb) + ' G）';
+  }
   bar.innerHTML = row.map(item => seg(total, item[0], item[1], item[2])).join('');
   legend.innerHTML =
     '<span>' + mark(colors.usb) + '车机 U 盘 <b>' + num(usbLimit) + ' G</b></span>' +
