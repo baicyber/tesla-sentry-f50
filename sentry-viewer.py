@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.008"
+APP_VERSION = "2026.11.27.009"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3236,8 +3236,17 @@ body.settings-open { overflow:hidden; }
 .storage-row.path label small { display:block; margin-top:2px; font-size:11px; font-weight:400; color:var(--muted); line-height:1.4; }
 #tab-storage .storage-row.note { grid-template-columns:minmax(0,1fr) minmax(68px,96px) minmax(0,auto); max-width:none; }
 /* 容量输入框后紧跟 G 单位: 标签 | 数字 | 单位 | 说明按钮 */
-#tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) minmax(68px,98px) minmax(0,auto) 28px; max-width:none; }
-@media (pointer:coarse) { #tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) 76px minmax(0,auto) 44px; gap:4px; } }
+#tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) minmax(68px,98px) minmax(0,auto) 28px; max-width:none; align-items:center; }
+/* 单位 G 与右侧 ? 圆圈同一水平线: 两者都用固定高度 + 弹性居中, 避免字号/基线差导致一高一低 */
+#tab-storage .storage-row.cap .retention-unit { display:inline-flex; align-items:center; height:36px; line-height:1; }
+#tab-storage .storage-row.cap .storage-help { align-self:center; }
+/* 设置说明跟在文字描述右边, 宽度不够时自动换到描述下方, 不会被输入框/按钮遮挡 */
+.cap-label { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 8px; min-width:0; }
+.cap-note { color:var(--muted); font-size:11.5px; line-height:1.4; font-weight:400; }
+@media (pointer:coarse) {
+  #tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) 76px minmax(0,auto) 44px; gap:4px; }
+  #tab-storage .storage-row.cap .retention-unit { height:44px; }
+}
 #tab-storage .storage-row.path { grid-template-columns:minmax(0,1fr) minmax(0,2.4fr) auto; max-width:none; }
 #tab-storage .storage-row.path .ninput { min-width:0; }
 .usage-actions { display:flex; align-items:center; gap:8px; }
@@ -3750,7 +3759,7 @@ body.settings-open { overflow:hidden; }
     </details>
     <div class="hint" id="storage-budget" role="status"></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
-    <div class="storage-row cap"><label for="storage-archive">归档区总上限</label><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
+    <div class="storage-row cap"><div class="cap-label"><label for="storage-archive">归档区总上限</label><span class="cap-note" id="archive-limit-note" hidden></span></div><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
     <div class="storage-nested"><div class="storage-row cap"><label for="storage-drive">其中：驾驶记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="驾驶记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row cap"><label for="retention-recentmax">其中：实时滚动记录上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="实时滚动记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div>
     <div class="storage-row cap"><label for="storage-sentry">其中：哨兵上限</label><input class="ninput" id="storage-sentry" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="哨兵录像上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="sentrymax">?</button></div>
     <div class="storage-row cap"><label for="storage-saved">其中：手动保存上限</label><input class="ninput" id="storage-saved" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="手动保存上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="savedmax">?</button></div>
@@ -8103,8 +8112,14 @@ function storageRenderAllocation() {
     message = '归档上限预留超出 ' + (allocated - budget).toFixed(1) + ' G，但按归档实际占用仍可调整 U 盘容量';
   else if (!unlimited && allocated > budget) { message = '超过可分配容量 ' + (allocated - budget).toFixed(1) + ' G'; blocking = true; }
   budgetText.dataset.error = String(blocking);
+  // 不设上限的说明放到「归档区总上限」文字右边, 窄屏自动折行, 不再挤在底部被按钮遮挡
+  const limitNote = document.getElementById('archive-limit-note');
+  if (limitNote) {
+    limitNote.hidden = !unlimited;
+    limitNote.textContent = unlimited ? '不设上限，仅受磁盘空闲保护' : '';
+  }
   budgetText.textContent = message || (unlimited
-    ? t('归档不设上限') + '，' + t('仅受磁盘空闲保护') + '（' + values.free.toFixed(1) + ' G ' + t('未分配') + '）'
+    ? '未分配 ' + values.free.toFixed(1) + ' G'
     : '还可分配 ' + values.free.toFixed(1) + ' G');
 }
 function storageRenderUsage() {
