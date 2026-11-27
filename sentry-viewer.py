@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.036"
+APP_VERSION = "2026.11.27.037"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3783,7 +3783,7 @@ body.settings-open { overflow:hidden; }
       </div>
     </details>
     </div>
-    <div class="hint card-gate-note" id="card-gate-note" role="status" hidden>外置卡未检测到或未挂载：车机 U 盘容量设定、格式化、归档区设定、手动同步与一键迁移已暂停。请先在上方「外置卡管理」中挂载外置卡。</div>
+    <div class="hint card-gate-note" id="card-gate-note" role="status" hidden>外置卡未检测到或未挂载：车机 U 盘容量设定、格式化、归档区设定、同步管理与一键迁移已暂停。请先在上方「外置卡管理」中挂载外置卡。</div>
     <div class="hint" id="storage-budget" role="status"></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
     <div class="storage-row cap"><div class="cap-label"><label for="storage-archive">归档区总上限</label><span class="cap-note" id="archive-limit-note" hidden></span></div><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
@@ -3846,10 +3846,11 @@ body.settings-open { overflow:hidden; }
     </section>
     </div>
     <section class="storage-quota storage-tools" id="storage-archive-sync">
-      <h3>手动同步</h3>
-      <div class="hint">只读解析车机 U 盘镜像（不挂载，车机可继续正常读写），把归档区还没有的文件增量复制过来，已存在的文件直接跳过。复制时显示实时速度、百分比、已复制/总量与剩余时间。</div>
+      <h3>同步管理</h3>
+      <div class="hint">只读解析车机 U 盘镜像（不挂载，车机可继续正常读写），把归档区还没有的文件增量复制过来，已存在的文件直接跳过。复制时显示实时速度、百分比、已复制/总量与剩余时间。同步过程中可随时停止，已复制的文件保留。</div>
       <div class="tool-actions">
         <button class="mini primary" id="arch-sync-btn" onclick="archiveSyncStart()">立即同步到归档区</button>
+        <button class="mini" id="arch-sync-stop" onclick="archiveSyncStop()" disabled>停止车机 U 盘只读同步</button>
       </div>
       <div class="sync-progress" id="arch-sync-progress" hidden>
         <div class="sync-line"><span>状态</span><b id="arch-sync-state"><span class="spin"></span>同步中</b></div>
@@ -8707,7 +8708,7 @@ let ARCH_DIR_PICK = {};   // 归档目录部分勾选: path -> Set('A' | 'A/' | 
 let ARCH_TREE_COLLAPSED = new Set();   // 已折叠文件树的归档目录 (默认收起, 点开展开)
 let ARCH_TREE_KNOWN = new Set();       // 已见过的归档目录, 用于只对首次出现的目录默认收起
 let EXT_BOOT = {};        // 外置卡开机自动挂载配置
-/* 外置卡未挂载时, 车机 U 盘容量设定、格式化、归档区设定、手动同步与一键迁移全部变灰不可用 */
+/* 外置卡未挂载时, 车机 U 盘容量设定、格式化、归档区设定、同步管理与一键迁移全部变灰不可用 */
 let CARD_READY = false;     // 外置卡已检测到并挂载 (来自 /api/card/info 的 ready, 未确认前先禁用)
 let STORAGE_LOCKED = false; // 存储任务运行/读取中, 暂时锁定
 function applyCardGate() {
@@ -9067,9 +9068,13 @@ function archiveSyncPaint(job) {
   const done = job.done || job.copied || 0, total = job.total || 0;
   const state = document.getElementById('arch-sync-state');
   if (state) {
-    const label = job.state === 'done' ? '已完成' : (job.state === 'error' ? '已中断' : '同步中');
+    const label = job.state === 'done' ? '已完成'
+      : (job.state === 'error' ? '已中断' : (job.state === 'stopped' ? '已停止' : '同步中'));
     state.innerHTML = (job.state === 'running' ? '<span class="spin"></span>' : '') + label;
   }
+  // 停止按钮只在只读同步 (kind=sync) 运行时可用; 迁移任务不支持中途停止
+  const stopBtn = document.getElementById('arch-sync-stop');
+  if (stopBtn) stopBtn.disabled = !(job.state === 'running' && (job.kind || 'sync') === 'sync');
   document.getElementById('arch-sync-done').textContent = fmtBytes(done) + ' / ' + fmtBytes(total);
   document.getElementById('arch-sync-pct').textContent = (job.pct || 0) + '%';
   document.getElementById('arch-sync-fill').style.width = Math.min(100, job.pct || 0) + '%';
@@ -9107,6 +9112,22 @@ async function archiveSyncStart() {
     archiveSyncPoll();
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = '立即同步到归档区'; }
+    toast('❌ ' + e.message);
+  }
+}
+async function archiveSyncStop() {
+  const btn = document.getElementById('arch-sync-stop');
+  if (btn) btn.disabled = true;
+  try {
+    const j = await (await fetch('/api/archive/sync/stop', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' }, body: '{}' })).json();
+    if (!j.ok) throw Error(j.msg || '停止失败');
+    toast(j.msg || '已请求停止同步');
+    archiveSyncPaint(j.job || {});
+    // 继续轮询到 worker 真正停下, 界面才会切到「已停止」
+    if ((j.job || {}).state === 'running') archiveSyncPoll();
+  } catch (e) {
+    if (btn) btn.disabled = false;
     toast('❌ ' + e.message);
   }
 }
@@ -11552,6 +11573,69 @@ def _force_image_offline():
     _release_usb_flock()
 
 
+def _detach_loops_under(paths):
+    """释放 backing file 位于这些目录下的 loop 设备。
+
+    镜像/归档都放在外置卡上, 只要还有 loop 指向卡内文件, 卡就一直 EBUSY,
+    既卸载不掉也格式化不了。这里按 losetup -a 的输出逐个比对并 detach。"""
+    roots = [os.path.abspath(p) for p in paths if p]
+    if not roots:
+        return
+    try:
+        out = _run_cmd([LOSETUP, "-a"], timeout=10).stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return
+    for line in out.splitlines():
+        m = re.match(r"^(/dev/loop\d+):.*\((.*)\)\s*$", line.strip())
+        if not m:
+            continue
+        backing = os.path.abspath(m.group(2))
+        if any(backing == r or backing.startswith(r.rstrip("/") + "/") for r in roots):
+            try:
+                _run_cmd([LOSETUP, "-d", m.group(1)], timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
+# 卸载/格式化数据卡时临时关闭车机 U 盘导出: 内核把 mass_storage 的 lun.0/file
+# (镜像文件) 一直持有, 不解绑就永远 EBUSY, 卡卸不掉也格不了; 重新挂载后按此标记恢复。
+_CARD_EXPORT_RELEASED = False
+
+
+def _release_card_export():
+    """停掉车机 U 盘导出 (清空 LUN 文件 + 解绑 UDC), 释放内核对镜像文件的占用。"""
+    global _CARD_EXPORT_RELEASED
+    lun = os.path.join(GADGET_DIR, "functions", "mass_storage.0", "lun.0", "file")
+    try:
+        if os.path.exists(lun):
+            with open(lun, "w") as f:
+                f.write("")
+            _CARD_EXPORT_RELEASED = True
+    except OSError:
+        pass
+    if _gadget_rebind(False):
+        _CARD_EXPORT_RELEASED = True
+
+
+def _restore_card_export():
+    """重新挂载数据卡后恢复车机 U 盘导出 (仅当之前被卸载流程临时关闭)。"""
+    global _CARD_EXPORT_RELEASED
+    if not _CARD_EXPORT_RELEASED:
+        return
+    if not os.path.isfile(IMG):
+        # 挂的是别的卡/镜像还没就绪: 保留标记, 等数据卡回来再恢复导出
+        return
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tesla-gadget.sh")
+    try:
+        if os.path.isfile(script):
+            subprocess.run(["sh", script, "on"], capture_output=True, text=True, timeout=90)
+        else:
+            _gadget_rebind(True)
+    except (OSError, subprocess.SubprocessError):
+        _gadget_rebind(True)
+    _CARD_EXPORT_RELEASED = False
+
+
 def usb_detach_safe():
     try:
         ok, msg = usb_detach()
@@ -12600,8 +12684,12 @@ def disk_usage():
         break
     # 归档区剩余空间 = 整盘剩余 (同分区)
     d["arc_free"] = d["disk_free"]
-    # 页面展示和清理策略使用同一个归档总量上限
-    d["arc_limit"] = ARCHIVE_TOTAL_GB * (1 << 30) if ARCHIVE_TOTAL_GB > 0 else d["arc_used"] + d["arc_free"]
+    # 页面展示和清理策略使用同一个归档总量上限: 有限时按分配容量; 设为无限 (0) 时
+    # 按「最多容量」——整盘容量扣掉车机 U 盘镜像标称容量与安全预留后的可分配上限。
+    if ARCHIVE_TOTAL_GB > 0:
+        d["arc_limit"] = ARCHIVE_TOTAL_GB * (1 << 30)
+    else:
+        d["arc_limit"] = max(0, d["disk_total"] - (d["img_nominal"] or 0) - FREE_TARGET_MB * 1048576)
     # 兼容旧字段: 挂载时 = 车载U盘 (exFAT) 内部用量, 否则 = 整盘
     d["src"], d["used"], d["total"] = "loop", d["disk_used"], d["disk_total"]
     for p, usb in ((MNT, True), (ARCHIVE, False)):
@@ -14254,7 +14342,8 @@ _CARD_LIFECYCLE_LOCK = threading.Lock()
 _CARD_JOB = {"state": "idle", "kind": "", "message": "", "write": 0.0, "read": 0.0, "pct": 0, "speed": 0.0}
 _ARCH_SYNC_LOCK = threading.Lock()
 _ARCH_SYNC = {"state": "idle", "message": "", "total": 0, "done": 0, "pct": 0, "bps": 0,
-              "sources": [], "conflicts": [], "copied": 0, "failed": []}
+              "sources": [], "conflicts": [], "copied": 0, "failed": [],
+              "stop": False, "kind": ""}
 _ARCH_SCAN = {"t": 0.0, "items": []}
 
 
@@ -14290,7 +14379,7 @@ CARD_NOT_READY_MSG = "外置卡未检测到或未挂载，请先在「外置卡�
 def card_data_ready():
     """外置卡是否已检测到并挂载: 视频存储根目录必须落在某个非根挂载点上。
 
-    未插卡或卡未挂载时, 车机 U 盘容量设定、格式化、归档区设定、手动同步、
+    未插卡或卡未挂载时, 车机 U 盘容量设定、格式化、归档区设定、同步管理、
     一键迁移都不可执行, 后台同步与转码任务也会停止。"""
     probe = os.path.abspath(VIDEO_ROOT)
     while True:
@@ -15138,6 +15227,7 @@ def external_card_format(body):
         _card_job_claim("format", "正在准备格式化…")
 
     def work():
+        global _CARD_EXPORT_RELEASED
         # 格式化后统一挂到默认位置 (/mnt/sdcard): 与 tsf-mount/开机自动挂载一致
         target = str(os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard").strip() or "/mnt/sdcard"
         target = os.path.normpath(target)
@@ -15156,7 +15246,14 @@ def external_card_format(body):
                                              timeout=30).returncode == 0
                 except (OSError, subprocess.SubprocessError):
                     live_stopped = False
+                # 镜像被 mass_storage 导出 / loop 指向卡内文件时 mkfs 必然 EBUSY:
+                # 格式化前先解导出、解 loop, 否则只能提示「设备忙」
+                _force_image_offline()
+                _release_card_export()
+                _detach_loops_under(list(_device_mounts(dev)) + [target])
             _format_card_ext4(dev)
+            # 卡已被清空, 旧的镜像文件随之消失, 不再需要恢复导出
+            _CARD_EXPORT_RELEASED = False
             # 重新格式化会生成新的文件系统 UUID: 写回 conf, 否则开机 tsf-mount
             # 用旧 UUID 找不到卡, 数据卡不会被自动挂载 (表现为重启后录像全"消失")
             new_uuid = _blkid(dev, "UUID")
@@ -15265,6 +15362,7 @@ def external_card_mount(body):
             raise ValueError(err or "挂载失败")
         _card_job_set(state="done", message="已挂载到 %s" % target)
         _restore_card_services()
+        _restore_card_export()   # 卸载时临时关闭的导出, 挂回后重新导出给车机
         # 记录当前卡的 UUID: 换卡/格式化后保证开机仍能按 UUID 自动挂载
         uuid = _blkid(dev, "UUID")
         if uuid:
@@ -15308,6 +15406,15 @@ def external_card_unmount(body):
             PREWARM["paused"] = True
             PREWARM["idle_since"] = time.time()
             PREWARM["manual"] = False
+            # 镜像文件被内核 (mass_storage 导出) 和 loop 同时占用是「卸载后车机仍在写、
+            # 卡无法格式化」的根因: 先解导出、解 loop、再 umount, 卡才会真正空闲。
+            _force_image_offline()
+            _release_card_export()
+            _detach_loops_under(mps)
+            try:
+                os.sync()
+            except OSError:
+                pass
         ok, left, killed = _card_force_umount(dev)
         if not ok:
             raise ValueError("卸载未完成，仍挂载：%s" % "、".join(left))
@@ -15509,6 +15616,19 @@ def _close_exfat(ex):
         pass
 
 
+class _ArchiveSyncStopped(Exception):
+    """用户手动停止只读同步（已复制的文件保留）。"""
+
+
+def archive_sync_stop():
+    """停止正在运行的车机 U 盘只读同步; 迁移任务不受影响。"""
+    if _ARCH_SYNC["state"] != "running" or _ARCH_SYNC.get("kind") != "sync":
+        return {"ok": True, "msg": "当前没有正在进行的只读同步", "job": dict(_ARCH_SYNC)}
+    _ARCH_SYNC["stop"] = True
+    _ARCH_SYNC["message"] = "正在停止…"
+    return {"ok": True, "msg": "正在停止同步", "job": dict(_ARCH_SYNC)}
+
+
 def archive_sync_start():
     if not card_data_ready():
         raise ValueError(CARD_NOT_READY_MSG)
@@ -15543,7 +15663,8 @@ def archive_sync_start():
                 _close_exfat(ex)
                 raise ValueError("归档区同步正在进行")
             _ARCH_SYNC.update(state="running", message="正在同步…", total=total, done=0, pct=0,
-                              bps=0, eta=0, copied=0, failed=[], files=len(tasks))
+                              bps=0, eta=0, copied=0, failed=[], files=len(tasks),
+                              stop=False, kind="sync")
     if not tasks:
         _close_exfat(ex)
         _ARCH_SYNC.update(state="done", pct=100, done=0, message="归档区已是最新，无需复制")
@@ -15557,6 +15678,8 @@ def archive_sync_start():
         copied_recent = set()
         try:
             for cat, ev, _name, e, dest in tasks:
+                if _ARCH_SYNC.get("stop"):
+                    raise _ArchiveSyncStopped()
                 if not card_data_ready():
                     raise ValueError("外置卡已卸载，同步已停止")
                 if sync_write_paused():
@@ -15569,6 +15692,8 @@ def archive_sync_start():
                 try:
                     with open(tmp, "wb") as f:
                         for chunk in ex.read_file(e):
+                            if _ARCH_SYNC.get("stop"):
+                                raise _ArchiveSyncStopped()
                             f.write(chunk)
                             written += len(chunk)
                             done += len(chunk)
@@ -15605,6 +15730,9 @@ def archive_sync_start():
                         pass
             _ARCH_SYNC.update(state="done", pct=100, done=total, eta=0,
                               message="同步完成，复制 %d 个文件（%s）" % (copied, _fmt_size(total)))
+        except _ArchiveSyncStopped:
+            _ARCH_SYNC.update(state="stopped", failed=failed,
+                              message="已停止只读同步（已复制的文件已保留）")
         except Exception as ex2:
             _ARCH_SYNC.update(state="error", failed=failed, message=str(ex2)[:200])
         finally:
@@ -15874,7 +16002,7 @@ def archive_migrate(body):
             raise ValueError("已有同步任务在进行")
         _ARCH_SYNC.update(state="running", message="正在迁移…", total=total, done=0, pct=0,
                           bps=0, sources=[i["path"] for i in items], conflicts=conflicts,
-                          copied=0, failed=[])
+                          copied=0, failed=[], stop=False, kind="migrate")
     threading.Thread(target=_migrate_work, args=(items, plans, policy, total), daemon=True,
                      name="archive-migrate").start()
     return {"ok": True, "job": dict(_ARCH_SYNC)}
@@ -21678,7 +21806,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if p in ("/api/card/speed", "/api/card/format", "/api/card/config",
                  "/api/card/mount", "/api/card/unmount",
-                 "/api/system/reboot", "/api/archive/sync",
+                 "/api/system/reboot", "/api/archive/sync", "/api/archive/sync/stop",
                  "/api/prewarm/start", "/api/prewarm/pause",
                  "/api/archive/migrate", "/api/archive/migrate/delete",
                  "/api/archive/node/delete"):
@@ -21713,6 +21841,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = prewarm_pause_toggle()
                 elif p == "/api/archive/sync":
                     result = archive_sync_start()
+                elif p == "/api/archive/sync/stop":
+                    result = archive_sync_stop()
                 elif p == "/api/archive/migrate":
                     result = archive_migrate(body)
                 elif p == "/api/archive/migrate/delete":
