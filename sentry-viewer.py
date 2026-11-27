@@ -464,6 +464,7 @@ ARCHIVE = os.environ.get("TSF_ARCHIVE", "/archive")
 SKIN_DIR = os.path.join(ARCHIVE, ".skins")
 AUDIO_Q = os.path.join(ARCHIVE, "boombox-queue")
 AUDIO_DONE = os.path.join(ARCHIVE, "boombox-done")
+AUDIO_LIB = os.path.join(ARCHIVE, "audio")   # 锁车声音/音效素材库
 FILES_DIR = os.path.join(ARCHIVE, "files")
 # 转码缓存放在归档区 transcode_cache 子目录 (随数据卡), 与归档视频一一对应; 归档视频被删时自动清理对应缓存
 TRANSCODE_DIR = os.environ.get("TSF_TRANSCODE_DIR") or os.path.join(ARCHIVE, "transcode_cache")
@@ -538,7 +539,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.055"
+APP_VERSION = "2026.11.27.056"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3336,9 +3337,9 @@ body.settings-open { overflow:hidden; }
 #storage-usage .usage-actions { gap:8px; }
 #storage-usage .hint { margin-top:4px; }
 /* 存储分配卡片行距收紧, 一屏能看到更多设置 */
-#tab-storage .storage-row { min-height:38px; }
-#tab-storage .storage-quota { padding:16px 18px; }
-#tab-storage .storage-quota h3 { margin-bottom:10px; }
+#tab-storage .storage-row { min-height:44px; margin:5px 0; }
+#tab-storage .storage-quota { padding:20px 22px; }
+#tab-storage .storage-quota h3 { margin-bottom:14px; }
 #tab-storage .storage-nested { margin-left:10px; padding-left:10px; }
 #tab-storage .storage-quota .updbtns { margin-top:8px; }
 .usage-chart-box { margin:0 0 12px; padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
@@ -3395,14 +3396,15 @@ body.settings-open { overflow:hidden; }
 /* 单位 G 与右侧 ? 圆圈同一水平线: 两者都用固定高度 + 弹性居中, 避免字号/基线差导致一高一低 */
 #tab-storage .storage-row.cap .retention-unit { display:inline-flex; align-items:center; height:36px; line-height:1; }
 #tab-storage .storage-row.cap .storage-help { align-self:center; }
-/* 保留时间 / 保留事件数量: 两类行都固定为「标签 | 输入 96px | 单位 40px | ? 28px」,
-   标签占满剩余宽度, 输入框自然落在卡片右侧; 单位文字(分钟/天/个)长度不同也严格同列 */
+/* 保留时间 / 保留事件数量: 标签占满剩余宽度, 输入框与右侧单位/注释整体贴卡片右侧 */
 #tab-storage #storage-retention .storage-row,
 #tab-storage #storage-event-count .storage-row {
-  grid-template-columns:minmax(0,1fr) 96px 40px 28px;
+  grid-template-columns:minmax(0,1fr) 96px 40px auto;
   gap:10px;
   max-width:none;
 }
+#tab-storage #storage-retention .storage-row > *:not(label),
+#tab-storage #storage-event-count .storage-row > *:not(label) { justify-self:end; }
 #tab-storage #storage-retention .retention-unit { text-align:left; }
 /* 设置说明跟在文字描述右边, 宽度不够时自动换到描述下方, 不会被输入框/按钮遮挡 */
 .cap-label { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 8px; min-width:0; }
@@ -3900,7 +3902,7 @@ body.settings-open { overflow:hidden; }
     <button class="stab" id="st-files" onclick="stab('files');switchArea(area)"><svg class="ic"><use href="#i-folder"/></svg>文件管理</button>
     <h3>车辆个性化</h3>
     <button class="stab" id="st-audio" onclick="stab('audio')"><svg class="ic"><use href="#i-volume"/></svg>锁车声音</button>
-    <button class="stab" id="st-wraps" onclick="stab('wraps')"><svg class="ic"><use href="#i-brush"/></svg>涂装</button>
+    <button class="stab" id="st-wraps" onclick="stab('wraps')"><svg class="ic"><use href="#i-brush"/></svg>车辆涂装</button>
     <h3>系统与偏好</h3>
     <button class="stab" id="st-geocode" onclick="stab('geocode')"><svg class="ic"><use href="#i-location"/></svg>地址</button>
     <button class="stab" id="st-notify" onclick="stab('notify')"><svg class="ic"><use href="#i-bell"/></svg>推送</button>
@@ -4074,22 +4076,25 @@ body.settings-open { overflow:hidden; }
     <div id="skin-list"></div>
   </div>
   <div id="tab-audio" style="display:none">
-    <div class="hint">上传的音频 (wav/mp3, &lt;1MB) 会写入车机U盘根目录；文件名为 LockChime.wav 的即锁车声音 (特斯拉只认根目录这个文件名)。选择文件后可在下方播放预览；点「立即写入」马上写入车机U盘，否则等自动同步。</div>
+    <div class="hint">上传的音频先保存到归档区 <b>audio/</b> 目录，可上传多个用于筛选。格式仅 wav / mp3，单个 &lt;1MB；点「设为锁车声音」会立即挂载车机U盘并写入根目录 LockChime.wav（mp3 自动转 wav）。</div>
     <div class="tool-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <label class="fm-tool upbtn accent-up" style="margin:0"><svg class="ic"><use href="#i-upload"/></svg>上传音频 (wav/mp3, &lt;1MB)<input type="file" id="audio-file" accept=".wav,.mp3" hidden></label>
-      <button class="mini primary" id="audio-write-btn" onclick="audioWriteNow()">立即写入</button>
+      <label class="fm-tool upbtn accent-up" style="margin:0"><svg class="ic"><use href="#i-upload"/></svg>上传音频 (wav/mp3, &lt;1MB)<input type="file" id="audio-file" accept=".wav,.mp3" hidden multiple></label>
+      <button class="mini" id="audio-rename-btn" onclick="audioRenameSel()" disabled>重命名</button>
+      <button class="mini danger" id="audio-del-btn" onclick="audioDeleteSel()" disabled>删除</button>
+      <span class="hint" id="audio-selcount" style="margin:0">已选 0 项</span>
     </div>
     <audio id="audio-preview" controls hidden style="width:100%;margin-top:10px"></audio>
     <div class="hint" id="audio-write-msg" role="status" aria-live="polite"></div>
-    <div class="hint" style="color:#4cc38a">⏳ 待写入车机U盘:</div>
+    <div class="fm-listhead" style="padding-left:0;padding-right:0">
+      <label class="fm-allwrap"><input type="checkbox" id="audio-all" onchange="audioAll(this.checked)"> 全选</label>
+      <span class="fm-cols"><span>大小</span></span>
+    </div>
     <div id="audio-list"></div>
-    <div class="hint" style="color:#4cc38a">✅ 已写入:</div>
-    <div id="audio-done"></div>
   </div>
   <div id="tab-wraps" style="display:none">
-    <div class="hint">车机涂装/牌照图片: 上传 png/jpg/webp, 直接写入车机U盘根目录 Wraps/ (车机端设置里选)。连接时会临时断开车机读取几秒, 用完点「恢复车机导出」; 5 分钟无操作也会自动恢复。</div>
+    <div class="hint">车机车辆涂装/牌照图片: 仅支持 PNG, 直接写入车机U盘根目录 Wraps/ (车机端设置里选)。首次上传会自动创建 Wraps 目录。连接时会临时断开车机读取几秒, 用完点「恢复车机导出」; 5 分钟无操作也会自动恢复。</div>
     <div id="wraps-status" style="margin-bottom:10px"></div>
-    <label class="fm-tool upbtn accent-up" id="wraps-upbtn"><svg class="ic"><use href="#i-upload"/></svg>上传图片到 Wraps/ (png/jpg/webp, ≤100MB)<input type="file" id="wraps-file" accept=".png,.jpg,.jpeg,.webp" hidden multiple></label>
+    <label class="fm-tool upbtn accent-up" id="wraps-upbtn"><svg class="ic"><use href="#i-upload"/></svg>上传涂装图片到 Wraps/ (仅 PNG, ≤100MB)<input type="file" id="wraps-file" accept=".png" hidden multiple></label>
     <div id="wraps-grid" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:12px"></div>
   </div>
   <div id="tab-files">
@@ -10266,63 +10271,121 @@ async function resetBrand() {
 }
 
 /* 锁车语音 */
-async function refreshAudio() {
-  const j = await (await fetch('/api/audio')).json();
-  const mk = (arr, elid, isDone) => {
-    const list = document.getElementById(elid); list.innerHTML = '';
-    if (!arr.length) { list.innerHTML = '<div class="hint" style="margin:0">无</div>'; return; }
-    for (const f of arr) {
-      const d = document.createElement('div'); d.className = 'item';
-      const lockTag = f === 'LockChime.wav' ? '<span class="tag">锁车音</span>' : '';
-      d.innerHTML = `<span class="n">${f}</span>${lockTag}` +
-        (isDone ? '' : `<button class="primary" onclick="setLock('${f}')">设为锁车音</button>`) +
-        `<button class="danger" onclick="delAudio('${f}',${isDone})">删除</button>`;
-      list.appendChild(d);
-    }
-  };
-  mk(j.queue, 'audio-list', false);
-  mk(j.done, 'audio-done', true);
-}
-async function setLock(f) {
-  const r = await fetch('/api/audio/setlockchime', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: f }) });
-  const j = await r.json();
-  toast(j.ok ? '✅ 已设为锁车音 (LockChime.wav)' : '❌ ' + j.msg);
-  refreshAudio();
-}
-async function delAudio(f, isDone) {
-  if (!confirm('删除 ' + f + ' ?')) return;
-  await fetch('/api/audio/' + encodeURIComponent(f) + '?done=' + (isDone ? 1 : 0), { method: 'DELETE' });
-  refreshAudio();
-}
-let audioPreviewURL = null;
-document.getElementById('audio-file').onchange = async function () {
-  const file = this.files && this.files[0];
-  const prev = document.getElementById('audio-preview');
-  if (file && prev) {
-    // 选择文件后先生成本地预览, 可直接播放试听
-    if (audioPreviewURL) URL.revokeObjectURL(audioPreviewURL);
-    audioPreviewURL = URL.createObjectURL(file);
-    prev.src = audioPreviewURL;
-    prev.hidden = false;
+let audioLibDir = '', audioSel = new Set();
+function audioUpdateSel() {
+  const rb = document.getElementById('audio-rename-btn');
+  const db = document.getElementById('audio-del-btn');
+  const cnt = document.getElementById('audio-selcount');
+  if (rb) rb.disabled = audioSel.size !== 1;
+  if (db) db.disabled = audioSel.size < 1;
+  if (cnt) cnt.textContent = '已选 ' + audioSel.size + ' 项';
+  const all = document.getElementById('audio-all');
+  if (all) {
+    const boxes = document.querySelectorAll('#audio-list .fm-chk');
+    all.checked = boxes.length > 0 && audioSel.size === boxes.length;
   }
-  const j = await uploadFile(this, '/api/upload/audio');
-  if (j && j.ok) refreshAudio();
-};
-async function audioWriteNow() {
-  const btn = document.getElementById('audio-write-btn'), msg = document.getElementById('audio-write-msg');
-  btn.disabled = true;
-  msg.textContent = '正在写入车机 U 盘…';
+}
+function audioAll(on) {
+  document.querySelectorAll('#audio-list .fm-chk').forEach(c => {
+    c.checked = on;
+    if (on) audioSel.add(c.dataset.name); else audioSel.delete(c.dataset.name);
+  });
+  audioUpdateSel();
+}
+async function refreshAudio() {
+  const j = await (await fetch('/api/audio', { cache: 'no-store' })).json();
+  audioLibDir = j.dir || '';
+  audioSel.clear();
+  const list = document.getElementById('audio-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!j.files || !j.files.length) {
+    list.innerHTML = '<div class="hint" style="margin:0">暂无音频，先上传 wav / mp3 素材</div>';
+    audioUpdateSel();
+    return;
+  }
+  for (const f of j.files) {
+    const d = document.createElement('div'); d.className = 'item';
+    const c = document.createElement('input');
+    c.type = 'checkbox'; c.className = 'fm-chk'; c.dataset.name = f.name;
+    c.onchange = () => {
+      if (c.checked) audioSel.add(f.name); else audioSel.delete(f.name);
+      audioUpdateSel();
+    };
+    const n = document.createElement('span'); n.className = 'n';
+    n.textContent = '🎵 ' + f.name; n.title = f.name;
+    const meta = document.createElement('span'); meta.className = 'fm-meta';
+    const sz = document.createElement('span'); sz.className = 'fm-size'; sz.textContent = fmtSize(f.size || 0);
+    meta.appendChild(sz);
+    const play = document.createElement('button'); play.className = 'fm-mini';
+    play.textContent = '▶'; play.title = '播放预览';
+    play.onclick = () => audioPlay(f.name);
+    const lock = document.createElement('button'); lock.className = 'primary fm-mini';
+    lock.textContent = '设为锁车声音'; lock.title = '立即写入车机U盘根目录 LockChime.wav';
+    lock.onclick = () => setLock(f.name);
+    d.append(c, n, meta, play, lock);
+    list.appendChild(d);
+  }
+  audioUpdateSel();
+}
+function audioPlay(name) {
+  const prev = document.getElementById('audio-preview');
+  if (!prev) return;
+  const dir = (audioLibDir || '').replace(/\/+$/, '');
+  prev.src = '/dl?path=' + encodeURIComponent(dir + '/' + name);
+  prev.hidden = false;
+  prev.play().catch(() => {});
+}
+async function setLock(name) {
+  const msg = document.getElementById('audio-write-msg');
+  if (msg) msg.textContent = '正在写入车机 U 盘…';
   try {
-    const j = await (await fetch('/api/audio/write', { method: 'POST',
-      headers: {'Content-Type': 'application/json'}, body: '{}' })).json();
-    msg.textContent = j.msg || (j.ok ? '已写入' : '写入失败');
+    const j = await (await fetch('/api/audio/setlockchime', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    })).json();
+    if (msg) msg.textContent = j.msg || (j.ok ? '已写入' : '写入失败');
     toast((j.ok ? '✅ ' : '❌ ') + (j.msg || ''));
   } catch (e) {
-    msg.textContent = '写入失败: ' + e;
+    if (msg) msg.textContent = '写入失败: ' + e;
   }
-  btn.disabled = false;
+}
+async function audioRenameSel() {
+  if (audioSel.size !== 1) return;
+  const old = [...audioSel][0];
+  const nn = prompt('新的文件名 (保留 .wav / .mp3 后缀)', old);
+  if (!nn || nn === old) return;
+  const j = await (await fetch('/api/audio/rename', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old, new: nn })
+  })).json();
+  toast((j.ok ? '✅ ' : '❌ ') + (j.msg || ''));
   refreshAudio();
 }
+async function audioDeleteSel() {
+  if (!audioSel.size) return;
+  if (!confirm('删除选中的 ' + audioSel.size + ' 个音频?')) return;
+  for (const name of [...audioSel]) {
+    await fetch('/api/audio/' + encodeURIComponent(name), { method: 'DELETE' });
+  }
+  toast('✅ 已删除');
+  refreshAudio();
+}
+document.getElementById('audio-file').onchange = async function () {
+  const files = Array.from(this.files || []);
+  this.value = '';
+  for (const f of files) {
+    if (!/\.(wav|mp3)$/i.test(f.name)) { toast('❌ ' + f.name + ' 仅支持 wav/mp3'); continue; }
+    if (f.size > 1024 * 1024) { toast('❌ ' + f.name + ' 超过 1MB'); continue; }
+    const fd = new FormData(); fd.append('file', f);
+    try {
+      const r = await fetch('/api/upload/audio', { method: 'POST', body: fd });
+      const j = await r.json();
+      toast((j.ok ? '✅ ' : '❌ ') + f.name + ' — ' + (j.msg || ''));
+    } catch (e) { toast('❌ ' + f.name + ' — 上传失败'); }
+  }
+  refreshAudio();
+};
 
 /* 文件管理器 */
 let curDir = '';
@@ -10647,6 +10710,7 @@ document.getElementById('wraps-file').onchange = async function () {
   if (!this.files || !this.files.length) return;
   if (!wrapAttached) { toast('请先点「连接车机U盘」, 连上后再上传'); this.value = ''; return; }
   for (const f of this.files) {
+    if (!/\.png$/i.test(f.name)) { toast('❌ ' + f.name + ' — 仅支持 PNG 图片'); continue; }
     const fd = new FormData(); fd.append('file', f); fd.append('path', 'Wraps');
     try {
       const r = await fetch('/api/upload/usb', { method: 'POST', body: fd });
@@ -10969,7 +11033,7 @@ def _move_children(src_dir, dst_dir):
 
 def ensure_dirs():
     for d in (VIDEO_ROOT, os.path.join(VIDEO_ROOT, "img"),
-              SKIN_DIR, AUDIO_Q, AUDIO_DONE, FILES_DIR, ARCHIVE, TRANSCODE_DIR):
+              SKIN_DIR, AUDIO_Q, AUDIO_DONE, AUDIO_LIB, FILES_DIR, ARCHIVE, TRANSCODE_DIR):
         os.makedirs(d, exist_ok=True)
     for c in CATS:
         os.makedirs(os.path.join(ARCHIVE, c), exist_ok=True)
@@ -13773,6 +13837,48 @@ def audio_write_now():
     if "SKIP" in out:
         return {"ok": False, "msg": "暂时无法写入（" + out.splitlines()[-1] + "），请稍后重试"}
     raise ValueError("写入失败：" + (out[-200:] or "未知错误"))
+
+
+def audio_set_lockchime(name):
+    """把归档区音频库里的素材设为锁车音: mp3 先转 wav, 再立即写入车机U盘根目录 LockChime.wav。"""
+    name = safe_name(name)
+    src = os.path.join(AUDIO_LIB, name) if name else ""
+    if not name or not os.path.isfile(src):
+        return {"ok": False, "msg": "文件不存在"}
+    if not name.lower().endswith((".wav", ".mp3")):
+        return {"ok": False, "msg": "仅支持 wav/mp3"}
+    os.makedirs(AUDIO_Q, exist_ok=True)
+    tmp = os.path.join(AUDIO_Q, ".lockchime.tmp.wav")
+    stage = os.path.join(AUDIO_Q, "LockChime.wav")
+    try:
+        if name.lower().endswith(".mp3"):
+            if not FFMPEG_BIN:
+                return {"ok": False, "msg": "未找到 ffmpeg, 无法把 mp3 转成 wav"}
+            r = subprocess.run([FFMPEG_BIN, "-y", "-i", src, "-vn", "-acodec", "pcm_s16le",
+                                "-ar", "44100", "-ac", "1", tmp],
+                               capture_output=True, text=True, timeout=120)
+            if r.returncode != 0 or not os.path.isfile(tmp):
+                return {"ok": False, "msg": "mp3 转 wav 失败"}
+            shutil.move(tmp, stage)
+        else:
+            shutil.copyfile(src, stage)
+        if os.path.getsize(stage) > 1024 * 1024:
+            return {"ok": False, "msg": "转换后超过 1MB, 请换更短或采样率更低的音频"}
+        res = audio_write_now()
+        try:
+            os.remove(os.path.join(AUDIO_DONE, "LockChime.wav"))
+        except OSError:
+            pass
+        if res.get("ok"):
+            return {"ok": True, "msg": "已立即写入车机U盘根目录: LockChime.wav"}
+        return res
+    finally:
+        for p in (tmp, stage):
+            try:
+                if os.path.isfile(p):
+                    os.remove(p)
+            except OSError:
+                pass
 # 程序缓存 (缩略图/遥测/多路合成临时) 放在安装目录 cache/ 下, 不占数据卡:
 #   thumbs / tel-cache / stitch-tmp。转码缓存单独放在归档区内 (TRANSCODE_DIR,
 #   见文件顶部定义), 与归档视频一一对应, 删归档视频时自动清理对应缓存。
@@ -14205,7 +14311,7 @@ def _storage_wait_for_job(timeout=20.0):
 
 def _apply_storage_root(root, persist=True):
     """切换运行中的视频存储根目录 (镜像 / 归档 / 转码 / 皮肤 / 队列一并跟随)。"""
-    global VIDEO_ROOT, IMG, ARCHIVE, SKIN_DIR, AUDIO_Q, AUDIO_DONE, FILES_DIR
+    global VIDEO_ROOT, IMG, ARCHIVE, SKIN_DIR, AUDIO_Q, AUDIO_DONE, AUDIO_LIB, FILES_DIR
     global TRANSCODE_DIR, PRUNED_FILE, DRIVE_STATE
     root = (root or "").rstrip("/") or DEFAULT_VIDEO_ROOT
     VIDEO_ROOT = root
@@ -14214,6 +14320,7 @@ def _apply_storage_root(root, persist=True):
     SKIN_DIR = os.path.join(ARCHIVE, ".skins")
     AUDIO_Q = os.path.join(ARCHIVE, "boombox-queue")
     AUDIO_DONE = os.path.join(ARCHIVE, "boombox-done")
+    AUDIO_LIB = os.path.join(ARCHIVE, "audio")
     FILES_DIR = os.path.join(ARCHIVE, "files")
     TRANSCODE_DIR = os.path.join(ARCHIVE, "transcode_cache")
     PRUNED_FILE = os.path.join(ARCHIVE, ".pruned")
@@ -22461,9 +22568,22 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(404, b"not found")
         elif path == "/api/audio":
-            q = sorted(f for f in os.listdir(AUDIO_Q) if os.path.isfile(os.path.join(AUDIO_Q, f)))
-            d = sorted(f for f in os.listdir(AUDIO_DONE) if os.path.isfile(os.path.join(AUDIO_DONE, f)))
-            self._json({"queue": q, "done": d})
+            try:
+                os.makedirs(AUDIO_LIB, exist_ok=True)
+                names = sorted(os.listdir(AUDIO_LIB))
+            except OSError:
+                names = []
+            files = []
+            for f in names:
+                fp = os.path.join(AUDIO_LIB, f)
+                if not os.path.isfile(fp) or not f.lower().endswith((".wav", ".mp3")):
+                    continue
+                try:
+                    files.append({"name": f, "size": os.path.getsize(fp),
+                                  "mtime": int(os.path.getmtime(fp))})
+                except OSError:
+                    continue
+            self._json({"files": files, "dir": AUDIO_LIB})
         elif path == "/api/browse":
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             d = safe_archive_dir(q.get("dir", [""])[0])
@@ -23381,9 +23501,14 @@ class Handler(BaseHTTPRequestHandler):
             if len(data) > 1024 * 1024:
                 self._json({"ok": False, "msg": "车机要求单个音频 <1MB, 请裁剪后重试"}, 400)
                 return
-            with open(os.path.join(AUDIO_Q, fn), "wb") as f:
-                f.write(data)
-            self._json({"ok": True, "msg": "已加入队列, 归档同步时写入车机U盘"})
+            try:
+                os.makedirs(AUDIO_LIB, exist_ok=True)
+                with open(os.path.join(AUDIO_LIB, fn), "wb") as f:
+                    f.write(data)
+            except OSError as ex:
+                self._json({"ok": False, "msg": "写入失败: %s" % ex}, 500)
+                return
+            self._json({"ok": True, "msg": "已保存到归档区音频库 (audio/)"})
         elif path == "/api/usb/attach":
             body = self._read_json()
             if not isinstance(body, dict):
@@ -23412,9 +23537,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "msg": "车机U盘未连接, 请先点「连接车机U盘」"}, 400)
                 return
             dest = usb_real(fields.get("path"))
-            if dest is None or not os.path.isdir(dest):
-                self._json({"ok": False, "msg": "目标目录不存在"}, 400)
+            if dest is None:
+                self._json({"ok": False, "msg": "目标目录无效"}, 400)
                 return
+            if not os.path.isdir(dest):
+                try:
+                    os.makedirs(dest, exist_ok=True)   # 如 Wraps/ 首次上传时自动创建
+                except OSError:
+                    self._json({"ok": False, "msg": "目标目录不存在且创建失败"}, 400)
+                    return
             with open(os.path.join(dest, fn), "wb") as f:
                 f.write(data)
             subprocess.run(["sync"], capture_output=True)
@@ -23466,18 +23597,33 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "msg": "请求体过大 (上限 1MB)"}, 413)
                 return
             name = safe_name(body.get("name") if isinstance(body, dict) else None)
-            src = os.path.join(AUDIO_Q, name) if name else ""
-            if name and os.path.isfile(src):
-                with open(src, "rb") as f:
-                    data = f.read()
-                if not name.lower().endswith(".wav"):
-                    self._json({"ok": False, "msg": "锁车音必须是 WAV (mp3 只能当喇叭音效)"})
-                    return
-                with open(os.path.join(AUDIO_Q, "LockChime.wav"), "wb") as f:
-                    f.write(data)
-                self._json({"ok": True})
-            else:
+            try:
+                self._json(audio_set_lockchime(name))
+            except (OSError, ValueError, subprocess.SubprocessError) as ex:
+                self._json({"ok": False, "msg": str(ex)[:200]}, 500)
+        elif path == "/api/audio/rename":
+            body = self._read_json()
+            if body == "TOOBIG":
+                self._json({"ok": False, "msg": "请求体过大 (上限 1MB)"}, 413)
+                return
+            old = safe_name(body.get("old") if isinstance(body, dict) else None)
+            new = safe_name(body.get("new") if isinstance(body, dict) else None)
+            if not old or not new:
+                self._json({"ok": False, "msg": "文件名无效"}, 400)
+                return
+            if not new.lower().endswith((".wav", ".mp3")):
+                self._json({"ok": False, "msg": "仅支持 wav/mp3 后缀"}, 400)
+                return
+            src = os.path.join(AUDIO_LIB, old)
+            dst = os.path.join(AUDIO_LIB, new)
+            if not os.path.isfile(src):
                 self._json({"ok": False, "msg": "文件不存在"}, 404)
+                return
+            if os.path.exists(dst):
+                self._json({"ok": False, "msg": "同名文件已存在"}, 409)
+                return
+            os.rename(src, dst)
+            self._json({"ok": True, "msg": "已重命名"})
         else:
             self._send(404, b"not found")
 
@@ -23497,10 +23643,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "msg": "not found"}, 404)
         elif path.startswith("/api/audio/"):
             name = safe_name(path[len("/api/audio/"):].split("?")[0])
-            done = "done=1" in self.path
-            base = AUDIO_DONE if done else AUDIO_Q
-            fp = os.path.join(base, name) if name else ""
-            if name and os.path.isfile(fp) and name != "LockChime.wav":
+            fp = os.path.join(AUDIO_LIB, name) if name else ""
+            if name and os.path.isfile(fp):
                 os.remove(fp)
                 self._json({"ok": True})
             else:
