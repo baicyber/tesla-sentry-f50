@@ -226,6 +226,9 @@ CONF_DOCS = {
     "TSF_SAVED_KEEP_DAYS": "手动保存按天保留, 0=不限",
     "TSF_SENTRY_MAX_GB": "哨兵录像容量上限 G, 0=不限",
     "TSF_SAVED_MAX_GB": "手动保存容量上限 G, 0=不限",
+    "TSF_SENTRY_MAX_EVENTS": "哨兵录像最多保留事件数, 0=不限",
+    "TSF_SAVED_MAX_EVENTS": "手动保存最多保留事件数, 0=不限",
+    "TSF_DRIVE_MAX_EVENTS": "驾驶记录最多保留事件数, 0=不限",
     "TSF_CACHE_MAX_GB": "转码缓存容量上限 G, 超出从最旧文件删",
     "TSF_DISK_GUARD_INTERVAL": "磁盘空间检查间隔秒数",
     "TSF_FREE_MIN_MB": "存储卡空闲低于此值暂停同步 (MiB)",
@@ -363,8 +366,9 @@ if not VIDEO_ROOT:
     elif _arch_env:
         VIDEO_ROOT = os.path.normpath(os.path.join(_arch_env, os.pardir))
 # F50 专用：未配置时固定使用 TF 卡挂载点。
+DEFAULT_VIDEO_ROOT = "/mnt/sdcard/tesla-sentry"
 if not VIDEO_ROOT:
-    VIDEO_ROOT = "/mnt/sdcard/tesla-sentry"
+    VIDEO_ROOT = DEFAULT_VIDEO_ROOT
 os.environ.setdefault("TSF_VIDEO_ROOT", VIDEO_ROOT)
 os.environ.setdefault("TSF_IMG", os.path.join(VIDEO_ROOT, "img", "teslacam.img"))
 os.environ.setdefault("TSF_ARCHIVE", os.path.join(VIDEO_ROOT, "archive"))
@@ -505,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.024"
+APP_VERSION = "2026.11.27.025"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1774,6 +1778,9 @@ RETENTION_FIELDS = {
     "saved_keep_days": (0, 3650),   # 手动保存按天保留, 0=不按天数清
     "sentry_max_gb": (0, 4096),     # 哨兵录像体积上限(G), 0=不限
     "saved_max_gb": (0, 4096),      # 手动保存体积上限(G), 0=不限
+    "sentry_max_events": (0, 9999),  # 哨兵录像最多保留事件数, 0=不限
+    "saved_max_events": (0, 9999),   # 手动保存最多保留事件数, 0=不限
+    "drive_max_events": (0, 9999),   # 驾驶记录最多保留事件数, 0=不限
     "cache_max_gb": (1, 64),        # 转码缓存上限(G), 超了从最旧文件删
 }
 # 预转码缓存: 每个模块只预转码最新的 N 个事件, 0=关闭该模块预转码
@@ -1802,6 +1809,9 @@ def load_settings():
          "saved_keep_days": _retention_default("TSF_SAVED_KEEP_DAYS", box_days),
          "sentry_max_gb": _retention_default("TSF_SENTRY_MAX_GB", 0),
          "saved_max_gb": _retention_default("TSF_SAVED_MAX_GB", 0),
+         "sentry_max_events": _retention_default("TSF_SENTRY_MAX_EVENTS", 0),
+         "saved_max_events": _retention_default("TSF_SAVED_MAX_EVENTS", 0),
+         "drive_max_events": _retention_default("TSF_DRIVE_MAX_EVENTS", 0),
          "cache_max_gb": _retention_default("TSF_CACHE_MAX_GB", 5),
          "prewarm_sentry": _retention_default("TSF_PREWARM_SENTRY", 2),
          "prewarm_saved": _retention_default("TSF_PREWARM_SAVED", 2)}
@@ -3247,6 +3257,7 @@ body.settings-open { overflow:hidden; }
 }
 #tab-storage .storage-row.path { grid-template-columns:minmax(0,1fr) minmax(0,2.4fr) auto; max-width:none; }
 #tab-storage .storage-row.path .ninput { min-width:0; }
+#tab-storage .storage-row.path .path-reset { align-self:center; min-height:34px; padding:4px 10px; font-size:12px; border-radius:8px; white-space:nowrap; }
 .usage-actions { display:flex; align-items:center; gap:8px; }
 .usage-clear { min-height:26px !important; padding:2px 9px !important; font-size:11.5px !important; }
 #storage-cleanup-status { margin-top:6px; min-height:0; }
@@ -3268,7 +3279,9 @@ body.settings-open { overflow:hidden; }
 .card-gate-note { color:var(--warn, #d9822b); }
 .card-gate-off { opacity:.5; pointer-events:none; }
 .storage-split { height:1px; background:var(--line); margin:18px 0 12px; }
-#storage-archive-sync { min-height:100%; }
+#storage-archive-sync { margin-top:14px; }
+#storage-event-count { margin-top:0; }
+#storage-event-count .storage-row { max-width:420px; }
 .storage-tools .tool-block { padding-top:14px; margin-top:14px; border-top:1px solid var(--line); }
 .storage-tools .tool-block:first-of-type { border-top:0; margin-top:0; padding-top:0; }
 .storage-tools h4 { font-size:14px; margin:0 0 8px; font-weight:600; }
@@ -3816,6 +3829,16 @@ body.settings-open { overflow:hidden; }
       <div class="updbtns"><button class="mini primary" id="retention-save" onclick="storageSaveRetention()" disabled>保存时间限制</button></div>
       <div class="hint" id="retention-msg" role="status" aria-live="polite"></div>
     </section>
+    <section class="storage-quota" id="storage-event-count">
+      <h3>保留事件数量设置</h3>
+      <div class="hint">填 0 表示不限制。按事件个数限制各类录像：清理时都从最旧事件开始删除，容量上限、事件数量、保留时间三者谁先满足谁先生效，始终保留最新事件。设置立即作用于后台清理，并同步写入 /etc/tesla-sentry.conf。</div>
+      <div class="storage-row cap"><label for="retention-sentrycount">哨兵录像最多保留</label><input class="ninput" id="retention-sentrycount" type="number" min="0" max="9999" step="1" inputmode="numeric"><span class="retention-unit">个</span><button class="storage-help" type="button" aria-label="哨兵事件容量预估" aria-expanded="false" aria-controls="storage-tip" data-est="sentrycount">?</button></div>
+      <div class="storage-row cap"><label for="retention-savedcount">手动保存最多保留</label><input class="ninput" id="retention-savedcount" type="number" min="0" max="9999" step="1" inputmode="numeric"><span class="retention-unit">个</span><button class="storage-help" type="button" aria-label="手动保存事件容量预估" aria-expanded="false" aria-controls="storage-tip" data-est="savedcount">?</button></div>
+      <div class="storage-row cap"><label for="retention-drivecount">驾驶记录最多保留</label><input class="ninput" id="retention-drivecount" type="number" min="0" max="9999" step="1" inputmode="numeric"><span class="retention-unit">个</span><button class="storage-help" type="button" aria-label="驾驶记录事件容量预估" aria-expanded="false" aria-controls="storage-tip" data-est="drivecount">?</button></div>
+      <div class="updbtns"><button class="mini primary" id="retention-count-save" onclick="storageSaveRetentionCount()" disabled>保存事件数量</button></div>
+      <div class="hint" id="retention-count-msg" role="status" aria-live="polite"></div>
+    </section>
+    </div>
     <section class="storage-quota storage-tools" id="storage-archive-sync">
       <h3>手动同步</h3>
       <div class="hint">只读解析车机 U 盘镜像（不挂载，车机可继续正常读写），把归档区还没有的文件增量复制过来，已存在的文件直接跳过。复制时显示实时速度、百分比、已复制/总量与剩余时间。</div>
@@ -3840,15 +3863,14 @@ body.settings-open { overflow:hidden; }
         <div id="arch-migrate-actions"></div>
       </div>
     </section>
-    </div>
     <details class="storage-quota" id="storage-paths">
       <summary>存储路径</summary>
       <div class="hint">程序本体在 /opt/tesla-sentry。视频存储建议放在 TF 卡（F50 默认 /dev/mmcblk1p1，挂载 /mnt/sdcard）。目录结构固定为「视频存储根目录/img/teslacam.img」和「视频存储根目录/archive/transcode_cache」。修改后需重启服务生效，现有录像不会自动迁移。</div>
-      <div class="storage-row path"><label for="storage-path-root">视频存储根目录<small>放镜像、归档和日志，建议在 TF 卡上</small></label><input class="ninput" id="storage-path-root" type="text" spellcheck="false"></div>
-      <div class="storage-row path"><label>车机 U 盘镜像<small>虚拟 U 盘文件，车机录像写入这里</small></label><input class="ninput" id="storage-path-img" type="text" disabled></div>
-      <div class="storage-row path"><label>归档区目录<small>同步保存的录像副本，滚动窗口与保留期都按这里计算</small></label><input class="ninput" id="storage-path-archive" type="text" disabled></div>
-      <div class="storage-row path"><label>转码缓存目录<small>低清晰度转码与程序临时文件（缩略图/遥测）都放在这里，可随时清空</small></label><input class="ninput" id="storage-path-transcode" type="text" disabled></div>
-      <div class="updbtns"><button class="mini primary" id="paths-save" onclick="storageSavePaths()" disabled>保存路径设置</button></div>
+      <div class="storage-row path"><label for="storage-path-root">视频存储根目录<small>放镜像、归档和日志，建议在 TF 卡上</small></label><input class="ninput" id="storage-path-root" type="text" spellcheck="false"><button class="mini path-reset" type="button" onclick="storageResetPath('root')">恢复默认</button></div>
+      <div class="storage-row path"><label>车机 U 盘镜像<small>虚拟 U 盘文件，车机录像写入这里</small></label><input class="ninput" id="storage-path-img" type="text" disabled><button class="mini path-reset" type="button" onclick="storageResetPath('img')">恢复默认</button></div>
+      <div class="storage-row path"><label>归档区目录<small>同步保存的录像副本，滚动窗口与保留期都按这里计算</small></label><input class="ninput" id="storage-path-archive" type="text" disabled><button class="mini path-reset" type="button" onclick="storageResetPath('archive')">恢复默认</button></div>
+      <div class="storage-row path"><label>转码缓存目录<small>低清晰度转码与程序临时文件（缩略图/遥测）都放在这里，可随时清空</small></label><input class="ninput" id="storage-path-transcode" type="text" disabled><button class="mini path-reset" type="button" onclick="storageResetPath('transcode')">恢复默认</button></div>
+      <div class="updbtns"><button class="mini primary" id="paths-save" onclick="storageSavePaths()" disabled>保存路径设置</button><button class="mini" id="paths-reset-all" type="button" onclick="storageResetAllPaths()" disabled>全部恢复默认路径</button></div>
       <div class="hint" id="paths-msg" role="status" aria-live="polite"></div>
     </details>
     <section class="storage-danger"><h3>重启服务 / 系统</h3>
@@ -4661,6 +4683,13 @@ function setupGuideGo() {
   const box = document.getElementById('setup-guide');
   if (box) box.hidden = true;
   openPanel('storage');
+  // 首次引导: 进入存储分配后默认展开「外置卡管理」
+  const card = document.getElementById('storage-extcard');
+  if (card) card.open = true;
+  setTimeout(() => {
+    const target = document.getElementById('storage-extcard');
+    if (target && target.scrollIntoView) target.scrollIntoView({block:'start'});
+  }, 60);
 }
 function setupGuideClose() {
   const box = document.getElementById('setup-guide');
@@ -8032,12 +8061,23 @@ function storageHelpClose() {
   if (storageHelpButton) storageHelpButton.setAttribute('aria-expanded', 'false');
   storageHelpButton = null;
 }
+// 保留事件数量右侧的圆圈角标: 按当前填写数量动态估算容量
+// 4 路 140MB/分钟、6 路 180MB/分钟, 每个事件按 10 分钟统计
+function eventCountSpaceTip(inputId) {
+  const input = document.getElementById('retention-' + inputId);
+  const n = Math.max(0, Math.floor(Number(input ? input.value : 0) || 0));
+  if (!n) return '当前为 0，不按事件数量限制。每个事件按 10 分钟统计：4 路约 1.4 G/个（140 MB/分钟），6 路约 1.8 G/个（180 MB/分钟）。';
+  const four = fmtBytes(n * 1400 * 1048576);
+  const six = fmtBytes(n * 1800 * 1048576);
+  return '当前填写 ' + n + ' 个事件，按每个事件 10 分钟估算：4 路车型约 ' + four +
+    '（140 MB/分钟），6 路车型约 ' + six + '（180 MB/分钟）。填 0 表示不限制。';
+}
 document.querySelectorAll('.storage-help').forEach(button => button.addEventListener('click', () => {
   const wasOpen = storageHelpButton === button;
   storageHelpClose();
   if (wasOpen) return;
   const tip = document.getElementById('storage-tip');
-  tip.textContent = STORAGE_HELP[button.dataset.help];
+  tip.textContent = button.dataset.est ? eventCountSpaceTip(button.dataset.est) : STORAGE_HELP[button.dataset.help];
   tip.hidden = false;
   const rect = button.getBoundingClientRect();
   tip.style.left = Math.max(12, Math.min(rect.right - tip.offsetWidth, innerWidth - tip.offsetWidth - 12)) + 'px';
@@ -8052,7 +8092,7 @@ window.addEventListener('resize', storageHelpClose);
 document.querySelector('.settings-content').addEventListener('scroll', storageHelpClose);
 function storageDisable(disabled) {
   STORAGE_LOCKED = !!disabled;
-  document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize, #storage-format, #retention-save, #paths-save').forEach(element => element.disabled = disabled);
+  document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize, #storage-format, #retention-save, #retention-count-save, #paths-save, #paths-reset-all').forEach(element => element.disabled = disabled);
   applyCardGate();
 }
 function storageMessage(message, resize = false) {
@@ -8248,6 +8288,7 @@ async function storageLoad() {
     if (data.prewarm) for (const [id, key] of [['prewarm-sentry','prewarm_sentry'],['prewarm-saved','prewarm_saved']]) document.getElementById(id).value = data.prewarm[key];
     for (const [id, key] of [['archive','archive_gib'],['drive','drive_gib'],['reserve','free_target_gib'],['minimum','free_min_gib']]) document.getElementById('storage-' + id).value = data.values[key];
     if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['sentrydays','sentry_keep_days'],['saveddays','saved_keep_days']]) document.getElementById('retention-' + id).value = data.retention[key];
+    if (data.retention) for (const [id, key] of [['sentrycount','sentry_max_events'],['savedcount','saved_max_events'],['drivecount','drive_max_events']]) { const el = document.getElementById('retention-' + id); if (el) el.value = data.retention[key]; }
     if (data.retention) {
       document.getElementById('storage-sentry').value = data.retention.sentry_max_gb;
       document.getElementById('storage-saved').value = data.retention.saved_max_gb;
@@ -8346,6 +8387,30 @@ async function storageSaveRetention() {
     if (msg) msg.textContent = '保存失败：' + error.message;
   } finally { button.disabled = false; }
 }
+async function storageSaveRetentionCount() {
+  const ids = [['sentrycount','sentry_max_events'],['savedcount','saved_max_events'],['drivecount','drive_max_events']];
+  const body = {};
+  for (const [id, key] of ids) {
+    const input = document.getElementById('retention-' + id);
+    if (!input.reportValidity()) return;
+    body[key] = Number(input.value);
+  }
+  const msg = document.getElementById('retention-count-msg');
+  const button = document.getElementById('retention-count-save');
+  button.disabled = true;
+  if (msg) msg.textContent = '正在保存…';
+  try {
+    const response = await fetch('/api/settings/retention', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const result = await response.json();
+    if (!result.ok) throw Error(result.msg || '保存失败');
+    if (msg) msg.textContent = result.conf_synced
+      ? '已保存，并同步写入 /etc/tesla-sentry.conf'
+      : '已保存；当前环境没有可写的 /etc/tesla-sentry.conf（不影响运行）';
+    if (storageData && result.values) storageData.retention = result.values;
+  } catch (error) {
+    if (msg) msg.textContent = '保存失败：' + error.message;
+  } finally { button.disabled = false; }
+}
 async function storageSavePrewarm() {
   const ids = [['prewarm-sentry','prewarm_sentry'],['prewarm-saved','prewarm_saved']];
   const body = {};
@@ -8394,6 +8459,26 @@ async function storageSavePaths() {
   } catch (error) {
     if (msg) msg.textContent = '保存失败：' + error.message;
   } finally { button.disabled = false; }
+}
+function storageDefaultPaths() {
+  const root = (storageData && storageData.paths && storageData.paths.default_root) || '/mnt/sdcard/tesla-sentry';
+  return {root:root, img:root + '/img/teslacam.img', archive:root + '/archive', transcode:root + '/archive/transcode_cache'};
+}
+function storageResetPath(name) {
+  const defaults = storageDefaultPaths();
+  const el = document.getElementById('storage-path-' + name);
+  if (el) el.value = defaults[name];
+  const msg = document.getElementById('paths-msg');
+  if (msg) msg.textContent = '已恢复默认路径，点击「保存路径设置」生效';
+}
+function storageResetAllPaths() {
+  const defaults = storageDefaultPaths();
+  for (const name of ['root', 'img', 'archive', 'transcode']) {
+    const el = document.getElementById('storage-path-' + name);
+    if (el) el.value = defaults[name];
+  }
+  const msg = document.getElementById('paths-msg');
+  if (msg) msg.textContent = '已全部恢复默认路径，点击「保存路径设置」生效';
 }
 async function storageClearUsage(target) {
   const labels = {sentry:'哨兵录像', saved:'手动保存', drive:'驾驶记录', recent:'实时滚动记录', cache:'转码缓存目录', archive:'归档区（含哨兵、手动保存、实时滚动记录、驾驶记录与缓存）'};
@@ -13344,6 +13429,9 @@ SENTRY_KEEP_DAYS = int(os.environ.get("TSF_SENTRY_KEEP_DAYS", BOX_KEEP_DAYS))   
 SAVED_KEEP_DAYS = int(os.environ.get("TSF_SAVED_KEEP_DAYS", BOX_KEEP_DAYS))     # 手动保存单独保留天数
 SENTRY_MAX_GB = int(os.environ.get("TSF_SENTRY_MAX_GB", "0"))         # 哨兵体积上限(G), 0=不限
 SAVED_MAX_GB = int(os.environ.get("TSF_SAVED_MAX_GB", "0"))           # 手动保存体积上限(G), 0=不限
+SENTRY_MAX_EVENTS = int(os.environ.get("TSF_SENTRY_MAX_EVENTS", "0"))  # 哨兵最多保留事件数, 0=不限
+SAVED_MAX_EVENTS = int(os.environ.get("TSF_SAVED_MAX_EVENTS", "0"))    # 手动保存最多保留事件数, 0=不限
+DRIVE_MAX_EVENTS = int(os.environ.get("TSF_DRIVE_MAX_EVENTS", "0"))    # 驾驶记录最多保留事件数, 0=不限
 CACHE_MAX_GB = int(os.environ.get("TSF_CACHE_MAX_GB", "5"))           # 转码缓存上限(G)
 ARCHIVE_TOTAL_GB = int(os.environ.get("TSF_ARCHIVE_TOTAL_GB", "30"))  # 所有录像归档总量上限(GB), 0=不按总量清
 DISK_GUARD_INTERVAL = max(30, int(os.environ.get("TSF_DISK_GUARD_INTERVAL", "60")))
@@ -13387,6 +13475,7 @@ def refresh_storage_settings():
     global ARCHIVE_TOTAL_GB, DRIVE_MAX_GB, FREE_MIN_MB, FREE_TARGET_MB
     global RECENT_ROLL_MIN, RECENT_KEEP_MIN, RECENT_MAX_GB, BOX_KEEP_DAYS
     global SENTRY_KEEP_DAYS, SAVED_KEEP_DAYS, SENTRY_MAX_GB, SAVED_MAX_GB, CACHE_MAX_GB
+    global SENTRY_MAX_EVENTS, SAVED_MAX_EVENTS, DRIVE_MAX_EVENTS
     try:
         values = storage_allocation.load()
     except (OSError, ValueError, TypeError):
@@ -13405,6 +13494,9 @@ def refresh_storage_settings():
     SAVED_KEEP_DAYS = int(saved['saved_keep_days'])
     SENTRY_MAX_GB = int(saved['sentry_max_gb'])
     SAVED_MAX_GB = int(saved['saved_max_gb'])
+    SENTRY_MAX_EVENTS = int(saved['sentry_max_events'])
+    SAVED_MAX_EVENTS = int(saved['saved_max_events'])
+    DRIVE_MAX_EVENTS = int(saved['drive_max_events'])
     CACHE_MAX_GB = int(saved['cache_max_gb'])
 
 
@@ -13492,7 +13584,7 @@ def storage_status():
                 job=storage_job(), usb_gib=disk['usb_bytes'] / storage_allocation.GIB,
                 retention=retention_values(), prewarm=prewarm_values(),
                 paths=dict(video_root=VIDEO_ROOT, img=IMG, archive=ARCHIVE,
-                           transcode=TRANSCODE_DIR))
+                           transcode=TRANSCODE_DIR, default_root=DEFAULT_VIDEO_ROOT))
 
 
 def retention_values():
@@ -13559,6 +13651,9 @@ def save_retention(body):
         'TSF_SAVED_KEEP_DAYS': current['saved_keep_days'],
         'TSF_SENTRY_MAX_GB': current['sentry_max_gb'],
         'TSF_SAVED_MAX_GB': current['saved_max_gb'],
+        'TSF_SENTRY_MAX_EVENTS': current['sentry_max_events'],
+        'TSF_SAVED_MAX_EVENTS': current['saved_max_events'],
+        'TSF_DRIVE_MAX_EVENTS': current['drive_max_events'],
         'TSF_CACHE_MAX_GB': current['cache_max_gb'],
     })
     return dict(ok=True, values=current, conf_synced=written)
@@ -13599,7 +13694,7 @@ def save_paths(body):
     })
     return dict(ok=True, conf_synced=written, restart_required=True,
                 paths=dict(video_root=root, img=img, archive=archive,
-                           transcode=transcode))
+                           transcode=transcode, default_root=DEFAULT_VIDEO_ROOT))
 
 
 def _clear_tree(root):
@@ -15874,8 +15969,12 @@ class DriveArchive:
             self.records = {}
         self.limit_reported = False
 
-    def rotate(self, retained, used):
-        """优先整段行程淘汰；单次长行程超过配额时，从最早的分钟片段开始清理。"""
+    def rotate(self, retained, used, max_events=0):
+        """驾驶记录清理: 容量与事件数量任一超限即从最旧片段开始删。
+
+        容量优先整段行程淘汰，单次长行程超过配额时从最早的分钟片段清理；
+        事件数量按最旧片段逐个删除，始终保留最新一个片段。
+        """
         locks = recording_locks()
         if any(key.startswith('DriveClips/') for key in locks):
             expanded = set(locks)
@@ -15886,34 +15985,53 @@ class DriveArchive:
             if expanded != locks:
                 storage_allocation.save(sorted(expanded), os.path.join(ARCHIVE, '.recording-locks.json'))
                 locks = expanded
-        limit = DRIVE_MAX_GB * (1 << 30)
-        if limit <= 0 or used <= limit:
-            return used
-        events = [event for event in list_events("DriveClips")["DriveClips"]
-                  if re.fullmatch(r"\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d", event["name"])
-                  and _ev_dt(event["name"])
-                  and not os.path.islink(os.path.join(retained, event["name"]))]
-        trips = list(reversed(drive_groups(events)))
+
+        def events_now():
+            return [event for event in list_events("DriveClips")["DriveClips"]
+                    if re.fullmatch(r"\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d", event["name"])
+                    and _ev_dt(event["name"])
+                    and not os.path.islink(os.path.join(retained, event["name"]))]
+
+        def drop(event):
+            name = event["name"]
+            path = os.path.join(retained, name)
+            size = _dir_size(path)
+            if not _tombstone("DriveClips", name):
+                raise OSError("无法记录驾驶记录清理状态")
+            shutil.rmtree(path)
+            return size
+
         removed = 0
-        for index, trip in enumerate(trips):
-            if used <= limit:
-                break
-            newest_trip = index == len(trips) - 1
-            # 永远保留最新片段；正常写入前已排除单片超过配额的情况。
-            candidates = trip["events"][:-1] if newest_trip else trip["events"]
-            for event in candidates:
-                name = event["name"]
-                if "DriveClips/" + name in locks:
-                    continue
-                path = os.path.join(retained, name)
-                size = _dir_size(path)
-                if not _tombstone("DriveClips", name):
-                    raise OSError("无法记录驾驶记录清理状态")
-                shutil.rmtree(path)
-                used -= size
-                removed += 1
-                if newest_trip and used <= limit:
+        # 1) 事件数量: 从最旧片段逐个删, 保留最新一个
+        if max_events > 0:
+            ordered = sorted(events_now(), key=lambda event: event["name"])
+            total = len(ordered)
+            for event in ordered:
+                if total <= max_events:
                     break
+                if "DriveClips/" + event["name"] in locks:
+                    continue
+                used -= drop(event)
+                total -= 1
+                removed += 1
+
+        # 2) 容量: 优先整段行程淘汰, 最新行程只保留最后一片
+        limit = DRIVE_MAX_GB * (1 << 30)
+        if limit > 0 and used > limit:
+            trips = list(reversed(drive_groups(events_now())))
+            for index, trip in enumerate(trips):
+                if used <= limit:
+                    break
+                newest_trip = index == len(trips) - 1
+                # 永远保留最新片段；正常写入前已排除单片超过配额的情况。
+                candidates = trip["events"][:-1] if newest_trip else trip["events"]
+                for event in candidates:
+                    if "DriveClips/" + event["name"] in locks:
+                        continue
+                    used -= drop(event)
+                    removed += 1
+                    if newest_trip and used <= limit:
+                        break
         if removed:
             print("驾驶记录已清理 %d 个旧片段" % removed, flush=True)
         return used
@@ -16006,7 +16124,7 @@ class DriveArchive:
             finally:
                 os.close(fd)
         # 四路新文件已完整链接并发布后，才允许清理旧归档。失败后的超额也会在下次检查重试。
-        remaining = self.rotate(retained, used)
+        remaining = self.rotate(retained, used, DRIVE_MAX_EVENTS)
         changed = changed or remaining != used
         if changed:
             fd = os.open(retained, os.O_RDONLY | os.O_DIRECTORY)
@@ -16196,8 +16314,11 @@ def _category_events(base, skip_recent_seconds=3600):
     return rows
 
 
-def roll_category(cat, keep_days, max_gb):
-    """哨兵 / 手动保存: 按天数 + 独立体积上限, 都从最旧事件开始删, 永远保留最新一个事件。"""
+def roll_category(cat, keep_days, max_gb, max_events=0):
+    """哨兵 / 手动保存: 按天数 + 独立体积上限 + 事件数量上限, 都从最旧事件开始删。
+
+    三个限制谁先满足谁先生效(顺序应用即等价), 永远保留最新一个事件。
+    """
     base = os.path.join(ARCHIVE, cat)
     rows = _category_events(base)
     if not rows:
@@ -16229,13 +16350,25 @@ def roll_category(cat, keep_days, max_gb):
             if not os.path.isdir(p):
                 total -= sz
                 n += 1
+    if max_events > 0 and rows:
+        for _dt, e, p, _sz in list(rows):
+            if len(rows) <= max_events:
+                break
+            if p == rows[-1][2]:            # 最新事件同样保留
+                continue
+            if cat + '/' + e in locks or not _tombstone(cat, e):
+                continue
+            shutil.rmtree(p, ignore_errors=True)
+            if not os.path.isdir(p):
+                rows = [row for row in rows if row[2] != p]
+                n += 1
     return n
 
 
 def roll_box():
-    """盒子侧 SentryClips / SavedClips 定期清理: 两个分类各自独立的天数与体积上限。"""
-    n = roll_category("SentryClips", SENTRY_KEEP_DAYS, SENTRY_MAX_GB)
-    n += roll_category("SavedClips", SAVED_KEEP_DAYS, SAVED_MAX_GB)
+    """盒子侧 SentryClips / SavedClips 定期清理: 两个分类各自独立的天数、体积与数量上限。"""
+    n = roll_category("SentryClips", SENTRY_KEEP_DAYS, SENTRY_MAX_GB, SENTRY_MAX_EVENTS)
+    n += roll_category("SavedClips", SAVED_KEEP_DAYS, SAVED_MAX_GB, SAVED_MAX_EVENTS)
     return n
 
 
