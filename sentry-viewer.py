@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.028"
+APP_VERSION = "2026.11.27.029"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3265,8 +3265,8 @@ body.settings-open { overflow:hidden; }
 .storage-danger .storage-row { max-width:420px; }
 #storage-resize { border-color:var(--danger); color:var(--danger); background:transparent; }
 /* 存储分配 · 外置卡与归档同步功能区 */
-#storage-extcard { margin:0 0 14px; }
-#storage-extcard > summary { font-size:17px; font-weight:600; cursor:pointer; list-style-position:inside; }
+#storage-extcard { margin:12px 0 0; padding:12px 0 0; border:0; border-top:1px solid var(--line); border-radius:0; background:transparent; }
+#storage-extcard > summary { font-size:15px; font-weight:600; cursor:pointer; list-style-position:inside; }
 #storage-extcard[open] > summary { margin-bottom:10px; }
 .storage-usb > summary { font-size:14px; font-weight:600; cursor:pointer; list-style-position:inside; }
 .storage-usb[open] > summary { margin-bottom:8px; }
@@ -3751,7 +3751,6 @@ body.settings-open { overflow:hidden; }
       <div class="usage-chart-total" id="usage-total">—</div>
       <div class="usage-legend" id="usage-legend"></div>
       <div class="hint" style="margin-top:7px">整卡图显示车机 U 盘设定容量、归档区总上限、安全预留与剩余空间，不显示归档区实际占用；随下方容量设置实时联动。</div>
-    </div>
     <details class="storage-quota storage-tools" id="storage-extcard">
       <summary>外置卡管理</summary>
       <div class="ext-cards">
@@ -3777,6 +3776,7 @@ body.settings-open { overflow:hidden; }
       </section>
       </div>
     </details>
+    </div>
     <div class="hint card-gate-note" id="card-gate-note" role="status" hidden>外置卡未检测到或未挂载：车机 U 盘容量设定、格式化、归档区设定、手动同步与一键迁移已暂停。请先在上方「外置卡管理」中挂载外置卡。</div>
     <div class="hint" id="storage-budget" role="status"></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
@@ -7856,7 +7856,12 @@ function stab(which) {
   if (which === 'auth') pwLoad();
   if (which === 'wraps') refreshWraps();
   if (which === 'skin') { applyStyle(localStorage.getItem(STYLE_KEY) || 'default'); refreshSkins(); refreshBrand(); }
-  if (which === 'storage') { storageLoad(); extCardInfo(); archiveScan(false); }
+  if (which === 'storage') {
+    // 外置卡管理默认折叠, 只有首次使用向导会主动展开
+    const extCard = document.getElementById('storage-extcard');
+    if (extCard) extCard.open = false;
+    storageLoad(); extCardInfo(); archiveScan(false);
+  }
   if (which === 'about') loadLogs();
 }
 
