@@ -18,6 +18,11 @@ load_conf() {
 }
 start_service() {
     load_conf
+    # 用户关闭了实时同步: 不启动只读同步服务 (避免重启后又从 img 镜像读文件)
+    if [ "${TSF_LIVE_SYNC:-1}" = "0" ]; then
+        logger -t tesla-live "实时同步已关闭 (TSF_LIVE_SYNC=0), 不启动"
+        return 0
+    fi
     TSF_DIR="${TSF_DIR:-/opt/tesla-sentry}"
     PY="${TSF_PYTHON:-/usr/bin/python3}"
     if [ ! -f "$TSF_DIR/tesla-live-sync.py" ] && [ -f /opt/tesla-sentry/tesla-live-sync.py ]; then

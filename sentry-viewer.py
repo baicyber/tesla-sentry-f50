@@ -3317,6 +3317,15 @@ body.settings-open { overflow:hidden; }
 /* 单位 G 与右侧 ? 圆圈同一水平线: 两者都用固定高度 + 弹性居中, 避免字号/基线差导致一高一低 */
 #tab-storage .storage-row.cap .retention-unit { display:inline-flex; align-items:center; height:36px; line-height:1; }
 #tab-storage .storage-row.cap .storage-help { align-self:center; }
+/* 保留时间 / 保留事件数量: 两类行都固定为「标签 | 输入 96px | 单位 40px | ? 28px」,
+   单位文字(分钟/天/个)长度不同也严格同列; 没有 ? 的行保留空列, 输入框依旧对齐 */
+#tab-storage #storage-retention .storage-row,
+#tab-storage #storage-event-count .storage-row {
+  grid-template-columns:minmax(0,1fr) 96px 40px 28px;
+  gap:10px;
+  max-width:460px;
+}
+#tab-storage #storage-retention .retention-unit { text-align:left; }
 /* 设置说明跟在文字描述右边, 宽度不够时自动换到描述下方, 不会被输入框/按钮遮挡 */
 .cap-label { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 8px; min-width:0; }
 /* 归档区总上限的标题和其他条目同样大小; 预算/不设上限说明贴在标题右侧 */
@@ -3835,12 +3844,12 @@ body.settings-open { overflow:hidden; }
       <div class="ext-cards">
       <section class="storage-quota">
       <h4>外置卡信息</h4>
-      <div class="hint">检测外置 TF/SD 卡。插入新卡后可先「初始格式化」（格式化为 ext4 文件系统），再挂载、查看容量与测速。测速写入 256MB，期间会暂停所有同步写入以保证数据准确，结束后自动恢复。</div>
+      <div class="hint">检测外置 TF/SD 卡。插入新卡后可先「初始格式化」（格式化为 ext4 文件系统），再挂载、查看容量与读写测速。读写测速写入 256MB 后清缓存读回，期间会暂停所有同步写入以保证数据准确，结束后自动恢复。</div>
       <div id="ext-card-info" class="tool-info">读取中…</div>
       <div class="tool-actions ext-card-actions">
         <button class="mini" onclick="extCardInfo()">刷新</button>
         <button class="mini" id="extCardMountBtn" onclick="extCardMountToggle()" disabled>挂载</button>
-        <button class="mini" onclick="extCardSpeed()">速度测试（256MB）</button>
+        <button class="mini" onclick="extCardSpeed()">读写测速（256MB）</button>
         <button class="mini tool-danger" onclick="extCardFormat()">初始格式化</button>
       </div>
       <div class="hint" id="ext-card-msg" role="status" aria-live="polite"></div>
@@ -3931,6 +3940,7 @@ body.settings-open { overflow:hidden; }
         <div class="sync-line"><span>已复制 / 总量</span><b id="arch-sync-done">0 B / 0 B</b></div>
         <div class="sync-line"><span>复制速度</span><b id="arch-sync-rate">0 MB/s</b></div>
         <div class="sync-line"><span>剩余时间</span><b id="arch-sync-eta">—</b></div>
+        <div class="tool-actions" id="arch-sync-stop-wrap" hidden><button class="mini tool-danger" id="arch-sync-stop" onclick="archiveSyncStop()">停止同步</button></div>
         <div class="hint" id="arch-sync-msg" role="status" aria-live="polite"></div>
       </div>
       <div id="arch-migrate" hidden>
@@ -4761,6 +4771,7 @@ async function ffmpegFix() {
   }
 }
 let LIVE_AGO = null;
+let LIVE_SYNC_ENABLED = true;   // 实时同步开关 (来自 /api/live 的 enabled), 与存储页按钮同源
 function paintLiveText() {
   const txt = document.getElementById('livetxt');
   if (!txt || !LIVE_AGO) return;
@@ -4798,7 +4809,12 @@ async function refreshLive() {
   maybeShowSetup(live.setup_needed === true);
   showSyncStatus(live);
   const dot = document.getElementById('livedot'), txt = document.getElementById('livetxt');
-  if (live.running) {
+  // 开关状态以 /api/live 的 enabled 为准: 关闭即停止从 img 镜像只读文件
+  if (live.enabled === false) {
+    dot.style.background = '#e8443f';
+    LIVE_AGO = null;
+    txt.textContent = t('实时同步已关闭');
+  } else if (live.running) {
     dot.style.background = '#4cc38a';
     LIVE_AGO = {ago: (live.ago === null || live.ago === undefined) ? null : Number(live.ago), at: Date.now(), pending: Number(live.pending) || 0};
     paintLiveText();
@@ -4807,6 +4823,8 @@ async function refreshLive() {
     LIVE_AGO = null;
     txt.textContent = t('实时同步未开启');
   }
+  // 存储页开关与首页状态同源, 不用切标签也会实时更新
+  paintLiveToggle(live.enabled !== false, !!live.running);
   // 同步状态常驻；容量尚未读到时只隐藏容量摘要。
   const sw = document.getElementById('storwrap');  const dk = live.disk;
   // 外置卡未挂载: 不要拿 /mnt 所在 eMMC 的容量冒充, 三行直接显示 -
@@ -8887,10 +8905,13 @@ function applyCardGate() {
   const off = !CARD_READY || STORAGE_LOCKED;
   ['storage-archive', 'storage-drive', 'storage-recentmax', 'storage-sentry', 'storage-saved',
    'storage-cache', 'storage-reserve', 'storage-minimum', 'storage-usb',
-   'storage-save', 'storage-resize', 'storage-format', 'arch-sync-btn', 'arch-sync-toggle'].forEach(id => {
+   'storage-save', 'storage-resize', 'storage-format', 'arch-sync-btn'].forEach(id => {
     const element = document.getElementById(id);
     if (element) element.disabled = off;
   });
+  // 实时同步开关只受存储任务锁定, 卡没挂载也能关闭, 便于随时停止从镜像读文件
+  const liveTgl = document.getElementById('arch-sync-toggle');
+  if (liveTgl) liveTgl.disabled = STORAGE_LOCKED;
   const migrate = document.getElementById('arch-migrate');
   if (migrate) migrate.classList.toggle('card-gate-off', !CARD_READY);
   const acts = document.getElementById('arch-migrate-actions');
@@ -8979,7 +9000,7 @@ async function extCardJobPoll(then) {
 async function extCardSpeed() {
   if (!EXT_CARD) { toast('未检测到外置卡'); return; }
   const msg = document.getElementById('ext-card-msg');
-  if (msg) msg.textContent = '正在测速（写入 256MB 并读回，期间暂停所有同步写入，结束后自动恢复）…';
+  if (msg) msg.textContent = '正在读写测速（写入 256MB 后清缓存读回，期间暂停所有同步写入，结束后自动恢复）…';
   try {
     const j = await (await fetch('/api/card/speed', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
       body: JSON.stringify({ mount: EXT_CARD.mount || '' }) })).json();
@@ -9247,14 +9268,12 @@ function archiveSyncPaint(job) {
       : (job.state === 'error' ? '已中断' : (job.state === 'stopped' ? '已停止' : '同步中'));
     state.innerHTML = (job.state === 'running' ? '<span class="spin"></span>' : '') + label;
   }
-  // 实时同步开关: 只读同步运行中显示「关闭实时同步」, 空闲时显示「开启实时同步」
-  const liveOn = job.state === 'running' && (job.kind || 'sync') === 'sync';
-  const tgl = document.getElementById('arch-sync-toggle');
-  if (tgl) {
-    tgl.textContent = liveOn ? '关闭实时同步' : '开启实时同步';
-    tgl.classList.toggle('primary', !liveOn);
-    tgl.disabled = !CARD_READY;
-  }
+  // 一次性同步/迁移任务的进度; 开关状态由 paintLiveToggle 按 /api/live 单独维护
+  const stopWrap = document.getElementById('arch-sync-stop-wrap');
+  const canStop = job.state === 'running' && (job.kind || 'sync') === 'sync';
+  if (stopWrap) stopWrap.hidden = !canStop;
+  const stopBtn = document.getElementById('arch-sync-stop');
+  if (stopBtn) { stopBtn.disabled = false; stopBtn.textContent = '停止同步'; }
   document.getElementById('arch-sync-done').textContent = fmtBytes(done) + ' / ' + fmtBytes(total);
   document.getElementById('arch-sync-pct').textContent = (job.pct || 0) + '%';
   document.getElementById('arch-sync-fill').style.width = Math.min(100, job.pct || 0) + '%';
@@ -9287,6 +9306,11 @@ function archiveSyncIdlePoll() {
   ARCH_IDLE = setInterval(async () => {
     const panel = document.getElementById('tab-storage');
     if (!panel || panel.style.display === 'none') return;
+    // 实时同步开关: 与首页同源, 4 秒内跟上服务真实状态
+    try {
+      const live = await (await fetch('/api/live', { cache: 'no-store' })).json();
+      paintLiveToggle(live.enabled !== false, !!live.running);
+    } catch (e) {}
     try {
       const j = await (await fetch('/api/archive/sync/status', { cache: 'no-store' })).json();
       const job = j.job || {};
@@ -9299,8 +9323,6 @@ async function archiveSyncStart() {
   if (!CARD_READY) { toast('外置卡未挂载，请先在「外置卡管理」中挂载'); return; }
   const btn = document.getElementById('arch-sync-btn');
   if (btn) { btn.disabled = true; btn.textContent = '正在同步…'; }
-  const tgl = document.getElementById('arch-sync-toggle');
-  if (tgl) { tgl.disabled = true; tgl.textContent = '正在启动…'; }
   try {
     // 同步前先确认全盘扫描结果 (30 秒内直接复用缓存)
     await archiveScan(false);
@@ -9310,20 +9332,45 @@ async function archiveSyncStart() {
     archiveSyncPoll();
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = '立即同步到归档区'; }
-    if (tgl) { tgl.disabled = false; tgl.textContent = '开启实时同步'; }
     toast('❌ ' + e.message);
   }
 }
-/* 开启 / 关闭实时同步: 同一个按钮按当前状态切换 */
+/* 实时同步开关: 控制 tesla-live 只读同步服务是否从 img 镜像读取文件。
+   状态来自 /api/live 的 enabled, 与首页顶栏同源, 不用刷新页面即可实时更新。 */
+function paintLiveToggle(enabled, running) {
+  LIVE_SYNC_ENABLED = enabled !== false;
+  const tgl = document.getElementById('arch-sync-toggle');
+  if (!tgl) return;
+  tgl.textContent = LIVE_SYNC_ENABLED ? '关闭实时同步' : '开启实时同步';
+  tgl.classList.toggle('primary', !LIVE_SYNC_ENABLED);
+  tgl.disabled = STORAGE_LOCKED;
+  tgl.title = LIVE_SYNC_ENABLED
+    ? (running ? '实时同步运行中，点击停止从镜像读取文件' : '已开启，等待外置卡就绪')
+    : '已关闭，不再从镜像读取文件';
+}
 async function archiveSyncToggle() {
   const tgl = document.getElementById('arch-sync-toggle');
-  const running = !!tgl && tgl.textContent.indexOf('关闭') === 0;
-  if (running) await archiveSyncStop();
-  else await archiveSyncStart();
+  const on = !LIVE_SYNC_ENABLED;
+  if (tgl) { tgl.disabled = true; tgl.textContent = on ? '正在开启…' : '正在关闭…'; }
+  try {
+    const j = await (await fetch('/api/live/toggle', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
+      body: JSON.stringify({ on }) })).json();
+    if (!j.ok) throw Error(j.msg || '切换失败');
+    toast(j.msg || (on ? '实时同步已开启' : '实时同步已关闭'));
+    paintLiveToggle(j.enabled !== false, on);
+    try { await refreshLive(); } catch (e) {}
+    archiveSyncIdlePoll();
+  } catch (e) {
+    if (tgl) tgl.disabled = false;
+    toast('❌ ' + e.message);
+    try { await refreshLive(); } catch (e2) {}
+  }
 }
+/* 停止一次性「立即同步到归档区」任务 (实时同步开关由 archiveSyncToggle 控制服务) */
 async function archiveSyncStop() {
-  const tgl = document.getElementById('arch-sync-toggle');
-  if (tgl) { tgl.disabled = true; tgl.textContent = '正在停止…'; }
+  const btn = document.getElementById('arch-sync-stop');
+  if (btn) { btn.disabled = true; btn.textContent = '正在停止…'; }
   try {
     const j = await (await fetch('/api/archive/sync/stop', { method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' }, body: '{}' })).json();
@@ -9333,13 +9380,16 @@ async function archiveSyncStop() {
     // 继续轮询到 worker 真正停下, 界面才会切到「已停止」
     if ((j.job || {}).state === 'running') archiveSyncPoll();
   } catch (e) {
-    if (tgl) tgl.disabled = false;
+    if (btn) { btn.disabled = false; btn.textContent = '停止同步'; }
     toast('❌ ' + e.message);
   }
 }
-/* 进入存储页时同步一次真实的同步状态: 不然刷新/换标签后按钮会一直灰着,
-   看不到正在进行的同步, 也停不掉。 */
+/* 进入存储页时同步一次真实状态: 开关和一次性任务都不依赖刷新页面 */
 async function archiveSyncResume() {
+  try {
+    const live = await (await fetch('/api/live', { cache: 'no-store' })).json();
+    paintLiveToggle(live.enabled !== false, !!live.running);
+  } catch (e) {}
   try {
     const j = await (await fetch('/api/archive/sync/status', { cache: 'no-store' })).json();
     const job = j.job || {};
@@ -11909,6 +11959,42 @@ def _restore_card_export():
     _CARD_EXPORT_RELEASED = False
 
 
+def live_sync_enabled():
+    """用户是否开启「实时同步」(从 img 镜像只读解析并复制到归档区)。"""
+    return str(os.environ.get("TSF_LIVE_SYNC", "1")).lower() not in ("0", "false", "off", "no")
+
+
+def _car_usb_export_ok():
+    """车机 U 盘的 LUN 是否已绑定当前镜像且 UDC 已连接。"""
+    lun = os.path.join(GADGET_DIR, "functions", "mass_storage.0", "lun.0", "file")
+    try:
+        with open(lun) as f:
+            path = f.read().strip()
+        if not path:
+            return False
+        # 镜像迁移/重建后 LUN 里仍是旧路径: 视为未导出, 需要重新绑定,
+        # 否则车机侧看不到 U 盘 (表现为必须手动卸载再挂载)。
+        if os.path.realpath(path) != os.path.realpath(IMG):
+            return False
+        with open(os.path.join(GADGET_DIR, "UDC")) as f:
+            return bool(f.read().strip())
+    except OSError:
+        return False
+
+
+def _reexport_car_usb():
+    """开机时卡还没挂载导致导出失败, 卡就绪后重新导出 (无需用户手动卸载/挂载)。"""
+    if not os.path.isfile(IMG):
+        return
+    base = os.path.dirname(os.path.abspath(__file__))
+    start = os.path.join(base, "tesla-usb-start.sh")
+    args = ["sh", start] if os.path.isfile(start) else ["sh", os.path.join(base, "tesla-gadget.sh"), "on"]
+    try:
+        subprocess.run(args, capture_output=True, text=True, timeout=90)
+    except (OSError, subprocess.SubprocessError):
+        _gadget_rebind(True)
+
+
 def usb_detach_safe():
     try:
         ok, msg = usb_detach()
@@ -13010,7 +13096,9 @@ def _usb_host_state():
 def live_sync_state(copy_bps):
     """顶栏实时同步状态: syncing=正在从车机 U 盘复制到归档区, idle=在线待机, offline=未同步。"""
     reason = ""
-    if usb_attached or os.path.ismount(MNT):
+    if not live_sync_enabled():
+        reason = "实时同步已关闭"
+    elif usb_attached or os.path.ismount(MNT):
         reason = "文件管理已连接车机 U 盘，暂停同步"
     elif not os.path.isfile(IMG):
         reason = "车机 U 盘镜像尚未创建"
@@ -13069,7 +13157,7 @@ def live_status():
     # 手动归档同步/迁移进行中时, 顶栏「复制」速度直接取任务实时速率
     if _ARCH_SYNC.get("state") == "running" and _ARCH_SYNC.get("bps"):
         copy_bps = max(copy_bps, int(_ARCH_SYNC["bps"]))
-    return {"running": running, "pending": pending, "ago": ago, "last": last,
+    return {"running": running, "enabled": live_sync_enabled(), "pending": pending, "ago": ago, "last": last,
             "copy_bps": copy_bps, "sync": live_sync_state(copy_bps),
             "disk": disk_usage(), "sys": sys_status(),
             # 全新安装尚未创建车机镜像: 前端据此引导到「存储分配」完成首次设置。
@@ -13904,24 +13992,75 @@ def _storage_wait_for_job(timeout=20.0):
         time.sleep(0.3)
 
 
-def _heal_storage_paths():
-    """修复重启后「卡已挂载却提示镜像未就绪」。
-
-    旧版把 img/archive 直接放在卡根目录 (/mnt/sdcard/img), 新版统一到
-    /mnt/sdcard/tesla-sentry。开机时若按旧路径建目录, 卡上就会多出空的
-    img/archive, 而真实镜像在另一种布局里。这里检测「配置的镜像不存在、
-    另一种布局有真实镜像」时自动切换, 并把新路径写回 /etc/tesla-sentry.conf。
-    """
+def _apply_storage_root(root, persist=True):
+    """切换运行中的视频存储根目录 (镜像 / 归档 / 转码 / 皮肤 / 队列一并跟随)。"""
     global VIDEO_ROOT, IMG, ARCHIVE, SKIN_DIR, AUDIO_Q, AUDIO_DONE, FILES_DIR
     global TRANSCODE_DIR, PRUNED_FILE, DRIVE_STATE
+    root = (root or "").rstrip("/") or DEFAULT_VIDEO_ROOT
+    VIDEO_ROOT = root
+    IMG = os.path.join(root, "img", "teslacam.img")
+    ARCHIVE = os.path.join(root, "archive")
+    SKIN_DIR = os.path.join(ARCHIVE, ".skins")
+    AUDIO_Q = os.path.join(ARCHIVE, "boombox-queue")
+    AUDIO_DONE = os.path.join(ARCHIVE, "boombox-done")
+    FILES_DIR = os.path.join(ARCHIVE, "files")
+    TRANSCODE_DIR = os.path.join(ARCHIVE, "transcode_cache")
+    PRUNED_FILE = os.path.join(ARCHIVE, ".pruned")
+    DRIVE_STATE = os.path.join(ARCHIVE, ".drive-retention.json")
+    for key, value in (("TSF_VIDEO_ROOT", VIDEO_ROOT), ("TSF_IMG", IMG),
+                       ("TSF_ARCHIVE", ARCHIVE), ("TSF_TRANSCODE_DIR", TRANSCODE_DIR)):
+        os.environ[key] = value
+    if persist:
+        try:
+            sync_conf({"TSF_VIDEO_ROOT": VIDEO_ROOT, "TSF_IMG": IMG,
+                       "TSF_ARCHIVE": ARCHIVE, "TSF_TRANSCODE_DIR": TRANSCODE_DIR})
+        except (OSError, ValueError):
+            pass
+
+
+def _heal_storage_paths():
+    """统一到新版布局, 修复重启后「卡已挂载却提示镜像未就绪」。
+
+    旧版把 img/archive 直接放在卡根目录 (/mnt/sdcard/img), 新版统一到
+    /mnt/sdcard/tesla-sentry。卡挂载后先迁移旧布局 (同一分区 rename, 不搬数据),
+    再检查镜像实际位置; 发现配置与真实镜像不一致时跟随镜像并写回 conf。
+    """
+    global VIDEO_ROOT, IMG
     if not card_data_ready():
         return
+    root = (VIDEO_ROOT or DEFAULT_VIDEO_ROOT).rstrip("/") or DEFAULT_VIDEO_ROOT
+    mount = _resolve_mount(root)
+    new_root = os.path.join(mount, "tesla-sentry") if mount and mount != "/" else ""
+    # 1) 旧布局迁移: 卡根下的 img/archive 一律收进 <卡>/tesla-sentry,
+    #    不管当前配置指向卡根还是已经是新布局 (遗留目录也一并处理)。
+    if new_root and os.path.abspath(root) in (os.path.abspath(mount), os.path.abspath(new_root)):
+        src_root = mount if os.path.abspath(root) == os.path.abspath(new_root) else root
+        failed = False
+        for name in ("img", "archive"):
+            src = os.path.join(src_root, name)
+            dst = os.path.join(new_root, name)
+            if not os.path.isdir(src):
+                continue
+            if os.path.exists(dst):
+                continue          # 新布局已有数据: 以新布局为准, 旧目录留作备份
+            try:
+                os.makedirs(new_root, exist_ok=True)
+                os.rename(src, dst)
+            except OSError:
+                failed = True
+        # 迁移完成, 或镜像已经落到新布局时都切换到新根, 避免 conf 仍指向旧路径;
+        # 已经在新布局时不重复写 conf。
+        if (os.path.abspath(root) != os.path.abspath(new_root) and
+                (not failed or (os.path.isdir(os.path.join(new_root, "img"))
+                                and not os.path.isdir(os.path.join(src_root, "img"))))):
+            _apply_storage_root(new_root)
+            root = new_root
+    # 2) 配置指向的位置没有真实镜像时, 跟随真实镜像所在的布局
     try:
         if os.path.isfile(IMG) and os.path.getsize(IMG) > (1 << 20):
             return
     except OSError:
         pass
-    root = (VIDEO_ROOT or DEFAULT_VIDEO_ROOT).rstrip("/") or DEFAULT_VIDEO_ROOT
     candidates = []
     if os.path.basename(root) == "tesla-sentry":
         candidates.append(os.path.dirname(root))
@@ -13934,29 +14073,11 @@ def _heal_storage_paths():
             continue
         img = os.path.join(cand, "img", "teslacam.img")
         try:
-            if not (os.path.isfile(img) and os.path.getsize(img) > (1 << 20)):
-                continue
+            if os.path.isfile(img) and os.path.getsize(img) > (1 << 20):
+                _apply_storage_root(cand)
+                return
         except OSError:
             continue
-        VIDEO_ROOT = cand
-        IMG = img
-        ARCHIVE = os.path.join(cand, "archive")
-        SKIN_DIR = os.path.join(ARCHIVE, ".skins")
-        AUDIO_Q = os.path.join(ARCHIVE, "boombox-queue")
-        AUDIO_DONE = os.path.join(ARCHIVE, "boombox-done")
-        FILES_DIR = os.path.join(ARCHIVE, "files")
-        TRANSCODE_DIR = os.path.join(ARCHIVE, "transcode_cache")
-        PRUNED_FILE = os.path.join(ARCHIVE, ".pruned")
-        DRIVE_STATE = os.path.join(ARCHIVE, ".drive-retention.json")
-        for key, value in (("TSF_VIDEO_ROOT", VIDEO_ROOT), ("TSF_IMG", IMG),
-                           ("TSF_ARCHIVE", ARCHIVE), ("TSF_TRANSCODE_DIR", TRANSCODE_DIR)):
-            os.environ[key] = value
-        try:
-            sync_conf({"TSF_VIDEO_ROOT": VIDEO_ROOT, "TSF_IMG": IMG,
-                       "TSF_ARCHIVE": ARCHIVE, "TSF_TRANSCODE_DIR": TRANSCODE_DIR})
-        except (OSError, ValueError):
-            pass
-        return
 
 
 def _ensure_storage_dirs():
@@ -15045,6 +15166,13 @@ def external_card_speed(body):
                 f.flush()
                 os.fsync(f.fileno())
             wt = time.monotonic() - t0
+            # 先落盘并丢弃页缓存, 否则读回会命中缓存, 读速虚高
+            os.sync()
+            try:
+                with open("/proc/sys/vm/drop_caches", "w") as f:
+                    f.write("3\n")
+            except OSError:
+                pass
             t1 = time.monotonic()
             read = 0
             with open(fp, "rb", buffering=0) as f:
@@ -16012,6 +16140,27 @@ def archive_sync_stop():
     _ARCH_SYNC["stop"] = True
     _ARCH_SYNC["message"] = "正在停止…"
     return {"ok": True, "msg": "正在停止实时同步", "job": dict(_ARCH_SYNC)}
+
+
+def live_sync_toggle(on):
+    """开启/关闭实时同步: 控制 tesla-live 只读同步服务是否从 img 镜像读文件。
+
+    关闭时同时请求停止正在进行的只读同步任务; 状态写入 conf, 重启后保持。
+    """
+    on = bool(on)
+    os.environ["TSF_LIVE_SYNC"] = "1" if on else "0"
+    try:
+        sync_conf({"TSF_LIVE_SYNC": "1" if on else "0"})
+    except (OSError, ValueError):
+        pass
+    if not on and _ARCH_SYNC.get("state") == "running" and _ARCH_SYNC.get("kind") == "sync":
+        _ARCH_SYNC["stop"] = True
+    try:
+        _run_cmd(["/etc/init.d/tesla-live", "start" if on else "stop"], timeout=60)
+    except (OSError, subprocess.SubprocessError) as ex:
+        return {"ok": False, "enabled": on, "msg": "切换失败: %s" % str(ex)[:120]}
+    return {"ok": True, "enabled": on,
+            "msg": "实时同步已开启" if on else "实时同步已关闭（不再从镜像读取文件）"}
 
 
 def _stop_archive_sync_wait(timeout=30):
@@ -19979,8 +20128,24 @@ def card_watch_loop():
             ready = card_data_ready()
             last = CARD_WATCH["last"]
             CARD_WATCH["last"] = ready
+            if ready:
+                # 卡就绪: 旧布局迁移 + 补建目录, 并修复「开机时卡未挂载导致
+                # 车机 U 盘没有导出」的问题; 同步服务也在这里拉起, 不需要手动卸载再挂载。
+                if last is not True:
+                    try:
+                        _ensure_storage_dirs()
+                    except Exception:
+                        pass
+                    if not _car_usb_export_ok():
+                        _reexport_car_usb()
+                    if live_sync_enabled():
+                        try:
+                            _run_cmd(["/etc/init.d/tesla-live", "restart"], timeout=60)
+                        except (OSError, subprocess.SubprocessError):
+                            pass
+                continue
             # 已挂载不做处理; 已经是未挂载状态也不重复停, 只在首次发现未挂载时停一次
-            if ready or last is False:
+            if last is False:
                 continue
             PREWARM["paused"] = True
             PREWARM["idle_since"] = time.time()
@@ -22348,6 +22513,7 @@ class Handler(BaseHTTPRequestHandler):
         if p in ("/api/card/speed", "/api/card/format", "/api/card/config",
                  "/api/card/mount", "/api/card/unmount",
                  "/api/system/reboot", "/api/archive/sync", "/api/archive/sync/stop",
+                 "/api/live/toggle",
                  "/api/prewarm/start", "/api/prewarm/pause",
                  "/api/archive/migrate", "/api/archive/migrate/delete",
                  "/api/archive/node/delete"):
@@ -22384,6 +22550,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = archive_sync_start()
                 elif p == "/api/archive/sync/stop":
                     result = archive_sync_stop()
+                elif p == "/api/live/toggle":
+                    result = live_sync_toggle((body or {}).get("on"))
                 elif p == "/api/archive/migrate":
                     result = archive_migrate(body)
                 elif p == "/api/archive/migrate/delete":
