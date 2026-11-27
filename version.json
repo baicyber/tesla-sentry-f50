@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.27.023",
+  "version": "2026.11.27.024",
   "date": "2026-11-27",
   "files": [
     "storage_allocation.py",
@@ -7,6 +7,11 @@
     "tesla-live-sync.py"
   ],
   "notes": [
+    "外置卡管理新增挂载/卸载按钮（放在刷新旁）：卸载先停 tesla-live 并 sync 刷盘再强制卸载，确保拔卡不丢数据；按钮随挂载状态在「挂载 / 卸载」间切换，卸载与初始格式化使用警示样式",
+    "外置卡未检测到或未挂载时，车机 U 盘容量设定、格式化、归档区设定、手动同步、一键迁移全部变灰不可操作，后端接口同步拒绝；后台实时同步、预转码与归档清理自动停止，卡被拔出时监听线程会停掉 tesla-live",
+    "测速写入量由 512MB 改为 256MB（前后端提示同步），未挂载时不再回退到根目录测速",
+    "初始格式化完成后自动挂载到默认位置 /mnt/sdcard，挂载前清空该目录内的全部残留文件；刷新/挂载/测速/格式化四个按钮统一尺寸",
+    "—— 以下为 2026.11.27.023 更新 ——",
     "清理看门狗残留：tesla-live 去掉 WATCHDOG_DIR/STOP_FLAG/DISABLE_FLAG/stop_service/disable/enable 并补 TSF_DIR 默认值；tsf-mount 不再读写 /tmp/tsf-watchdog.pause 与 /root/tsf-watchdog 禁用标记，启动时直接拉起 tesla-live/tesla-viewer",
     "外置卡格式化不再写 /tmp/tsf-card-format 标记（原供看门狗跳过 tsf-mount），相关注释同步更新",
     "—— 以下为 2026.11.27.022 更新 ——",

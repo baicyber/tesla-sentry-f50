@@ -505,7 +505,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.023"
+APP_VERSION = "2026.11.27.024"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3261,6 +3261,12 @@ body.settings-open { overflow:hidden; }
 .storage-usb[open] > summary { margin-bottom:8px; }
 .storage-usb-actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
 .storage-usb-actions .mini { flex:1 1 0; min-width:140px; min-height:38px; border-radius:9px; justify-content:center; }
+/* 外置卡四个按钮统一尺寸: 刷新 / 挂载卸载 / 测速 / 初始格式化 */
+.tool-actions.ext-card-actions { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; }
+.tool-actions.ext-card-actions .mini { min-height:38px; border-radius:9px; justify-content:center; white-space:nowrap; }
+@media (max-width:560px) { .tool-actions.ext-card-actions { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+.card-gate-note { color:var(--warn, #d9822b); }
+.card-gate-off { opacity:.5; pointer-events:none; }
 .storage-split { height:1px; background:var(--line); margin:18px 0 12px; }
 #storage-archive-sync { min-height:100%; }
 .storage-tools .tool-block { padding-top:14px; margin-top:14px; border-top:1px solid var(--line); }
@@ -3738,11 +3744,12 @@ body.settings-open { overflow:hidden; }
       <div class="ext-cards">
       <section class="storage-quota">
       <h4>外置卡信息</h4>
-      <div class="hint">检测外置 TF/SD 卡。插入新卡后可先「初始格式化」（格式化为 ext4 文件系统），再查看容量与测速。测速写入 512MB，期间会暂停所有同步写入以保证数据准确，结束后自动恢复。</div>
+      <div class="hint">检测外置 TF/SD 卡。插入新卡后可先「初始格式化」（格式化为 ext4 文件系统），再挂载、查看容量与测速。测速写入 256MB，期间会暂停所有同步写入以保证数据准确，结束后自动恢复。</div>
       <div id="ext-card-info" class="tool-info">读取中…</div>
-      <div class="tool-actions">
-        <button class="mini" onclick="extCardInfo()">刷新信息</button>
-        <button class="mini" onclick="extCardSpeed()">速度测试（512MB）</button>
+      <div class="tool-actions ext-card-actions">
+        <button class="mini" onclick="extCardInfo()">刷新</button>
+        <button class="mini" id="extCardMountBtn" onclick="extCardMountToggle()" disabled>挂载</button>
+        <button class="mini" onclick="extCardSpeed()">速度测试（256MB）</button>
         <button class="mini tool-danger" onclick="extCardFormat()">初始格式化</button>
       </div>
       <div class="hint" id="ext-card-msg" role="status" aria-live="polite"></div>
@@ -3757,6 +3764,7 @@ body.settings-open { overflow:hidden; }
       </section>
       </div>
     </details>
+    <div class="hint card-gate-note" id="card-gate-note" role="status" hidden>外置卡未检测到或未挂载：车机 U 盘容量设定、格式化、归档区设定、手动同步与一键迁移已暂停。请先在上方「外置卡管理」中挂载外置卡。</div>
     <div class="hint" id="storage-budget" role="status"></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
     <div class="storage-row cap"><div class="cap-label"><label for="storage-archive">归档区总上限</label><span class="cap-note" id="archive-limit-note" hidden></span></div><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
@@ -8043,7 +8051,9 @@ document.addEventListener('click', event => {
 window.addEventListener('resize', storageHelpClose);
 document.querySelector('.settings-content').addEventListener('scroll', storageHelpClose);
 function storageDisable(disabled) {
+  STORAGE_LOCKED = !!disabled;
   document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize, #storage-format, #retention-save, #paths-save').forEach(element => element.disabled = disabled);
+  applyCardGate();
 }
 function storageMessage(message, resize = false) {
   const output = document.getElementById('storage-msg');
@@ -8549,6 +8559,7 @@ async function systemReboot() {
   }
 }
 async function storageResize() {
+  if (!CARD_READY) { toast('外置卡未挂载，请先在「外置卡管理」中挂载'); return; }
   if (!storageData || !document.getElementById('storage-usb').reportValidity()) return;
   const first = !(storageData.disk && storageData.disk.usb_bytes > 0);
   if (first) {
@@ -8562,6 +8573,7 @@ async function storageResize() {
   } catch (error) { storageFail(error); }
 }
 async function storageFormat() {
+  if (!CARD_READY) { toast('外置卡未挂载，请先在「外置卡管理」中挂载'); return; }
   if (!storageData) return;
   if (!confirm('格式化将用空白 exFAT 按当前容量重建车机 U 盘，清空其中的全部录像和其他文件，无法撤销。归档区保留。\n格式化期间车机暂停录像，请保持供电。确认格式化？')) return;
   storageDisable(true);
@@ -8584,10 +8596,41 @@ let ARCH_DIR_PICK = {};   // 归档目录部分勾选: path -> Set('A' | 'A/' | 
 let ARCH_TREE_COLLAPSED = new Set();   // 已折叠文件树的归档目录 (默认收起, 点开展开)
 let ARCH_TREE_KNOWN = new Set();       // 已见过的归档目录, 用于只对首次出现的目录默认收起
 let EXT_BOOT = {};        // 外置卡开机自动挂载配置
+/* 外置卡未挂载时, 车机 U 盘容量设定、格式化、归档区设定、手动同步与一键迁移全部变灰不可用 */
+let CARD_READY = false;     // 外置卡已检测到并挂载 (来自 /api/card/info 的 ready, 未确认前先禁用)
+let STORAGE_LOCKED = false; // 存储任务运行/读取中, 暂时锁定
+function applyCardGate() {
+  const off = !CARD_READY || STORAGE_LOCKED;
+  ['storage-archive', 'storage-drive', 'storage-recentmax', 'storage-sentry', 'storage-saved',
+   'storage-cache', 'storage-reserve', 'storage-minimum', 'storage-usb',
+   'storage-save', 'storage-resize', 'storage-format', 'arch-sync-btn'].forEach(id => {
+    const element = document.getElementById(id);
+    if (element) element.disabled = off;
+  });
+  const migrate = document.getElementById('arch-migrate');
+  if (migrate) migrate.classList.toggle('card-gate-off', !CARD_READY);
+  const acts = document.getElementById('arch-migrate-actions');
+  if (acts) acts.querySelectorAll('button').forEach(button => button.disabled = off);
+  const note = document.getElementById('card-gate-note');
+  if (note) note.hidden = CARD_READY;
+  // 挂载/卸载按钮本身不因未挂载而禁用, 只在没有卡或存储任务进行中时不可点
+  const mountBtn = document.getElementById('extCardMountBtn');
+  if (mountBtn) mountBtn.disabled = !EXT_CARD || STORAGE_LOCKED;
+}
+function extCardMountBtnSync() {
+  const button = document.getElementById('extCardMountBtn');
+  if (!button) return;
+  const mounted = !!(EXT_CARD && EXT_CARD.mount);
+  button.textContent = mounted ? '卸载' : '挂载';
+  // 卸载是强制操作, 与普通按钮区分; 未检测到卡时不可点
+  button.classList.toggle('tool-danger', mounted);
+  button.disabled = !EXT_CARD;
+  button.title = mounted ? '强制卸载并刷盘，确保拔卡安全' : '挂载到默认位置 /mnt/sdcard';
+}
 function extCardRender() {
   const box = document.getElementById('ext-card-info');
   if (!box) return;
-  if (!EXT_CARDS.length) { box.innerHTML = '未检测到外置卡（TF/SD）。'; return; }
+  if (!EXT_CARDS.length) { box.innerHTML = '未检测到外置卡（TF/SD）。'; extCardMountBtnSync(); return; }
   box.innerHTML = EXT_CARDS.map((c, i) =>
     '<div class="scan-item' + (i === 0 ? ' sel' : '') + '" data-ext="' + i + '">' +
     '<span class="p"><b>' + esc(c.device) + '</b>' + (c.label ? ' · ' + esc(c.label) : '') +
@@ -8598,7 +8641,9 @@ function extCardRender() {
   [...box.querySelectorAll('[data-ext]')].forEach(el => el.onclick = () => {
     EXT_CARD = EXT_CARDS[Number(el.dataset.ext)] || null;
     [...box.querySelectorAll('[data-ext]')].forEach(x => x.classList.toggle('sel', x === el));
+    extCardMountBtnSync();
   });
+  extCardMountBtnSync();
 }
 async function extCardInfo() {
   const box = document.getElementById('ext-card-info');
@@ -8607,11 +8652,14 @@ async function extCardInfo() {
     const j = await (await fetch('/api/card/info', { cache: 'no-store' })).json();
     EXT_CARDS = j.cards || [];
     EXT_BOOT = j.boot || EXT_BOOT || {};
+    // 外置卡是否挂载: 未挂载时禁用容量设定/格式化/归档设定/同步/迁移
+    CARD_READY = j.ready !== false;
     const auto = document.getElementById('card-automount'), delay = document.getElementById('card-mount-delay');
     if (auto) auto.checked = !!EXT_BOOT.automount;
     if (delay) delay.value = EXT_BOOT.delay != null ? EXT_BOOT.delay : 5;
     if (!EXT_CARD || !EXT_CARDS.some(c => c.device === EXT_CARD.device)) EXT_CARD = EXT_CARDS[0] || null;
     extCardRender();
+    applyCardGate();
   } catch (e) { if (box) box.textContent = '读取失败: ' + e; }
 }
 async function extCardJobPoll(then) {
@@ -8642,7 +8690,7 @@ async function extCardJobPoll(then) {
 async function extCardSpeed() {
   if (!EXT_CARD) { toast('未检测到外置卡'); return; }
   const msg = document.getElementById('ext-card-msg');
-  if (msg) msg.textContent = '正在测速（写入 512MB 并读回，期间暂停所有同步写入，结束后自动恢复）…';
+  if (msg) msg.textContent = '正在测速（写入 256MB 并读回，期间暂停所有同步写入，结束后自动恢复）…';
   try {
     const j = await (await fetch('/api/card/speed', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
       body: JSON.stringify({ mount: EXT_CARD.mount || '' }) })).json();
@@ -8667,10 +8715,34 @@ async function extCardSaveConfig() {
     if (msg) msg.textContent = '✅ ' + (j.msg || '已保存') + (EXT_CARD ? '（' + EXT_CARD.device + '）' : '');
   } catch (e) { if (msg) msg.textContent = '❌ ' + e.message; }
 }
+async function extCardMountToggle() {
+  if (!EXT_CARD) { toast('未检测到外置卡'); return; }
+  const dev = EXT_CARD.device;
+  const mounted = !!EXT_CARD.mount;
+  const msg = document.getElementById('ext-card-msg');
+  if (mounted && !confirm('⚠️ 将强制卸载 ' + dev + '：先停止相关同步与转码并 sync 刷盘，再强制卸载。\n卸载完成后外置卡容量设定、格式化、归档设定、同步与迁移会暂时停用。\n确认卸载？')) return;
+  if (msg) msg.textContent = mounted ? '正在刷盘并强制卸载…' : '正在挂载到默认位置…';
+  const button = document.getElementById('extCardMountBtn');
+  if (button) button.disabled = true;
+  try {
+    const j = await (await fetch(mounted ? '/api/card/unmount' : '/api/card/mount', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' },
+      body: JSON.stringify({ device: dev, mount: EXT_CARD.mount || '' }) })).json();
+    if (!j.ok) throw Error(j.msg || '操作失败');
+    if (msg) msg.textContent = '✅ ' + (j.msg || '完成');
+    await extCardInfo();
+    // 挂载状态变化后重新读取存储分配, 让整卡容量与按钮可用状态同步
+    try { await storageLoad(); } catch (e) {}
+    if (CARD_READY) { try { archiveScan(false); } catch (e) {} }
+  } catch (e) {
+    if (msg) msg.textContent = '❌ ' + e.message;
+    if (button) button.disabled = false;
+  }
+}
 async function extCardFormat() {
   if (!EXT_CARD) { toast('未检测到外置卡'); return; }
   const dev = EXT_CARD.device;
-  if (!confirm('⚠️ 初始格式化会把 ' + dev + ' 格式化为 ext4 文件系统，并清空其中全部数据，无法撤销。\n如果这是正在使用的数据卡，归档录像会全部丢失。\n如系统缺少 mkfs.ext4，会自动联网安装 e2fsprogs。\n确认继续？')) return;
+  if (!confirm('⚠️ 初始格式化会把 ' + dev + ' 格式化为 ext4 文件系统，并清空其中全部数据，无法撤销。\n如果这是正在使用的数据卡，归档录像会全部丢失。\n如系统缺少 mkfs.ext4，会自动联网安装 e2fsprogs。\n格式化完成后会自动挂载到默认位置 /mnt/sdcard。\n确认继续？')) return;
   const typed = prompt('请输入设备名确认格式化：' + dev, '');
   if (typed !== dev) { toast('已取消格式化'); return; }
   const msg = document.getElementById('ext-card-msg');
@@ -8769,6 +8841,7 @@ function archiveScanRender() {
   if (!ARCH_SCAN_ITEMS.length) {
     box.innerHTML = '';
     if (acts) acts.innerHTML = '';
+    applyCardGate();
     return;
   }
   const picked = archSelectedItems().length;
@@ -8802,6 +8875,7 @@ function archiveScanRender() {
     '<button class="mini" onclick="archSelectAll()">' + (picked === ARCH_SCAN_ITEMS.length ? '取消全选' : '全选') + '</button>' +
     '<button class="mini primary" onclick="archiveMigrate()"' + (picked ? '' : ' disabled') + '>迁移选中（' + picked + '）</button>' +
     '<button class="mini tool-danger" onclick="archiveDeleteSelected()"' + (picked ? '' : ' disabled') + '>删除选中</button></div>';
+  applyCardGate();
 }
 function archSelectAll() {
   if (ARCH_SCAN_SELECTED.size === ARCH_SCAN_ITEMS.length) { ARCH_SCAN_SELECTED.clear(); ARCH_DIR_PICK = {}; }
@@ -8904,10 +8978,12 @@ async function archiveSyncPoll() {
     clearInterval(ARCH_POLL);
     document.getElementById('arch-sync-btn').disabled = false;
     document.getElementById('arch-sync-btn').textContent = job.state === 'done' ? '再同步一次' : '立即同步到归档区';
+    applyCardGate();
     try { refreshLive(); } catch (e) {}
   }, 1200);
 }
 async function archiveSyncStart() {
+  if (!CARD_READY) { toast('外置卡未挂载，请先在「外置卡管理」中挂载'); return; }
   const btn = document.getElementById('arch-sync-btn');
   if (btn) { btn.disabled = true; btn.textContent = '正在同步…'; }
   try {
@@ -8923,6 +8999,7 @@ async function archiveSyncStart() {
   }
 }
 async function archiveMigrate(policy) {
+  if (!CARD_READY) { toast('外置卡未挂载，请先在「外置卡管理」中挂载'); return; }
   const items = archSelectedItems();
   if (!items.length) { toast('请先勾选要迁移的项目'); return; }
   const btn = document.querySelector('#arch-migrate-actions .primary');
@@ -13798,6 +13875,8 @@ def transcode_diag_fix():
 def storage_apply(body):
     if not isinstance(body, dict) or not isinstance(body.get('values'), dict):
         raise ValueError('存储参数不完整')
+    if not card_data_ready():
+        raise ValueError(CARD_NOT_READY_MSG)
     if storage_busy():
         raise ValueError('正在调整容量或格式化 U 盘')
     with _storage_edit_lock:
@@ -13986,6 +14065,8 @@ def storage_start_resize(body):
     # Old pages only acknowledged pausing recording and must never authorize erasure.
     if not isinstance(body, dict) or body.get('clear_confirmed') is not True:
         raise ValueError('请确认清空车机 U 盘中的全部内容后再调整容量')
+    if not card_data_ready():
+        raise ValueError(CARD_NOT_READY_MSG)
     _storage_wait_for_job()
     with _storage_edit_lock:
         _storage_wait_for_job()
@@ -14022,6 +14103,8 @@ def storage_start_format(body):
     """
     if not isinstance(body, dict) or body.get('clear_confirmed') is not True:
         raise ValueError('请确认清空车机 U 盘中的全部内容后再格式化')
+    if not card_data_ready():
+        raise ValueError(CARD_NOT_READY_MSG)
     _storage_wait_for_job()
     with _storage_edit_lock:
         _storage_wait_for_job()
@@ -14063,6 +14146,35 @@ def _mount_table():
     except OSError:
         pass
     return m
+
+
+def _mount_src(mountpoint):
+    """反查某个挂载点对应的设备节点。"""
+    for src, lst in _mount_table().items():
+        for mp, _fs in lst:
+            if mp == mountpoint:
+                return src
+    return ""
+
+
+CARD_NOT_READY_MSG = "外置卡未检测到或未挂载，请先在「外置卡管理」中挂载后再操作"
+
+
+def card_data_ready():
+    """外置卡是否已检测到并挂载: 视频存储根目录必须落在某个非根挂载点上。
+
+    未插卡或卡未挂载时, 车机 U 盘容量设定、格式化、归档区设定、手动同步、
+    一键迁移都不可执行, 后台同步与转码任务也会停止。"""
+    probe = os.path.abspath(VIDEO_ROOT)
+    while True:
+        if probe == os.sep:
+            return False
+        if os.path.ismount(probe):
+            return True
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            return False
+        probe = parent
 
 
 def _blkid(path, field="TYPE"):
@@ -14131,7 +14243,8 @@ def external_card_info():
                      "label": _blkid(path, "LABEL"), "uuid": _blkid(path, "UUID"),
                      "free": free, "removable": removable}
             cards.append(entry)
-    return {"ok": True, "cards": cards, "data_root": VIDEO_ROOT, "boot": card_boot_config()}
+    return {"ok": True, "cards": cards, "data_root": VIDEO_ROOT,
+            "ready": card_data_ready(), "boot": card_boot_config()}
 
 
 CARD_INIT = "/etc/init.d/tesla_mount_sdcard"
@@ -14246,19 +14359,20 @@ def _resolve_mount(target):
 
 
 def external_card_speed(body):
-    """在存储卡上写 512MB 再读回, 给出顺序写/读速度 (MB/s)。
+    """在存储卡上写 256MB 再读回, 给出顺序写/读速度 (MB/s)。
     测速期间通过标志文件暂停所有同步写入, 结束后自动恢复, 保证数据准确。"""
     if not isinstance(body, dict):
         body = {}
     target = str(body.get("mount") or "").strip()
     mp = target if (target and os.path.ismount(target)) else _resolve_mount(VIDEO_ROOT)
-    if not os.path.isdir(mp):
-        raise ValueError("找不到可写的存储卡挂载点")
+    # 未挂载时会退化到根目录 "/", 那样测的是系统盘且会把根分区写满, 直接拒绝
+    if not mp or mp == "/" or not os.path.isdir(mp):
+        raise ValueError("请先挂载外置卡后再测速")
     _card_job_claim("speed", "正在写入测试文件（已暂停同步写入）")
 
     def work():
         fp = os.path.join(mp, ".tsf-speedtest.bin")
-        size = 512 * 1024 * 1024
+        size = 256 * 1024 * 1024
         chunk = b"\0" * (1024 * 1024)
         paused = False
         try:
@@ -14298,7 +14412,7 @@ def external_card_speed(body):
             w = size / wt / 1048576 if wt > 0 else 0
             r = size / rt / 1048576 if rt > 0 else 0
             _card_job_set(state="done", write=round(w, 1), read=round(r, 1), pct=100, speed=0.0,
-                          message="写入 %.1f MB/s，读取 %.1f MB/s（512MB，同步写入已恢复）" % (w, r))
+                          message="写入 %.1f MB/s，读取 %.1f MB/s（256MB，同步写入已恢复）" % (w, r))
         except Exception as ex:
             _card_job_set(state="error", message="测速失败: %s" % str(ex)[:120])
         finally:
@@ -14686,31 +14800,91 @@ def _format_card_ext4(dev):
     raise ValueError("格式化失败：%s（%s）" % (detail, _device_busy_report(dev)))
 
 
-def _card_mount_fresh(dev, target):
-    """格式化后重新挂载到 target。
+def _card_force_umount(dev):
+    """强制卸载这张卡的全部分区, 返回 (是否已全部卸载, 仍挂载列表, 被结束进程)。
 
-    格式化期间卡可能被 blockd 自动挂回旧文件系统, 先彻底摘掉旧挂载
-    (卸载失败时再结束残留占用进程), 确认没有挂载后才挂新格式化的 ext4。"""
+    「强制」不是直接 -f: 本地文件系统只要有进程还在写, -f 也卸不掉。这里先 sync
+    刷盘, 再普通卸载; 仍占用时结束卡内文件的占用进程, 最后才用 -f/-l 兜底,
+    保证拔卡之前数据已落盘、句柄已释放, 不会丢数据。"""
+    try:
+        os.sync()
+    except OSError:
+        pass
+    killed = []
+    mps = _device_mounts(dev)
+    for attempt in range(3):
+        for mp in mps:
+            for flag in ([], ["-f"], ["-l"]):
+                try:
+                    if _run_cmd(["umount"] + flag + [mp], timeout=20).returncode == 0:
+                        break
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        try:
+            os.sync()
+        except OSError:
+            pass
+        left = _device_mounts(dev)
+        if not left:
+            return True, [], killed
+        if attempt == 1:
+            killed = _release_card_holders(dev, left)
+            try:
+                os.sync()
+            except OSError:
+                pass
+        mps = left
+        time.sleep(0.4)
+    left = _device_mounts(dev)
+    return (not left), left, killed
+
+
+def _card_mount_default(dev, target):
+    """把外置卡挂载到默认位置; 挂载前清空默认目录内的残留文件。
+
+    清空只针对「系统盘上的空壳目录」: 如果 target 已经是别的设备的挂载点,
+    里面的内容属于那个文件系统, 直接清空会删掉真实数据, 因此拒绝挂载。"""
+    if _device_mounts(dev):
+        ok, left, _killed = _card_force_umount(dev)
+        if not ok:
+            return False, "该卡仍有挂载点无法卸载：%s" % "、".join(left)
+    if os.path.ismount(target):
+        src = _mount_src(target)
+        if not _dev_match(src, dev):
+            return False, "默认挂载点 %s 已被其它设备占用，请先在文件管理中卸载" % target
+        _card_force_umount(dev)
     try:
         os.makedirs(target, exist_ok=True)
-    except OSError:
-        return False, "无法创建挂载点 %s" % target
+    except OSError as ex:
+        return False, "无法创建挂载点 %s（%s）" % (target, ex)
+    # 挂载前清空默认位置内的所有文件, 避免旧目录内容与新卡内容混在一起
+    if not os.path.ismount(target):
+        try:
+            for name in os.listdir(target):
+                path = os.path.join(target, name)
+                try:
+                    if os.path.isdir(path) and not os.path.islink(path):
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        os.unlink(path)
+                except OSError:
+                    pass
+        except OSError:
+            pass
     err = ""
-    for _ in range(4):
-        if _device_mounts(dev):
-            _card_umount_all(dev)
-            if _device_mounts(dev):
-                _release_card_holders(dev, _device_mounts(dev))
-                time.sleep(0.5)
-                _card_umount_all(dev)
-        if _device_mounts(dev):
-            time.sleep(0.5)
+    for args in (["mount", dev, target], ["mount", "-t", "auto", dev, target]):
+        try:
+            r = _run_cmd(args, timeout=60)
+        except (OSError, subprocess.SubprocessError) as ex:
+            err = str(ex)[:120]
             continue
-        r = _run_cmd(["mount", "-t", "ext4", dev, target], timeout=60)
         if r.returncode == 0:
+            try:
+                os.sync()
+            except OSError:
+                pass
             return True, ""
         err = (r.stderr or r.stdout or "").strip()[:120]
-        time.sleep(0.5)
     return False, err
 
 
@@ -14733,10 +14907,8 @@ def external_card_format(body):
     _card_job_claim("format", "正在准备格式化…")
 
     def work():
-        # 优先挂回这张分区自己的挂载点, 其次同卡其它分区, 最后 /mnt/sdcard
-        table = _mount_table()
-        own = [mp for mp, _ in (table.get(dev) or table.get(os.path.realpath(dev)) or [])]
-        target = (own or _device_mounts(dev) or [""])[0] or "/mnt/sdcard"
+        # 格式化后统一挂到默认位置 (/mnt/sdcard): 与 tsf-mount/开机自动挂载一致
+        target = str(os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard").strip() or "/mnt/sdcard"
         root = os.path.abspath(VIDEO_ROOT) if VIDEO_ROOT else ""
         was_data = bool(root and (root == os.path.abspath(target) or
                                   root.startswith(os.path.abspath(target).rstrip("/") + "/")))
@@ -14751,8 +14923,9 @@ def external_card_format(body):
                 except (OSError, subprocess.SubprocessError):
                     live_stopped = False
             _format_card_ext4(dev)
-            _card_job_set(message="格式化完成，正在挂载 %s" % target)
-            mounted, mount_err = _card_mount_fresh(dev, target)
+            _card_job_set(message="格式化完成，正在挂载到默认位置 %s" % target)
+            # 挂载前会先清空默认位置内的全部残留文件, 再挂新文件系统
+            mounted, mount_err = _card_mount_default(dev, target)
             if was_data and mounted:
                 for sub in ("img", "archive", "logs"):
                     try:
@@ -14760,7 +14933,7 @@ def external_card_format(body):
                     except OSError:
                         pass
             if mounted:
-                _card_job_set(state="done", message="格式化完成（ext4），已挂载到 %s" % target)
+                _card_job_set(state="done", message="格式化完成（ext4），已挂载到默认位置 %s" % target)
             else:
                 _card_job_set(state="done", message="格式化完成（ext4），但自动挂载失败：%s"
                               % (mount_err or "可稍后刷新后手动挂载"))
@@ -14776,6 +14949,112 @@ def external_card_format(body):
 
     threading.Thread(target=work, daemon=True, name="card-format").start()
     return {"ok": True, "job": dict(_CARD_JOB)}
+
+
+def _restore_card_services():
+    """外置卡挂载成功后补建数据目录, 并恢复实时同步与后台转码。"""
+    for sub in ("img", "archive", "logs"):
+        try:
+            os.makedirs(os.path.join(VIDEO_ROOT, sub), exist_ok=True)
+        except OSError:
+            pass
+    try:
+        os.makedirs(TRANSCODE_DIR, exist_ok=True)
+    except OSError:
+        pass
+    PREWARM["paused"] = False
+    PREWARM["idle_since"] = None
+    try:
+        subprocess.Popen(["/etc/init.d/tesla-live", "start"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
+def _pick_card_device(body, need_mounted):
+    """从请求里取设备; 没指定时自动挑一张已检测到的卡 (按要求是否已挂载过滤)。"""
+    dev = str((body or {}).get("device") or "").strip()
+    if dev:
+        if not re.match(r"^/dev/(mmcblk\d+(p\d+)?|sd[a-z]+\d*)$", dev):
+            raise ValueError("设备路径不合法")
+        return dev
+    for card in external_card_info()["cards"]:
+        if bool(card.get("mount")) == need_mounted:
+            return card["device"]
+    return ""
+
+
+def external_card_mount(body):
+    """把外置卡挂载到默认位置 (/mnt/sdcard), 挂载前清空默认目录内的残留文件。"""
+    body = body if isinstance(body, dict) else {}
+    if storage_busy():
+        raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
+    if _ARCH_SYNC["state"] == "running":
+        raise ValueError("正在同步归档区，请稍后再试")
+    dev = _pick_card_device(body, need_mounted=False)
+    if not dev:
+        raise ValueError("未检测到可挂载的外置卡")
+    if not os.path.exists(dev):
+        raise ValueError("找不到设备 %s，外置卡可能已拔出" % dev)
+    if _card_is_system(dev):
+        raise ValueError("这是系统盘，不能作为外置卡挂载")
+    target = str(body.get("mountpoint") or os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard").strip() or "/mnt/sdcard"
+    if not target.startswith("/") or ".." in target:
+        raise ValueError("挂载点不合法")
+    if _device_mounts(dev):
+        return {"ok": True, "msg": "%s 已挂载在 %s" % (dev, "、".join(_device_mounts(dev))),
+                "ready": card_data_ready()}
+    _card_job_claim("mount", "正在挂载到 %s…" % target)
+    try:
+        ok, err = _card_mount_default(dev, target)
+        if not ok:
+            raise ValueError(err or "挂载失败")
+        _card_job_set(state="done", message="已挂载到 %s" % target)
+        _restore_card_services()
+        return {"ok": True, "msg": "已挂载到 %s" % target, "ready": card_data_ready()}
+    except Exception as ex:
+        _card_job_set(state="error", message="挂载失败：%s" % str(ex)[:160])
+        raise
+
+
+def external_card_unmount(body):
+    """强制卸载外置卡: 先停实时同步并 sync 刷盘, 再强制卸载, 保证拔卡不丢数据。"""
+    body = body if isinstance(body, dict) else {}
+    if storage_busy():
+        raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
+    if _ARCH_SYNC["state"] == "running":
+        raise ValueError("正在同步归档区，请先等待同步结束或稍后再卸载")
+    dev = _pick_card_device(body, need_mounted=True)
+    if not dev:
+        return {"ok": True, "msg": "没有已挂载的外置卡", "ready": card_data_ready()}
+    mps = _device_mounts(dev)
+    if not mps:
+        return {"ok": True, "msg": "%s 未挂载" % dev, "ready": card_data_ready()}
+    _card_job_claim("unmount", "正在刷盘并强制卸载 %s…" % dev)
+    try:
+        root = os.path.abspath(VIDEO_ROOT)
+        data_mounted = any(root == os.path.abspath(mp) or
+                           root.startswith(os.path.abspath(mp).rstrip("/") + "/") for mp in mps)
+        if data_mounted:
+            # 数据卡: 先停实时同步, 并暂停后台转码, 避免卸载后继续写卡
+            try:
+                _run_cmd(["/etc/init.d/tesla-live", "stop"], timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            PREWARM["paused"] = True
+            PREWARM["idle_since"] = time.time()
+            PREWARM["manual"] = False
+        ok, left, killed = _card_force_umount(dev)
+        if not ok:
+            raise ValueError("卸载未完成，仍挂载：%s" % "、".join(left))
+        msg = "已强制卸载 %s，可安全拔出" % dev
+        if killed:
+            msg += "（已结束占用进程：%s）" % "、".join(killed[:3])
+        _card_job_set(state="done", message=msg)
+        return {"ok": True, "msg": msg, "ready": card_data_ready()}
+    except Exception as ex:
+        _card_job_set(state="error", message="卸载失败：%s" % str(ex)[:160])
+        raise
 
 
 def _archive_dir_tree(path):
@@ -14966,6 +15245,8 @@ def _close_exfat(ex):
 
 
 def archive_sync_start():
+    if not card_data_ready():
+        raise ValueError(CARD_NOT_READY_MSG)
     if _ARCH_SYNC["state"] == "running":
         raise ValueError("归档区同步正在进行")
     if storage_busy():
@@ -15007,6 +15288,8 @@ def archive_sync_start():
         copied_recent = set()
         try:
             for cat, ev, _name, e, dest in tasks:
+                if not card_data_ready():
+                    raise ValueError("外置卡已卸载，同步已停止")
                 if sync_write_paused():
                     raise ValueError("外置卡测速开始，已暂停同步写入，测速结束后请重新同步")
                 if storage_busy():
@@ -15212,6 +15495,8 @@ def archive_migrate(body):
     """把非默认位置的 teslacam.img / archive 迁移到默认镜像与归档区。
     镜像: 只读挂载源镜像复制进默认镜像, 全部校验通过后才删除源镜像;
     归档: 同一存储介质用硬链接、跨介质先复制, 逐文件校验通过后才删除源文件。"""
+    if not card_data_ready():
+        raise ValueError(CARD_NOT_READY_MSG)
     items = _migrate_items(body)
     policy = str((body or {}).get("policy") or "")
     if policy not in ("", "overwrite", "rename"):
@@ -16323,6 +16608,9 @@ def dedupe_archive_clips(force=False):
 
 
 def disk_guard_cycle(drive):
+    # 外置卡未挂载时不做归档清理/迁移: 归档目录此刻是系统盘上的空壳, 清理毫无意义
+    if not card_data_ready():
+        return
     with _storage_edit_lock:
         if storage_busy() or os.environ.get('TSF_ARCHIVE_MAINTENANCE') == '1':
             return
@@ -16365,7 +16653,8 @@ def disk_guard():
         disk_guard_cycle(drive)
         # 重复片段合并在清理锁之外执行: 全量校验可能耗时, 不该卡住用户的删除/移动操作
         try:
-            if not storage_busy() and os.environ.get('TSF_ARCHIVE_MAINTENANCE') != '1':
+            if (not storage_busy() and os.environ.get('TSF_ARCHIVE_MAINTENANCE') != '1'
+                    and card_data_ready()):
                 merged, freed = dedupe_archive_clips()
                 if merged:
                     print("重复片段合并完成: %d 个, 释放约 %.1f MiB" % (merged, freed / 1048576.0), flush=True)
@@ -18640,6 +18929,12 @@ def prewarm_loop():
     _prewarm_load_stats()
     while True:
         try:
+            if not card_data_ready():
+                # 外置卡未挂载: 归档文件已不可见, 停止转码, 等卡挂回来后自动继续
+                PREWARM.update(working=False, cur="", cur_done=0, cur_total=0, remain=0,
+                               eta=0, cur_start=0.0)
+                _prewarm_sleep(20)
+                continue
             q = prewarm_quality()
             if not PREWARM["on"] or not q:
                 PREWARM.update(working=False, cur="", cur_done=0, cur_total=0, remain=0,
@@ -18705,6 +19000,35 @@ def prewarm_loop():
         except Exception:
             PREWARM.update(working=False)
             _prewarm_sleep(60)
+
+
+CARD_WATCH = {"last": None}
+
+
+def card_watch_loop():
+    """外置卡从「已挂载」变成「未挂载」时, 停止实时同步与后台转码。
+
+    卡被拔出后 VIDEO_ROOT 会退回到系统盘上的同名空目录, 若不停 tesla-live,
+    同步会继续往系统盘写录像, 既写错位置又会把系统盘写满。"""
+    while True:
+        time.sleep(10)
+        try:
+            ready = card_data_ready()
+            last = CARD_WATCH["last"]
+            CARD_WATCH["last"] = ready
+            # 已挂载不做处理; 已经是未挂载状态也不重复停, 只在首次发现未挂载时停一次
+            if ready or last is False:
+                continue
+            PREWARM["paused"] = True
+            PREWARM["idle_since"] = time.time()
+            PREWARM["manual"] = False
+            try:
+                _run_cmd(["/etc/init.d/tesla-live", "stop"], timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            print("外置卡已卸载: 已停止实时同步与后台转码", flush=True)
+        except Exception as ex:
+            print("card watch: %s" % ex, flush=True)
 
 
 def probe_duration(path):
@@ -21030,6 +21354,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(dict(ok=False, msg=str(exc)), 400)
             return
         if p in ("/api/card/speed", "/api/card/format", "/api/card/config",
+                 "/api/card/mount", "/api/card/unmount",
                  "/api/system/reboot", "/api/archive/sync",
                  "/api/prewarm/start", "/api/prewarm/pause",
                  "/api/archive/migrate", "/api/archive/migrate/delete",
@@ -21051,6 +21376,10 @@ class Handler(BaseHTTPRequestHandler):
                     result = external_card_format(body)
                 elif p == "/api/card/config":
                     result = external_card_config(body)
+                elif p == "/api/card/mount":
+                    result = external_card_mount(body)
+                elif p == "/api/card/unmount":
+                    result = external_card_unmount(body)
                 elif p == "/api/system/reboot":
                     ok = reboot_system()
                     result = {"ok": ok,
@@ -21891,6 +22220,7 @@ if __name__ == "__main__":
     threading.Thread(target=notify_loop, daemon=True).start()
     threading.Thread(target=auto_update_loop, daemon=True).start()
     threading.Thread(target=prewarm_loop, daemon=True).start()
+    threading.Thread(target=card_watch_loop, daemon=True, name="card-watch").start()
     threading.Thread(target=listen_live_ready, daemon=True).start()
     # serve_forever 已在后台 http-server 线程运行, 主线程驻留即可
     threading.Event().wait()
