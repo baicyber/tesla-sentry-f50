@@ -539,7 +539,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.28.001"
+APP_VERSION = "2026.11.28.002"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3920,7 +3920,7 @@ body.settings-open { overflow:hidden; }
       <div class="usage-legend" id="usage-legend"></div>
       <div class="hint" style="margin-top:7px">整卡图显示车机 U 盘设定容量、归档区总上限、安全预留与剩余空间，不显示归档区实际占用；随下方容量设置实时联动。</div>
     <details class="storage-quota storage-tools" id="storage-extcard">
-      <summary>外置卡管理</summary>
+      <summary>外置卡管理 / 调整车机 U 盘容量</summary>
       <div class="ext-cards">
       <section class="storage-quota">
       <h4>外置卡信息</h4>
@@ -3933,14 +3933,23 @@ body.settings-open { overflow:hidden; }
         <button class="mini tool-danger" onclick="extCardFormat()">初始格式化</button>
       </div>
       <div class="hint" id="ext-card-msg" role="status" aria-live="polite"></div>
-      </section>
-      <section class="storage-quota">
-      <h4>开机自动挂载</h4>
-      <div class="hint">启用后写入 <code>/etc/init.d/tesla_mount_sdcard</code> 并加入开机启动，开机后延迟挂载上面选中的卡。建议延迟 <b>5 秒</b>：TF 卡通常 1–3 秒就绪，再等 2 秒可避开上电抖动；勾选状态与系统里的开机脚本实时同步。</div>
-      <div class="storage-row note"><label for="card-automount">开机自动挂载</label><input type="checkbox" id="card-automount" style="width:18px;height:18px;accent-color:var(--accent)"><span class="retention-unit">选中左侧那张卡</span></div>
+      <h4 style="margin-top:14px">开机自动挂载</h4>
+      <div class="hint">启用后写入 <code>/etc/init.d/tesla_mount_sdcard</code> 并加入开机启动，开机后延迟挂载当前已挂载的数据卡。建议延迟 <b>5 秒</b>：TF 卡通常 1–3 秒就绪，再等 2 秒可避开上电抖动；勾选状态与系统里的开机脚本实时同步。</div>
+      <div class="storage-row note"><label for="card-automount">开机自动挂载</label><input type="checkbox" id="card-automount" style="width:18px;height:18px;accent-color:var(--accent)"></div>
       <div class="storage-row note"><label for="card-mount-delay">挂载延迟</label><input class="ninput" id="card-mount-delay" type="number" min="0" max="300" step="1" inputmode="numeric" value="5"><span class="retention-unit">秒（建议 5）</span></div>
       <div class="updbtns"><button class="mini primary" id="card-config-save" onclick="extCardSaveConfig()">保存自动挂载设置</button></div>
       <div class="hint" id="card-config-msg" role="status" aria-live="polite"></div>
+      </section>
+      <section class="storage-quota" id="storage-usb-box">
+      <h4>调整车机 U 盘容量</h4>
+      <div class="storage-row cap"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
+      <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。调整会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div>
+      <div class="hint">格式化：用空白 exFAT 按当前容量重建车机 U 盘，清空镜像内全部内容（归档区保留）。车机上格式化 U 盘后网页一直提示「镜像未就绪」，或 U 盘内容损坏、调整容量失败时，用它一键恢复。</div>
+      <div class="storage-usb-actions">
+        <button class="mini primary" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button>
+        <button class="mini" id="storage-format" onclick="storageFormat()" disabled>格式化 U 盘</button>
+      </div>
+      <div id="storage-resize-status"></div>
       </section>
       </div>
     </details>
@@ -3956,18 +3965,6 @@ body.settings-open { overflow:hidden; }
     <div class="storage-nested"><div class="storage-row cap"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div></div>
     <div class="updbtns"><button class="mini primary" id="storage-save" onclick="storageSave()" disabled>保存归档设置</button><button class="mini" onclick="storageLoad()">重新加载</button></div>
     <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
-    <div class="storage-split"></div>
-    <details class="storage-usb" id="storage-usb-box">
-      <summary>调整车机 U 盘容量</summary>
-      <div class="storage-row cap"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
-      <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。调整会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div>
-      <div class="hint">格式化：用空白 exFAT 按当前容量重建车机 U 盘，清空镜像内全部内容（归档区保留）。车机上格式化 U 盘后网页一直提示「镜像未就绪」，或 U 盘内容损坏、调整容量失败时，用它一键恢复。</div>
-      <div class="storage-usb-actions">
-        <button class="mini primary" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button>
-        <button class="mini" id="storage-format" onclick="storageFormat()" disabled>格式化 U 盘</button>
-      </div>
-      <div id="storage-resize-status"></div>
-    </details>
     </section><section class="storage-quota" id="storage-usage">
       <h3>实际用量 · 已用／上限</h3>
       <div class="storage-usage">
@@ -8557,8 +8554,8 @@ function syncStorageCards() {
   usage.style.overflowY = '';
 }
 window.addEventListener('resize', syncStorageCards);
-const storageUsbBox = document.getElementById('storage-usb-box');
-if (storageUsbBox) storageUsbBox.addEventListener('toggle', () => setTimeout(syncStorageCards, 0));
+const storageExtCard = document.getElementById('storage-extcard');
+if (storageExtCard) storageExtCard.addEventListener('toggle', () => setTimeout(syncStorageCards, 0));
 async function storageLoad() {
   const request = ++storageRequest;
   clearTimeout(storageTimer);
