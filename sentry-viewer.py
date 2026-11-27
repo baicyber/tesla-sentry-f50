@@ -539,9 +539,9 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.28.003"
+APP_VERSION = "2026.11.28.004"
 VIEWER_BUILD = APP_VERSION
-OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
+OTA_REPOS = ["jiaoting/tesla-sentry-f50"]   # 仅保留作者仓库, 分支仍可选择
 OTA_DEFAULT_REPO = OTA_REPOS[0]
 OTA_DEFAULT_BRANCH = "main"
 OTA_BACKUP = os.environ.get("TSF_OTA_BACKUP", "/opt/tesla-sentry/sentry-viewer.bak.py")
@@ -556,33 +556,24 @@ _OTA_RECHECK = {"seq": 0, "running": False, "key": "", "current": 0, "total": 0,
 
 
 def ota_target():
-    """当前更新目标 (仓库 / 分支)。优先环境变量, 其次 ota-target.json, 最后默认值"""
+    """当前更新目标 (作者仓库 / 分支)。仓库固定为作者仓库, 只从配置读取分支"""
     if _OTA_TGT:
         return _OTA_TGT
-    repo = os.environ.get("TSF_OTA_REPO", "").strip()
     branch = os.environ.get("TSF_OTA_BRANCH", "").strip()
     try:
         with open(OTA_TARGET, encoding="utf-8") as f:
             j = json.load(f) or {}
-        repo = repo or str(j.get("repo") or "").strip()
         branch = branch or str(j.get("branch") or "").strip()
     except Exception:
         pass
-    _OTA_TGT.update({"repo": repo or OTA_DEFAULT_REPO, "branch": branch or OTA_DEFAULT_BRANCH})
+    _OTA_TGT.update({"repo": OTA_DEFAULT_REPO, "branch": branch or OTA_DEFAULT_BRANCH})
     return _OTA_TGT
 
 
 def ota_set_target(repo, branch=""):
-    """切换更新仓库与分支; 保存后清空清单缓存 (仓库支持 owner/repo 或 GitHub 地址)"""
-    repo = (repo or "").strip().strip("/")
-    repo = re.sub(r"^https?://", "", repo, flags=re.I)
-    repo = re.sub(r"^(www\.)?github\.com/", "", repo, flags=re.I)
-    repo = repo.rstrip("/")
-    if repo.lower().endswith(".git"):
-        repo = repo[:-4]
+    """切换更新分支 (仓库固定为作者仓库); 保存后清空清单缓存"""
+    repo = OTA_DEFAULT_REPO
     branch = (branch or "").strip() or ota_target().get("branch") or OTA_DEFAULT_BRANCH
-    if not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo):
-        return False, "仓库地址格式应为 owner/repo, 也可直接粘贴 GitHub 仓库链接"
     if not branch or not re.match(r"^[A-Za-z0-9_.\-/]+$", branch):
         return False, "分支名不合法"
     try:
@@ -603,7 +594,7 @@ def ota_set_target(repo, branch=""):
     # 切换仓库/分支后先暂停后台自动更新 (选项保持勾选), 点「立即升级」后恢复
     if load_settings().get("auto_update", True):
         save_settings({"auto_paused": True})
-    return True, "更新源已切换为 %s@%s" % (repo, branch)
+    return True, "更新分支已切换为 %s@%s" % (repo, branch)
 
 
 def _ota_sources():
@@ -3593,8 +3584,6 @@ body.settings-open { overflow:hidden; }
 @media (max-width:600px) {
   /* 设置页移动端: 更新源一行控件改为全宽堆叠, 避免下拉框被挤偏/变小 */
   #tab-update .updrow { align-items:center; row-gap:8px; }
-  #tab-update .updrow #upd-repo { flex:1 1 calc(100% - 76px) !important; }
-  #tab-update .updrow #upd-custom { flex:1 1 100% !important; }
 #tab-update .updrow #upd-branch { flex:1 1 calc(100% - 76px) !important; }
 #tab-update .updrow #upd-branch-custom { flex:1 1 100% !important; }
   /* 更新卡片: 检查更新与立即升级同一行各占一半, 自动更新独占一行 */
@@ -4314,8 +4303,7 @@ body.settings-open { overflow:hidden; }
   <div id="tab-update" style="display:none">
     <div class="updrow" style="flex-wrap:wrap;gap:8px;align-items:center">
       <span class="updk">更新源</span>
-      <select class="ninput" id="upd-repo" style="flex:1 1 160px;min-width:0" onchange="otaRepoUI()"></select>
-      <input class="ninput" id="upd-custom" placeholder="自定义仓库 owner/repo 或 https://github.com/owner/repo" style="display:none;flex:1 1 220px;min-width:0" spellcheck="false" autocapitalize="none" onchange="otaSaveTarget()" onkeydown="if(event.key==='Enter'){event.preventDefault();otaSaveTarget();}">
+      <b id="upd-repo-fixed" style="font-size:12.5px;color:var(--muted2)">作者仓库 · jiaoting/tesla-sentry-f50</b>
       <span class="updk updk-branch">分支</span>
       <select class="ninput" id="upd-branch" style="flex:0 1 130px;min-width:0" onchange="otaBranchUI()"></select>
       <input class="ninput" id="upd-branch-custom" placeholder="自定义分支名，如 dev / release" style="display:none;flex:1 1 220px;min-width:0" spellcheck="false" autocapitalize="none" onchange="otaSaveTarget()" onkeydown="if(event.key==='Enter'){event.preventDefault();otaSaveTarget();}">
@@ -9854,22 +9842,14 @@ async function userSave() {
 let otaInfo = null;
 let otaRecheckTimer = 0, otaCheckSeq = 0;
 function esc(s) { return String(s == null ? '' : s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
-const OTA_REPO_LABELS = {
-  'baicyber/tesla-sentry-f50': '上游仓库 · baicyber/tesla-sentry-f50',
-  'jiaoting/tesla-sentry-f50': '作者仓库 · jiaoting/tesla-sentry-f50'
-};
 const OTA_BRANCHES = ['main', 'master', 'dev'];
+let otaRepoFixed = 'jiaoting/tesla-sentry-f50';
 async function otaLoadTarget() {
   try {
     const j = await (await fetch('/api/ota/target', { cache: 'no-store' })).json();
-    const r = document.getElementById('upd-repo');
-    const repos = (j.repos || []).slice();
-    if (j.repo && repos.indexOf(j.repo) < 0) repos.push(j.repo);
-    r.innerHTML = repos.map(x => '<option value="' + esc(x) + '">' + esc(OTA_REPO_LABELS[x] || x) + '</option>').join('')
-      + '<option value="__custom__">自定义仓库…</option>';
-    r.value = j.repo || r.value;
-    const ci = document.getElementById('upd-custom');
-    ci.value = ''; ci.style.display = 'none';
+    if (j.repo) otaRepoFixed = j.repo;
+    const lbl = document.getElementById('upd-repo-fixed');
+    if (lbl) lbl.textContent = '作者仓库 · ' + otaRepoFixed;
     const b = document.getElementById('upd-branch');
     const branches = OTA_BRANCHES.slice();
     if (j.branch && branches.indexOf(j.branch) < 0) branches.push(j.branch);
@@ -9880,30 +9860,6 @@ async function otaLoadTarget() {
     bc.value = ''; bc.style.display = 'none';
   } catch (e) {}
 }
-function otaBranchToMain() {
-  const b = document.getElementById('upd-branch'), bc = document.getElementById('upd-branch-custom');
-  if (b) {
-    if (![...b.options].some(option => option.value === 'main')) {
-      const option = document.createElement('option');
-      option.value = 'main'; option.textContent = 'main';
-      b.append(option);
-    }
-    b.value = 'main';
-  }
-  if (bc) { bc.value = ''; bc.style.display = 'none'; }
-}
-function otaRepoUI() {
-  const sel = document.getElementById('upd-repo');
-  const inp = document.getElementById('upd-custom');
-  const custom = sel.value === '__custom__';
-  inp.style.display = custom ? '' : 'none';
-  // 换更新源时分支回到主分支, 避免上一个源的分支在新源里不存在
-  otaBranchToMain();
-  if (custom) { inp.focus(); return; }
-  inp.value = '';
-  // 选中内置源后自动切换并立即检查更新, 不再需要「切换」按钮
-  otaSaveTarget();
-}
 function otaBranchUI() {
   const sel = document.getElementById('upd-branch');
   const inp = document.getElementById('upd-branch-custom');
@@ -9912,12 +9868,6 @@ function otaBranchUI() {
   if (custom) { inp.focus(); return; }
   inp.value = '';
   otaSaveTarget();
-}
-function otaRepoValue() {
-  const sel = document.getElementById('upd-repo');
-  return (sel.value === '__custom__'
-    ? document.getElementById('upd-custom').value
-    : sel.value).trim();
 }
 function otaBranchValue() {
   const sel = document.getElementById('upd-branch');
@@ -9931,15 +9881,14 @@ async function markAutoPaused() {
   try {
     await fetch('/api/ota/auto', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ on: true, paused: true }) });
-    el.innerHTML = '已暂停自动更新：切换仓库或分支后不再后台升级，点击「立即升级」后自动恢复';
+    el.innerHTML = '已暂停自动更新：切换分支后不再后台升级，点击「立即升级」后自动恢复';
   } catch (e) {}
 }
 async function otaSaveTarget() {
-  const repo = otaRepoValue(), branch = otaBranchValue();
+  const repo = otaRepoFixed, branch = otaBranchValue();
   const msg = document.getElementById('upd-msg');
-  if (!repo) { toast('请选择或填写仓库'); return; }
   if (!branch) { toast('请选择或填写分支'); return; }
-  msg.textContent = t('切换更新源…');
+  msg.textContent = t('切换更新分支…');
   try {
     const j = await (await fetch('/api/ota/target', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repo, branch }) })).json();
@@ -10027,7 +9976,7 @@ function renderAutoUpdate(j) {
   let s = j.auto
     ? '已开启：定期自动检查更新，发现新版本且没人看视频时自动安装'
     : '已关闭自动安装：仍会定期检查并提示新版本，可点「检查更新」后手动升级';
-  if (j.auto && j.auto_paused) s = '已暂停自动更新：切换仓库或分支后不再后台升级，点击「立即升级」后自动恢复';
+  if (j.auto && j.auto_paused) s = '已暂停自动更新：切换分支后不再后台升级，点击「立即升级」后自动恢复';
   if (j.auto) {
     const when = j.auto_checked ? new Date(j.auto_checked * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
     if (when || j.auto_msg) s += '<br>上次 ' + (when ? when + ' · ' : '') + (j.auto_msg || '');
@@ -10044,7 +9993,7 @@ async function autoLoad() {
     let txt = s.auto_update
       ? '已开启：定期自动检查更新，发现新版本且没人看视频时自动安装'
       : '已关闭自动安装：仍会定期检查并提示新版本，可点「检查更新」后手动升级';
-    if (s.auto_update && s.auto_paused) txt = '已暂停自动更新：切换仓库或分支后不再后台升级，点击「立即升级」后自动恢复';
+    if (s.auto_update && s.auto_paused) txt = '已暂停自动更新：切换分支后不再后台升级，点击「立即升级」后自动恢复';
     const when = s.auto_checked ? new Date(s.auto_checked * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
     if (s.auto_update && (when || s.auto_msg)) txt += '<br>上次 ' + (when ? when + ' · ' : '') + (s.auto_msg || '');
     el.innerHTML = txt;
