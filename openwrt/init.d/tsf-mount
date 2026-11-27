@@ -98,7 +98,8 @@ wait_and_start_services() {
         i=$((i + 1))
     done
     # 卡挂不上也要把网页拉起来: 否则没有格式化/换卡/排查的入口, 只能 SSH
-    logger -t tsf-mount "FAILED: card UUID $UUID not mountable after 60s; 仅启动网页以便排查"    /etc/init.d/tesla-viewer start
+    logger -t tsf-mount "FAILED: card UUID $UUID not mountable after 60s; 仅启动网页以便排查"
+    /etc/init.d/tesla-viewer start
     return 1
 }
 

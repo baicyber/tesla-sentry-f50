@@ -24,6 +24,26 @@ start_service() {
     # 就会变成 /sentry-viewer.py —— 文件不存在, procd 不断 respawn, 网页永远打不开。
     load_conf
     TSF_DIR="${TSF_DIR:-/opt/tesla-sentry}"
+    PY="${TSF_PYTHON:-/usr/bin/python3}"
+    # 自愈: 旧配置可能指向已删除的离线运行库/旧安装目录, 直接照用会让 procd 静默
+    # respawn 失败, 表现为「两个服务都无法启动」。这里回退到标准位置。
+    if [ ! -f "$TSF_DIR/sentry-viewer.py" ] && [ -f /opt/tesla-sentry/sentry-viewer.py ]; then
+        logger -t tesla-viewer "TSF_DIR=$TSF_DIR 不可用, 回退 /opt/tesla-sentry"
+        TSF_DIR=/opt/tesla-sentry
+    fi
+    if [ ! -x "$PY" ] && [ -x /usr/bin/python3 ]; then
+        logger -t tesla-viewer "TSF_PYTHON=$PY 不可执行, 回退 /usr/bin/python3"
+        PY=/usr/bin/python3
+    fi
+    # 路径仍不对时给出明确日志: 否则用户只看到「无法启动」
+    if [ ! -f "$TSF_DIR/sentry-viewer.py" ]; then
+        logger -t tesla-viewer "程序不存在: $TSF_DIR/sentry-viewer.py (检查 /etc/tesla-sentry.conf 的 TSF_DIR)"
+        return 1
+    fi
+    if [ ! -x "$PY" ]; then
+        logger -t tesla-viewer "Python 不可执行: $PY (检查 /etc/tesla-sentry.conf 的 TSF_PYTHON)"
+        return 1
+    fi
     if [ -n "${TSF_CARD_UUID:-}" ]; then
         # 数据卡未就绪也要启动网页: 卡没插/没格式化/挂载失败时, 网页是唯一的排查与格式化入口,
         # 这里 return 1 会让用户连设置页都进不去, 只能 SSH 或拆机。
@@ -32,7 +52,7 @@ start_service() {
         fi
     fi
     procd_open_instance
-    procd_set_param command "${TSF_PYTHON:-/usr/bin/python3}" "$TSF_DIR/sentry-viewer.py"
+    procd_set_param command "$PY" "$TSF_DIR/sentry-viewer.py"
     procd_set_param respawn 3600 5 0
     procd_set_param stdout 1
     procd_set_param stderr 1

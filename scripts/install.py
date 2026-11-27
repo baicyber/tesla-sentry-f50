@@ -1167,9 +1167,19 @@ class Installer:
 
     def start(self):
         # Installation remains intact if startup fails; no blind reinstall or USB rollback.
-        run(['/etc/init.d/tsf-mount', 'start'], timeout=90)
-        run(['/etc/init.d/tesla-live', 'running'])
-        run(['/etc/init.d/tesla-viewer', 'running'])
+        # 数据卡未就绪时 tsf-mount / tesla-live 会按设计返回非 0, 不能当成安装失败;
+        # 真正的判断标准是网页能否访问, 旧实现因此把「没插卡的全新安装」误报成启动失败。
+        for command in (['/etc/init.d/tsf-mount', 'start'],
+                        ['/etc/init.d/tesla-viewer', 'start']):
+            try:
+                run(command, timeout=120)
+            except InstallError as exc:
+                print('提示：%s（继续检查网页是否可访问）' % exc, flush=True)
+        try:
+            run(['/etc/init.d/tesla-live', 'running'])
+            print('实时同步服务已启动。')
+        except InstallError:
+            print('提示：实时同步服务未启动（数据卡未就绪或未挂载时属正常）。')
         expected = self.data_home + '/img/teslacam.img'
         lun = self.path(self.device['gadget']) / 'functions/mass_storage.0/lun.0/file'
         # 全新安装还没有镜像: 此时不校验 USB 绑定, 等网页首次设置创建镜像后再自动导出
@@ -1184,7 +1194,13 @@ class Installer:
             except (OSError, urllib.error.URLError):
                 pass
             time.sleep(1)
-        raise InstallError('查看器启动检查超时；请查看 logread 与 tesla-gadget.log，安装文件已保留')
+        # 网页没起来时直接附上最近的启动日志, 不用再让用户 SSH 翻 logread
+        try:
+            tail = run(['sh', '-c', "logread | grep -Ei 'tesla-viewer|tsf-mount|sentry' | tail -n 20 || true"],
+                       timeout=30)
+        except InstallError:
+            tail = ''
+        raise InstallError('查看器启动检查超时；安装文件已保留。最近日志：\n%s' % (tail.strip() or '（无相关日志）'))
 
 
 def main(argv=None):

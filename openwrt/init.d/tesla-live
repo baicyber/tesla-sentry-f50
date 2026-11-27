@@ -19,12 +19,29 @@ load_conf() {
 start_service() {
     load_conf
     TSF_DIR="${TSF_DIR:-/opt/tesla-sentry}"
+    PY="${TSF_PYTHON:-/usr/bin/python3}"
+    if [ ! -f "$TSF_DIR/tesla-live-sync.py" ] && [ -f /opt/tesla-sentry/tesla-live-sync.py ]; then
+        logger -t tesla-live "TSF_DIR=$TSF_DIR 不可用, 回退 /opt/tesla-sentry"
+        TSF_DIR=/opt/tesla-sentry
+    fi
+    if [ ! -x "$PY" ] && [ -x /usr/bin/python3 ]; then
+        logger -t tesla-live "TSF_PYTHON=$PY 不可执行, 回退 /usr/bin/python3"
+        PY=/usr/bin/python3
+    fi
+    if [ ! -f "$TSF_DIR/tesla-live-sync.py" ]; then
+        logger -t tesla-live "程序不存在: $TSF_DIR/tesla-live-sync.py (检查 /etc/tesla-sentry.conf 的 TSF_DIR)"
+        return 1
+    fi
+    if [ ! -x "$PY" ]; then
+        logger -t tesla-live "Python 不可执行: $PY (检查 /etc/tesla-sentry.conf 的 TSF_PYTHON)"
+        return 1
+    fi
     if [ -n "${TSF_CARD_UUID:-}" ]; then
         . "$TSF_DIR/tsf-storage.sh" || return 1
         tsf_storage_ready || return 1
     fi
     procd_open_instance
-    procd_set_param command "${TSF_PYTHON:-/usr/bin/python3}" "$TSF_DIR/tesla-live-sync.py"
+    procd_set_param command "$PY" "$TSF_DIR/tesla-live-sync.py"
     procd_set_param respawn 3600 5 0
     procd_set_param stdout 1
     procd_set_param stderr 1
