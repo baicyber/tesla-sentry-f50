@@ -268,26 +268,6 @@ OTA、推送、认证参数不写入此 conf，走环境变量或网页配置。
 
 ---
 
-## 💬 交流群
-
-> 遇到问题、想交流玩法，欢迎扫码加入群聊~
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/sponsor/web_qqgroup.jpg" width="240" alt="QQ群二维码"><br><sub><b>QQ 群：831426822</b></sub></td>
-    <td align="center"><img src="docs/sponsor/web_wechatgroup.jpg" width="240" alt="微信群二维码"><br><sub><b>微信群</b>（二维码过期进群请联系作者或 QQ 群）</sub></td>
-  </tr>
-</table>
-
-**交流加群请联系作者**：群二维码过期、或想直接交流玩法，可关注抖音 `@耶基大学懂事长`（抖音号 `yejiuni`），或扫码添加作者微信好友拉你进群。
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/sponsor/web_douyin.jpg" width="240" alt="抖音二维码"><br><sub><b>抖音 · @耶基大学懂事长</b></sub></td>
-    <td align="center"><img src="docs/sponsor/web_wechatauthor.jpg" width="240" alt="作者微信二维码"><br><sub><b>微信 · 联系作者</b></sub></td>
-  </tr>
-</table>
-
 ## License
 
 [MIT](LICENSE)

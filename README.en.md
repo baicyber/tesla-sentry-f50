@@ -240,26 +240,6 @@ This is a personal hobby project, not affiliated with Tesla. Changing how your c
 - [SentryBox](https://github.com/weitanism/sentrybox) — productized practice for an always-on in-car device
 - [tesla-sentry-viewer](https://github.com/denysvitali/tesla-sentry-viewer) — reference for the web-viewer form factor
 
-## 💬 Community
-
-> Questions, ideas, or just want to compare setups — scan and join the group. Content is mostly in Chinese.
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/sponsor/web_qqgroup.jpg" width="240" alt="QQ group QR code"><br><sub><b>QQ group: 831426822</b></sub></td>
-    <td align="center"><img src="docs/sponsor/web_wechatgroup.jpg" width="240" alt="WeChat group QR code"><br><sub><b>WeChat group</b> (QR code expires; join the QQ group or contact the author if it has)</sub></td>
-  </tr>
-</table>
-
-**To join**: if a QR code has expired, or you would rather talk directly, follow the author on Douyin `@耶基大学懂事长` (ID `yejiuni`) or scan the WeChat code to add the author as a friend and get an invite.
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/sponsor/web_douyin.jpg" width="240" alt="Douyin QR code"><br><sub><b>Douyin · @耶基大学懂事长</b></sub></td>
-    <td align="center"><img src="docs/sponsor/web_wechatauthor.jpg" width="240" alt="Author WeChat QR code"><br><sub><b>WeChat · contact the author</b></sub></td>
-  </tr>
-</table>
-
 ## License
 
 [MIT](LICENSE)

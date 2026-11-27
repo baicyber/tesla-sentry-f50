@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.048"
+APP_VERSION = "2026.11.27.049"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2321,6 +2321,10 @@ body.watching { overscroll-behavior:none; }
 #th-rows .th-row { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 16px; }
 #th-rows .th-row + .th-row { border-top:1px dashed var(--line); margin-top:4px; padding-top:5px; }
 #th-rows .k { color:var(--muted); margin-right:4px; }
+/* 详情顺序: 桌面端速度→挡位→方向盘→自动驾驶→刹车→油门→道路 一行, 加速度另起一行;
+   移动端在「自动驾驶」后强制换行, 变为 4 项 / 3 项 / 加速度 三行 */
+#th-rows .th-break { display:none; flex-basis:100%; width:100%; height:0; }
+@media (max-width:640px) { #th-rows .th-break { display:block; } }
 .player .tpanel { display:none!important; }
 @media (max-width:640px) {
   .video-toolbar { gap:6px; }
@@ -3456,6 +3460,8 @@ body.settings-open { overflow:hidden; }
   .storcard { gap:12px; padding:12px 36px 12px 12px; }
   .storcard #live { flex-basis:100%; max-width:none; }
   .storage-brief { width:100%; }
+  /* 移动端容量条自动折叠: 默认只显示「车机 U 盘」一行, 点右下角箭头展开归档区/总占用 */
+  .storcard:not(.open) .storage-brief ~ .storage-brief { display:none; }
   .stortog { top:8px; }
   .library-toolbar h2 { font-size:20px; }
   .library-filters { gap:8px; flex-wrap:wrap; }
@@ -3679,7 +3685,7 @@ body.settings-open { overflow:hidden; }
 <div class="storrow"><span class="storlab">总占用</span><span class="storval" id="stortot"></span></div>
 <div class="storbar"><i id="stortotbar"></i></div>
 </div>
-<button class="stortog" id="stortog" onclick="toggleStor()" title="展开总占用" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+<button class="stortog" id="stortog" onclick="toggleStor()" title="展开归档区与总占用" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
 </nav>
 <div class="library-toolbar"><h2 id="library-title">录像</h2><span id="library-count"></span><button class="livebtn" id="live-btn" onclick="openLive()" hidden><svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg><span>实时预览</span></button><div class="library-filters">
@@ -4138,6 +4144,8 @@ body.settings-open { overflow:hidden; }
       <option value="wechat">推送方式：微信提醒（文字）</option>
       <option value="bark">推送方式：Bark（iOS 通知 / 截图）</option>
     </select>
+    <input class="ninput" id="nt-url" placeholder="访问地址（可选）: 手机能打开的地址，如 http://192.168.0.1:8080">
+    <div class="hint" id="nt-url-hint">Bark 触发截图与卡片「查看」按钮都用这个地址；留空时自动使用你最近访问的地址（手机连车机 WiFi 即可直接显示截图）。</div>
     <div id="nt-fs">
       <select class="ninput" id="nt-mode">
         <option value="dm">私聊推送 — 只有我本人能看到</option>
@@ -4163,7 +4171,6 @@ body.settings-open { overflow:hidden; }
       <input class="ninput" id="nt-appid" placeholder="App ID — cli_ 开头">
       <input class="ninput" id="nt-secret" type="password" placeholder="App Secret (已保存则留空表示不修改)">
       <input class="ninput" id="nt-hook" placeholder="群机器人 webhook (仅群推送需要): https://open.feishu.cn/open-apis/bot/v2/hook/...">
-      <input class="ninput" id="nt-url" placeholder="查看链接前缀 (可选): http://你的域名:端口">
       <div class="nrow"><span>延迟推送</span><input class="ninput num" id="nt-delay" type="number" min="5" max="600"> <span class="hint2">秒 (等片段写完再推)</span></div>
       <div class="hint">默认走自建应用私聊(只有你本人可见)；也可切到群机器人 webhook(群里都能看到)。视频推送只支持私聊。</div>
     </div>
@@ -4185,7 +4192,7 @@ body.settings-open { overflow:hidden; }
       <div class="nrow"><span>铃声</span><input class="ninput" id="nt-bark-sound" style="margin:0" placeholder="留空为默认铃声"></div>
       <input class="ninput" id="nt-bark-icon" placeholder="通知图标 URL（可选）: https://…/icon.png">
       <div class="nrow"><span>附带触发截图</span><input type="checkbox" id="nt-bark-img" checked onchange="barkPreview()"></div>
-      <div class="hint">截图由 Bark 按「查看链接前缀」自动拉取（需设备可被 Bark 服务器访问）；未填前缀时只发文字。</div>
+      <div class="hint">截图通过 Bark 的图片参数显示：留空上方「访问地址」时自动用你最近访问的地址（手机连车机 WiFi 可直接显示）；不在车旁时填一个手机能访问到的地址。</div>
       <input class="ninput" id="nt-bark-title" placeholder="标题模板，留空默认：🚨 {类型}" oninput="barkPreview()">
       <textarea class="ninput" id="nt-bark-body" rows="4" style="min-height:80px;resize:vertical;line-height:1.6" placeholder="正文模板，留空默认：时间/位置/原因" oninput="barkPreview()"></textarea>
       <div class="hint">变量：{类型} {时间} {位置} {原因} {分类} {摄像头}；修改模板时下方预览实时更新。</div>
@@ -6609,28 +6616,26 @@ function renderHud(f) {
     const hasGps = isFinite(fl) && isFinite(fn) && (fl || fn);
     const lat = hasGps ? fl : Number(md.est_lat);
     const lon = hasGps ? fn : Number(md.est_lon);
-    const gps = (isFinite(lat) && isFinite(lon) && (lat || lon))
-      ? lat.toFixed(5) + ', ' + lon.toFixed(5) : '—';
     const rp = roadInfo.parts || {};
     const roadAddr = [rp.province, rp.city, rp.district, roadInfo.text].filter(Boolean).join('');
     const roadTxt = roadAddr || roadInfo.text || singlePlace(md) || '—';
+    // 详情顺序: 桌面端一行(速度/挡位/方向盘/自动驾驶/刹车/油门/道路)+加速度;
+    // 移动端由 .th-break 在「自动驾驶」后强制换行, 变成 4 项 / 3 项 / 加速度 三行。
     const details =
-      '<div class="th-row">' +
-        '<span><span class="k">Autopilot</span>' + apTxt + '</span>' +
-        '<span><span class="k">挡位</span>' + esc(String(f[1])) + '</span>' +
+      '<div class="th-row th-row-main">' +
         '<span><span class="k">速度</span>' + Math.max(0, Math.round(f[2])) + ' km/h</span>' +
+        '<span><span class="k">挡位</span>' + esc(String(f[1])) + '</span>' +
         '<span><span class="k">方向盘</span>' + Number(f[4]).toFixed(0) + '°</span>' +
+        '<span><span class="k">自动驾驶</span>' + apTxt + '</span>' +
+        '<span class="th-break" aria-hidden="true"></span>' +
         '<span><span class="k">刹车</span>' + (f[5] ? '已踩' : '未踩') + '</span>' +
         '<span><span class="k">油门</span>' + f[3] + '%</span>' +
+        '<span><span class="k">道路</span><span id="th-road">' + esc(roadTxt) + '</span></span>' +
       '</div>' +
       '<div class="th-row"><span class="k">加速度</span>' +
         '<span>前后 ' + Number(f[12]).toFixed(2) + ' m/s²</span>' +
         '<span>横向 ' + Number(f[11]).toFixed(2) + ' m/s²</span>' +
         '<span>垂直 ' + Number(f[13]).toFixed(2) + ' m/s²</span>' +
-      '</div>' +
-      '<div class="th-row">' +
-        '<span><span class="k">GPS</span>' + gps + '</span>' +
-        '<span><span class="k">道路</span><span id="th-road">' + esc(roadTxt) + '</span></span>' +
       '</div>';
     th('th-rows').innerHTML = details;
     const ay = Math.max(-4, Math.min(4, Number(f[12]) || 0));
@@ -9456,7 +9461,7 @@ async function archiveDeleteItems(items, quiet) {
 }
 
 /* ---------- 飞书推送 ---------- */
-const NT_SENS = ['nt-to', 'nt-appid', 'nt-hook', 'nt-url'];
+const NT_SENS = ['nt-to', 'nt-appid', 'nt-hook'];
 let ntHidden = true;            // 默认隐藏, 截图安全
 function ntMask(v) {
   v = (v || '').trim();
@@ -9508,6 +9513,10 @@ function ntChannelUI() {
   document.getElementById('nt-fs').style.display = ch === 'feishu' ? '' : 'none';
   document.getElementById('nt-wx').style.display = ch === 'wechat' ? '' : 'none';
   document.getElementById('nt-bark').style.display = ch === 'bark' ? '' : 'none';
+  // 访问地址只对飞书(查看按钮)和 Bark(截图/查看) 有意义, 微信只发文字
+  const urlIn = document.getElementById('nt-url'), urlHint = document.getElementById('nt-url-hint');
+  if (urlIn) urlIn.style.display = ch === 'wechat' ? 'none' : '';
+  if (urlHint) urlHint.style.display = ch === 'wechat' ? 'none' : '';
   if (ch === 'bark') barkPreview();
 }
 /* Bark 样式预览: 用示例数据实时渲染标题/正文/截图/分组 */
@@ -18748,6 +18757,26 @@ def _wx_send(conf, text):
         return False, "%s 失败: %s" % (name, str(ex)[:120])
 
 
+# 最近一次网页访问用的地址 (Host 头): 没配「查看链接前缀」时,
+# Bark 截图 / 查看链接自动用它拼一个手机能打开的地址。
+_LAST_HTTP = {"host": "", "proto": "http"}
+
+
+def _note_request_base(handler):
+    """记录本次请求的访问地址, 供 Bark 通知拼接手机可访问的 URL。"""
+    try:
+        host = str(handler.headers.get("Host") or "").strip()
+    except Exception:
+        return
+    if not host or not re.match(r"^[A-Za-z0-9.\-]+(:\d+)?$", host):
+        return
+    proto = str(handler.headers.get("X-Forwarded-Proto") or "").strip().lower()
+    if proto not in ("http", "https"):
+        proto = "https" if str(handler.headers.get("X-Forwarded-Ssl") or "").lower() in ("on", "1") else "http"
+    _LAST_HTTP["host"] = host
+    _LAST_HTTP["proto"] = proto
+
+
 def _bark_ready(conf):
     return bool(str(conf.get("bark_key") or "").strip())
 
@@ -18778,13 +18807,28 @@ def _bark_text(conf, cat, name, test=False):
     return title.strip()[:120], body.strip()[:1500], meta
 
 
+def _cover_base(conf):
+    """Bark 截图与「查看」链接的基地址。
+
+    优先用手动配置的「查看链接前缀」; 没配置时退回最近一次网页访问的地址 ——
+    手机连着车机 WiFi 时, 这个地址手机可以直接打开, 因此截图能正常显示。
+    """
+    base = str(conf.get("public_url") or "").strip().rstrip("/")
+    if base:
+        return base
+    host = _LAST_HTTP.get("host") or ""
+    if not host:
+        return ""
+    return "%s://%s" % (_LAST_HTTP.get("proto") or "http", host)
+
+
 def _bark_cover_url(conf, cat, name):
-    """Bark 的 image 只接受公网 URL; 没配「查看链接前缀」就拉不到截图。"""
-    base = str(conf.get("public_url") or "").rstrip("/")
+    """Bark 的 image 由手机端按 URL 下载; 需要一个手机能访问到的地址。"""
+    base = _cover_base(conf)
     token = str(conf.get("bark_token") or "").strip()
     if not base or not token:
         return ""
-    return "%s/api/notify/bark/cover?token=%s&cat=%s&name=%s" % (
+    return "%s/api/notify/bark/cover.jpg?token=%s&cat=%s&name=%s" % (
         base, urllib.parse.quote(token), urllib.parse.quote(cat), urllib.parse.quote(name))
 
 
@@ -18803,16 +18847,16 @@ def _bark_send(conf, cat, name, test=False):
         payload["sound"] = str(conf["bark_sound"]).strip()
     if str(conf.get("bark_icon") or "").strip():
         payload["icon"] = str(conf["bark_icon"]).strip()
-    base = str(conf.get("public_url") or "").rstrip("/")
+    base = _cover_base(conf)
     if base:
         payload["url"] = "%s/?ev=%s/%s" % (base, urllib.parse.quote(cat), urllib.parse.quote(name))
     warn = ""
     if conf.get("bark_img", True):
         img = _bark_cover_url(conf, cat, name)
         if img:
-            payload["image"] = img          # Bark 会自己按这个 URL 拉触发截图
+            payload["image"] = img          # Bark 在手机上按这个 URL 下载触发截图
         else:
-            warn = " (未配查看链接前缀, 截图无法附带)"
+            warn = " (还没有可用的访问地址或截图令牌, 截图未附带)"
     try:
         j = _post_json(server + "/push", payload, timeout=20, tls12=False)
     except Exception as ex:
@@ -19032,7 +19076,7 @@ def notify_status():
         "has_bark_key": bool(str(conf.get("bark_key") or "").strip()),
         "bark_ready": _bark_ready(conf),
         "bark_cover_ready": bool(str(conf.get("bark_token") or "").strip()
-                                 and str(conf.get("public_url") or "").strip()),
+                                 and _cover_base(conf)),
         "last": st.get("last") or {},
         "sent_total": len(st.get("seen") or {}),
     }
@@ -21800,6 +21844,7 @@ class Handler(BaseHTTPRequestHandler):
         hdr_only(405)
 
     def do_GET(self):
+        _note_request_base(self)
         path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         if path == "/login":
             if not AUTH_ON:
@@ -21838,8 +21883,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if path == "/api/notify/bark/cover":
-            # Bark 服务端按 URL 拉取通知图片, 因此这里必须免登录; 用随机 token 防止被随意遍历
+        if path in ("/api/notify/bark/cover", "/api/notify/bark/cover.jpg"):
+            # Bark 在手机上按 URL 下载通知图片, 因此这里必须免登录; 用随机 token 防止被随意遍历。
+            # 同时提供 .jpg 后缀, 兼容按扩展名判断图片类型的客户端。
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             conf = notify_conf()
             token = str(conf.get("bark_token") or "")
@@ -22470,6 +22516,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_POST(self):
+        _note_request_base(self)
         p = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         if p == "/login" and AUTH_ON:
             self._do_login()
@@ -22719,10 +22766,10 @@ class Handler(BaseHTTPRequestHandler):
                 warn = "" if _wx_ready(conf) else "微信提醒还没就绪: 请选择接口并填写 Token"
             elif _notify_channel(conf) == "bark":
                 warn = "" if _bark_ready(conf) else "Bark 还没就绪: 请填写 Device Key"
-                if _bark_ready(conf) and not str(conf.get("public_url") or "").strip():
-                    warn = "Bark 已可用; 填「查看链接前缀」后通知里才会附带触发截图"
+                if _bark_ready(conf) and not _cover_base(conf):
+                    warn = "Bark 已可用; 先在网页里打开一次, 或填「访问地址」后通知里才会附带触发截图"
             elif _dm_ready(conf):
-                warn = "" if (conf.get("public_url") or "").strip() else "私聊已可用; 填「查看链接前缀」后卡片上会有查看按钮"
+                warn = "" if _cover_base(conf) else "私聊已可用; 填「访问地址」后卡片上会有查看按钮"
             elif str(conf.get("webhook") or "").strip():
                 warn = "私聊未就绪 (需 App ID/Secret + 接收人), 当前会推到群里"
             else:
