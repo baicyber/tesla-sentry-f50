@@ -261,22 +261,12 @@ OTA、推送、认证参数不写入此 conf，走环境变量或网页配置。
 
 ## 上游感谢
 
+- [baicyber/tesla-sentry-f50](https://github.com/baicyber/tesla-sentry-f50) —— 本项目的上游仓库，本项目在其基础上继续开发，感谢原作者的开源与持续贡献
 - [teslausb](https://github.com/marcone/teslausb) —— 树莓派伪装 U 盘归档的开山之作，本项目思路来源
 - [SentryBox](https://github.com/weitanism/sentrybox) —— 车机常驻设备的产品化实践
 - [tesla-sentry-viewer](https://github.com/denysvitali/tesla-sentry-viewer) —— 网页查看器形态参考
 
 ---
-
-## ☕ 赞助
-
-> 本项目完全开源免费，如果它帮到了你，欢迎支持博主一些 token，助力项目持续更新~
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/sponsor/web_alipay.jpg" width="240" alt="支付宝收款码"><br><sub><b>支付宝</b></sub></td>
-    <td align="center"><img src="docs/sponsor/web_wechatpay.jpg" width="240" alt="微信收款码"><br><sub><b>微信支付</b></sub></td>
-  </tr>
-</table>
 
 ## 💬 交流群
 

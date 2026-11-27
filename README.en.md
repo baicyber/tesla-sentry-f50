@@ -235,20 +235,10 @@ This is a personal hobby project, not affiliated with Tesla. Changing how your c
 
 ## Credits
 
+- [baicyber/tesla-sentry-f50](https://github.com/baicyber/tesla-sentry-f50) — the upstream repository this project builds on; thanks to the original author for open-sourcing and maintaining it
 - [teslausb](https://github.com/marcone/teslausb) — the pioneering Raspberry Pi USB-drive impersonator; the idea this project grew from
 - [SentryBox](https://github.com/weitanism/sentrybox) — productized practice for an always-on in-car device
 - [tesla-sentry-viewer](https://github.com/denysvitali/tesla-sentry-viewer) — reference for the web-viewer form factor
-
-## ☕ Sponsor
-
-> This project is completely free and open source. If it has helped you, you are welcome to buy the author some tokens to keep it going.
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/sponsor/web_alipay.jpg" width="240" alt="Alipay QR code"><br><sub><b>Alipay</b></sub></td>
-    <td align="center"><img src="docs/sponsor/web_wechatpay.jpg" width="240" alt="WeChat Pay QR code"><br><sub><b>WeChat Pay</b></sub></td>
-  </tr>
-</table>
 
 ## 💬 Community
 
