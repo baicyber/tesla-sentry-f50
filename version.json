@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.27.021",
+  "version": "2026.11.27.022",
   "date": "2026-11-27",
   "files": [
     "storage_allocation.py",
@@ -7,9 +7,9 @@
     "tesla-live-sync.py"
   ],
   "notes": [
-    "OTA 重启彻底简化：去掉 init.d restart + SIGTERM + os._exit 的复杂时序，去掉 150 秒探活守护和 2 次尝试 boot guard 自动回滚。只用 os.execv 原地替换进程——操作系统层直接从磁盘重新加载 sentry-viewer.py 和模块，pid 不变、无 race condition、不依赖 procd/init.d/看门狗",
-    "boot guard 简化为只清理旧 pending 记账，不再做自动回滚；新版本如果 import 失败自然退出，procd 的 respawn 是天然安全网",
-    "—— 以下为 2026.11.27.020 更新 ——",
+    "彻底移除服务看门狗：删除 tsf-watchdog.sh / openwrt/init.d/tsf-watchdog；清理 _OTA_WATCH_SRC 150 秒探活守护、_ota_boot_guard 自动回滚、WATCHDOG_INIT / WATCHDOG_INIT_SCRIPT 常量；_ensure_watchdog 简化为只做 init.d 脚本部署并改名为 _deploy_init_scripts；tesla-viewer init.d 去掉 WATCHDOG_DIR / STOP_FLAG / DISABLE_FLAG / stop_service；install.py 去掉看门狗脚本/init/rc.d 链接/restart",
+    "净减 352 行，保留 OTA sidecar 更新 init.d 脚本 + procd respawn 天然安全网",
+    "—— 以下为 2026.11.27.021 更新 ——",
     "修复 OTA 后网页打不开：升级替换完文件后，Timer 线程调 init.d restart 但只发命令不自杀，主进程和 HTTP 服务继续跑旧代码；init.d restart 异步 kill 不及时就永远占着端口。修复为先通知 procd 协调 stop/start，再立即 SIGTERM + os._exit 退出自己，procd 自动 respawn 新版本",
     "init.d 脚本 TSF_DIR 加 fallback（${TSF_DIR:-/opt/tesla-sentry}），老设备 conf 没设 TSF_DIR 时不会跑 /sentry-viewer.py 不存在的路径",
     "—— 以下为 2026.11.27.019 更新 ——",

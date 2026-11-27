@@ -505,7 +505,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.021"
+APP_VERSION = "2026.11.27.022"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1198,49 +1198,6 @@ def _ota_state_write(d):
         pass
 
 
-# 探活守护: 独立进程 (start_new_session, procd 重启服务时不会连坐杀掉),
-# 150 秒内没等到新版本应答就把备份盖回去并重启服务。
-_OTA_WATCH_SRC = r'''import json, os, shutil, subprocess, sys, time, urllib.request
-port, ver, bak = int(sys.argv[1]), sys.argv[2], sys.argv[3]
-targets = [p for p in sys.argv[4:] if p]
-deadline = time.time() + 150
-while time.time() < deadline:
-    try:
-        with urllib.request.urlopen("http://127.0.0.1:%d/api/ping" % port, timeout=3) as r:
-            if str(json.loads(r.read(8192).decode("utf-8", "replace")).get("v")) == ver:
-                sys.exit(0)
-    except Exception:
-        pass
-    time.sleep(4)
-for p in targets:
-    try:
-        shutil.copy2(bak, p)
-    except Exception:
-        pass
-for p in ("/etc/init.d/tesla-viewer", "/etc/init.d/sentry-viewer"):
-    if os.path.isfile(p):
-        try:
-            subprocess.Popen([p, "restart"])
-        except Exception:
-            pass
-        break
-'''
-
-
-def _ota_start_watch(ver):
-    """装完就挂一个探活守护, 防止"重启后起不来"变成需要人肉上机抢救"""
-    try:
-        path = "/tmp/tsf-ota-watch.py"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(_OTA_WATCH_SRC)
-        subprocess.Popen([sys.executable or "python3", path, str(PORT), str(ver), OTA_BACKUP]
-                         + _self_paths(),
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True, close_fds=True)
-    except Exception as ex:
-        print("ota watch skipped:", ex)
-
-
 # OTA 配套脚本: (仓库相对路径, 设备文件名, 特征串, 最小字节数)
 # 旧版 OTA 只替换 sentry-viewer.py, 导致改了归档/同步脚本后老设备点"更新"永远不生效。
 OTA_SIDECARS = (
@@ -1249,15 +1206,14 @@ OTA_SIDECARS = (
     ("scripts/tesla-sync.sh", "tesla-sync.sh", b"#!/bin/sh", 200),
     ("scripts/usb-selfheal.sh", "usb-selfheal.sh", b"#!/bin/sh", 200),
     ("scripts/tesla-img.sh", "tesla-img.sh", b"#!/bin/sh", 200),
-    ("scripts/tsf-watchdog.sh", "tsf-watchdog.sh", b"tsf-watchdog", 200),
-    # init.d 启动脚本随 OTA 一起下发, 由 _ensure_watchdog 在启动时装进 /etc/init.d
+    # init.d 启动脚本随 OTA 一起下发, 由 _deploy_init_scripts 在启动时装进 /etc/init.d
     ("openwrt/init.d/tesla-viewer", "init.d.tesla-viewer", b"rc.common", 100),
     ("openwrt/init.d/tesla-live", "init.d.tesla-live", b"rc.common", 100),
     ("openwrt/init.d/tsf-mount", "init.d.tsf-mount", b"rc.common", 100),
     ("tesla-live-sync.py", "tesla-live-sync.py", b"def do_sync", 2000),
 )
-# 这些 sidecar 即使设备上还没有同名文件也必须安装 (新组件/启动脚本)
-OTA_SIDECAR_ALWAYS = {"tsf-watchdog.sh", "init.d.tesla-viewer", "init.d.tesla-live", "init.d.tsf-mount"}
+# init.d 脚本即使设备上还没有也必须安装 (新组件)
+OTA_SIDECAR_ALWAYS = {"init.d.tesla-viewer", "init.d.tesla-live", "init.d.tsf-mount"}
 
 
 def _ota_sidecars(base):
@@ -1629,7 +1585,7 @@ def ota_apply(force=False):
     # 6.5) init.d 启动脚本在重启服务之前就写入 /etc/init.d。
     # 只放在启动时部署会有盲区: 一旦新脚本有问题导致起不来, 就再也没有机会自我修正。
     try:
-        _ensure_watchdog()
+        _deploy_init_scripts()
     except Exception as ex:
         print("ota init.d deploy:", ex)
     # 7) 记账
@@ -1675,22 +1631,6 @@ def _ota_rollback_now():
     except Exception:
         os._exit(1)
     return True, ""
-
-
-def _ota_boot_guard():
-    """清理旧版本留下的 pending 记账, 不做自动回滚.
-
-    已经不再需要复杂的 boot guard 自动回滚:
-    - OTA 重启用 execv 原地替换, 新版本代码直接跑起来
-    - 新版本如果 import 失败/启动崩掉, 进程会自然退出, procd/init.d 的 respawn 是天然安全网
-    - 150 秒探活守护和 2 次尝试回滚都已去掉, 简化启动路径
-    """
-    try:
-        st = _ota_state()
-        if st.pop("pending", None):
-            _ota_state_write(st)
-    except Exception:
-        pass
 
 
 def ota_rollback():
@@ -14405,25 +14345,6 @@ def _ensure_mkfs_ext4(progress):
                      % ("；".join(fails[-3:]), hint))
 
 
-WATCHDOG_INIT = "/etc/init.d/tsf-watchdog"
-WATCHDOG_INIT_SCRIPT = """#!/bin/sh /etc/rc.common
-# tsf-watchdog: 服务存活监控 (失败自动恢复, 连续失败重启系统, 最多2次)
-# 具体策略见 /opt/tesla-sentry/tsf-watchdog.sh
-START=99
-STOP=10
-USE_PROCD=1
-
-start_service() {
-    procd_open_instance
-    procd_set_param command /opt/tesla-sentry/tsf-watchdog.sh
-    procd_set_param respawn 3600 5 5
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_close_instance
-}
-"""
-
-
 # OTA 下发的 init.d 脚本 (先放到程序目录, 启动时同步进 /etc/init.d)
 INITD_DEPLOY = (
     ("init.d.tesla-viewer", "/etc/init.d/tesla-viewer"),
@@ -14432,14 +14353,10 @@ INITD_DEPLOY = (
 )
 
 
-def _ensure_watchdog():
-    """确保 init.d 启动脚本与服务看门狗已安装并运行 (幂等, 失败不影响主服务)。
+def _deploy_init_scripts():
+    """OTA 会把 init.d 脚本下发到程序目录, 启动时同步进 /etc/init.d.
 
-    OTA 会把 init.d 脚本下发到程序目录, 这里在启动时同步进 /etc/init.d,
-    因此网页升级后不需要再手动跑 install.sh apply。
-    看门狗每 10 秒检查 tesla-viewer/tesla-live, 失败自动 restart;
-    连续 6 次失败重启 OpenWrt, 重启 2 次仍失败则停止重启并在系统日志写明原因与建议。
-    """
+    网页升级后不需要再手动跑 install.sh apply."""
     app = os.environ.get("TSF_DIR", "/opt/tesla-sentry")
     for name, dest in INITD_DEPLOY:
         try:
@@ -14464,43 +14381,6 @@ def _ensure_watchdog():
         for link in ("/etc/rc.d/S08tsf-mount", "/etc/rc.d/K99tsf-mount"):
             if not os.path.lexists(link):
                 os.symlink("../init.d/tsf-mount", link)
-    except Exception:
-        pass
-    try:
-        script = os.path.join(os.environ.get("TSF_DIR", "/opt/tesla-sentry"), "tsf-watchdog.sh")
-        if not os.path.isfile(script):
-            return
-        os.chmod(script, 0o755)
-        try:
-            with open(WATCHDOG_INIT, encoding="utf-8") as f:
-                current = f.read()
-        except OSError:
-            current = ""
-        if current != WATCHDOG_INIT_SCRIPT:
-            with open(WATCHDOG_INIT, "w", encoding="utf-8") as f:
-                f.write(WATCHDOG_INIT_SCRIPT)
-            os.chmod(WATCHDOG_INIT, 0o755)
-            subprocess.run([WATCHDOG_INIT, "enable"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=20)
-        r = subprocess.run([WATCHDOG_INIT, "running"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=20)
-        # 脚本随 OTA 更新后, 正在运行的看门狗还是旧逻辑, 必须重启一次才生效
-        fingerprint = "%s:%s" % (os.path.getsize(script), int(os.path.getmtime(script)))
-        mark = script + ".deployed"
-        try:
-            with open(mark, encoding="utf-8") as f:
-                deployed = f.read().strip()
-        except OSError:
-            deployed = ""
-        if r.returncode != 0:
-            subprocess.run([WATCHDOG_INIT, "start"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=30)
-        elif deployed != fingerprint:
-            subprocess.run([WATCHDOG_INIT, "restart"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=30)
-        if deployed != fingerprint:
-            with open(mark, "w", encoding="utf-8") as f:
-                f.write(fingerprint)
     except Exception:
         pass
 
@@ -21997,13 +21877,8 @@ if __name__ == "__main__":
     if not ffmpeg_ready(refresh=True):
         print("WARN: ffmpeg/ffprobe 不可用 (%s / %s): 缩略图与清晰度转码会失效, "
               "请重跑 install.sh apply 自动安装并配置 FFmpeg" % (FFMPEG_BIN, FFPROBE_BIN), flush=True)
-    # 升级自愈: 上一版装完没确认就崩掉的话, 这里退回备份并重启。
-    # 放在绑定端口成功之后 —— 只有真的成为主实例才计数, 免得 procd 重启期间新旧实例
-    # 短暂重叠把计数冲高, 把好版本误判成坏版本。
-    try:
-        _ota_boot_guard()
-    except Exception as ex:
-        print("ota boot guard skipped: %s" % ex)
+    # 升级 boot guard 已去掉: OTA 重启用 execv 原地替换, 新版本代码直接跑起来,
+    # 如果 import 失败/启动崩掉, 进程会自然退出, procd respawn 是天然安全网。
     # 启动自愈: 若上次退出时镜像仍处于管理挂载状态, 恢复导出。
     # 短暂重试拿锁, 避免与正在进行的归档/同步互相拆台; 拿不到就完全不碰 U 盘。
     for _ in range(6):
@@ -22025,7 +21900,7 @@ if __name__ == "__main__":
     else:
         print("startup self-heal skipped: usb lock held by another process")
     threading.Thread(target=disk_guard, daemon=True).start()
-    threading.Thread(target=_ensure_watchdog, daemon=True, name="watchdog-init").start()
+    threading.Thread(target=_deploy_init_scripts, daemon=True, name="initd-deploy").start()
     threading.Thread(target=health_logger, daemon=True).start()
     threading.Thread(target=notify_loop, daemon=True).start()
     threading.Thread(target=auto_update_loop, daemon=True).start()
