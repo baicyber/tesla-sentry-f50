@@ -319,7 +319,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "26.0.26"
+APP_VERSION = "26.0.27"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -2089,7 +2089,10 @@ body.watching { overflow:hidden; }
   animation:show-buffering 0s .65s backwards; }
 @keyframes show-buffering { from { visibility:hidden; } to { visibility:visible; } }
 .player .cload button { pointer-events:auto; padding:6px; }
-.player .vcell canvas.hold { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; pointer-events:none; }
+/* 跨段占位最后一帧: 只做短暂平滑过渡, 必须淡出, 不能长期盖住新段的错误旧画面 */
+.player .vcell canvas.hold { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; pointer-events:none; z-index:1; }
+.player .vcell canvas.hold.fade { animation:hold-fade .35s ease forwards; }
+@keyframes hold-fade { to { opacity:0; } }
 .player .cambar { order:1; justify-content:flex-start; flex-wrap:nowrap; overflow-x:auto; padding:2px 0; }
 .player .cambar button { white-space:nowrap; border-radius:6px; padding:7px 13px; min-height:38px; }
 .player .cambar button.on { background:var(--text); color:var(--bg); border-color:var(--text); }
@@ -4726,8 +4729,20 @@ function showClip(ix, offset, continuous = false, seekStartup = false, reuseExis
       still.height = Math.round(still.width * last.videoHeight / last.videoWidth);
       still.getContext('2d').drawImage(last, 0, 0, still.width, still.height);
       incoming.after(still);
-      incoming.addEventListener('loadeddata', () => still.remove(), {once:true});
-      incoming.addEventListener('error', () => still.remove(), {once:true});
+      // 占位帧只用于极短的切换过渡。旧实现只等 loadeddata/error, 新段首帧迟迟不来时
+      // (原画要大下载、低清要后台转码十几秒)旧帧会一直盖在上面, 进度条已到新段而画面
+      // 仍是上一段 -> 看起来就是"缓冲中出现无关画面帧"。多重就绪事件 + 超时兜底移除。
+      let holdTimer = null;
+      const clearHold = () => {
+        if (!still.isConnected) return;
+        if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+        still.classList.add('fade');
+        setTimeout(() => still.remove(), 360);
+      };
+      ['loadeddata', 'canplay', 'playing', 'timeupdate', 'seeked'].forEach(ev =>
+        incoming.addEventListener(ev, clearHold, {once:true}));
+      incoming.addEventListener('error', clearHold, {once:true});
+      holdTimer = setTimeout(clearHold, 800);
     }
     return cell;
   });
