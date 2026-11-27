@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.032"
+APP_VERSION = "2026.11.27.033"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -4095,12 +4095,6 @@ body.settings-open { overflow:hidden; }
       <button class="mini" onclick="ntTest()">发送测试</button>
     </div>
     <div class="hint" id="nt-msg"></div>
-    <details class="nt-logs" id="nt-logs" ontoggle="if(this.open)ntLoadLogs()">
-      <summary>系统日志概览（截取）</summary>
-      <div class="hint">推送没收到时看这里：关键状态、推送结果与最近异常。完整日志在「关于 → 日志分析」。</div>
-      <pre class="logview" id="nt-logview">展开后自动读取…</pre>
-      <div class="updbtns"><button class="mini" onclick="ntLoadLogs()">刷新</button><button class="mini" onclick="ntCopyLogs()">复制</button></div>
-    </details>
   </div>
   <div id="tab-auth" style="display:none">
     <div class="hint">改完本机会自动用新密码重新登录，手机/其它设备上的登录状态立即失效。</div>
@@ -9300,31 +9294,6 @@ async function ntTest() {
 }
 const NT_FMT = '{类型}\n时间：{时间}\n位置：{位置}\n原因：{原因}';
 function ntResetFormat() { document.getElementById('nt-wx-format').value = NT_FMT; }
-let NT_LOG = '';
-async function ntLoadLogs() {
-  const pre = document.getElementById('nt-logview');
-  pre.textContent = '正在读取…';
-  try {
-    const j = await (await fetch('/api/logs', { cache: 'no-store' })).json();
-    const ov = j.overview || [];
-    const keep = ov.filter(l => /推送|版本|时间|同步|ffmpeg|温度|CPU|内存|更新源|自动更新|异常/.test(l));
-    NT_LOG = (keep.length ? keep : ov).slice(0, 18).join('\n') || '暂无日志';
-    pre.textContent = NT_LOG;
-  } catch (e) { pre.textContent = '读取失败: ' + e; }
-}
-async function ntCopyLogs() {
-  if (!NT_LOG) await ntLoadLogs();
-  try {
-    await navigator.clipboard.writeText(NT_LOG);
-    const m = document.getElementById('nt-msg');
-    m.textContent = '日志概览已复制'; m.style.color = '#4cc38a';
-  } catch (e) {
-    const ta = document.createElement('textarea');
-    ta.value = NT_LOG; document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); } catch (_) {}
-    ta.remove();
-  }
-}
 
 function ntMediaUI() {
   const v = document.getElementById('nt-media').value === 'video';
