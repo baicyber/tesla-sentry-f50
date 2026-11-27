@@ -505,7 +505,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.020"
+APP_VERSION = "2026.11.27.021"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1310,48 +1310,27 @@ def _ota_sidecars(base):
 
 
 def _ota_restart():
-    """替换完文件后让 procd respawn 新版本:
+    """替换完文件后原地重启 —— 只用 os.execv:
 
-    关键设计:
-    - 不能只靠 init.d restart 异步 kill —— Timer 线程 return 后主进程和 HTTP 服务还在跑旧代码
-    - 不能在 Timer 线程里 sys.exit() —— 只会终止 Timer 线程, 主进程不受影响
-    - 正确做法: 通知 procd 重启 + 发送 SIGTERM 让进程整体退出 → procd 自动 respawn 新版本
-    - 非 procd 管理 (没有 init.d): execv 原地替换
+    为什么不用 procd/init.d restart:
+    - init.d restart 是异步 kill+start, 旧进程可能等不到 kill 就占着端口
+    - Timer 线程里调 init.d restart 再 SIGTERM/os._exit 自己: 时序太复杂,
+      procd 的 respawn 和我们的自杀可能打架, 新版本起来前旧进程已死但 procd
+      可能延迟拉起
+    - 看门狗 boot guard 和 150 秒探活守护也是多余的, 反而增加启动复杂度
+
+    execv 的好处:
+    - 操作系统层直接替换进程代码段, pid 不变, 不涉及退出/重生的 race condition
+    - 从磁盘重新加载 sentry-viewer.py + 模块, 完全是最新代码
+    - 所有旧线程 (HTTP server/Timer/daemon) 瞬间消失, 没有残留
+    - 不依赖任何外部命令或服务管理器
     """
-    here = os.path.realpath(__file__)
-    d = os.path.dirname(here)
-    cands = []
-    for name in ("tesla-viewer", "sentry-viewer"):
-        p = "/etc/init.d/" + name
-        if not os.path.isfile(p):
-            continue
-        try:
-            with open(p, encoding="utf-8", errors="replace") as f:
-                txt = f.read()
-        except OSError:
-            txt = ""
-        score = 2 if here in txt else (1 if ("sentry-viewer.py" in txt or (d and d in txt)) else 0)
-        cands.append((score, p))
-    cands.sort(reverse=True)
-    if cands and cands[0][0] > 0:
-        # 通知 procd 协调 stop/start —— 让看门狗、依赖服务都同步到新版本
-        try:
-            subprocess.Popen([cands[0][1], "restart"], stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-        except Exception:
-            pass
-        # 无论 init.d restart 是否成功, 立刻让自己退出 —— procd 自动 respawn 新版本
-        # 用 os._exit 而不是 sys.exit: Timer 线程里 sys.exit 只结束 Timer, 主进程不受影响
-        try:
-            os.kill(os.getpid(), signal.SIGTERM)
-        except Exception:
-            pass
-        time.sleep(0.2)
-        os._exit(0)
-    # 没有 init.d (非 procd 管理): execv 原地替换
+    print("ota: execv restart...", flush=True)
     try:
         os.execv(sys.executable, [sys.executable] + sys.argv)
-    except Exception:
+    except Exception as ex:
+        # execv 失败 (极罕见) —— 最后的兜底: 自己退出让 procd respawn
+        print("ota: execv failed (%s), fallback to exit" % ex, flush=True)
         os._exit(1)
 
 
@@ -1653,11 +1632,9 @@ def ota_apply(force=False):
         _ensure_watchdog()
     except Exception as ex:
         print("ota init.d deploy:", ex)
-    # 7) 记账 + 探活守护: pending 让程序起床时能发现"上次装了但没活下来"
+    # 7) 记账
     _ota_state_write({"applied": latest, "prev": prev, "at": int(time.time()),
-                      "modules": saved, "pending": {"v": latest, "tries": 0,
-                                                    "at": int(time.time())}})
-    _ota_start_watch(latest)
+                      "modules": saved})
     msg = ("已重新安装 %s" if not newer else "已升级到 %s") % latest + ", 服务正在重启…"
     if mods:
         msg += " 模块已同步: " + ", ".join(n for n, _ in mods)
@@ -1701,43 +1678,19 @@ def _ota_rollback_now():
 
 
 def _ota_boot_guard():
-    """"装完起不来"的自愈: 同一版本连续两次启动都没来得及确认 -> 退回上一版。
+    """清理旧版本留下的 pending 记账, 不做自动回滚.
 
-    确认动作放在启动 10 秒后 (服务能应答、后台线程都跑起来了才算活)。这样即使
-    procd 一直 respawn, 第二轮就会自动回滚, 不需要人上机。断电重启也能接上:
-    正常启动过的版本 pending 已经被清掉, 不会被误判。"""
-    st = _ota_state()
-    p = st.get("pending")
-    if not isinstance(p, dict) or not p.get("v"):
-        return
+    已经不再需要复杂的 boot guard 自动回滚:
+    - OTA 重启用 execv 原地替换, 新版本代码直接跑起来
+    - 新版本如果 import 失败/启动崩掉, 进程会自然退出, procd/init.d 的 respawn 是天然安全网
+    - 150 秒探活守护和 2 次尝试回滚都已去掉, 简化启动路径
+    """
     try:
-        same = str(p.get("v")) == APP_VERSION
-        tries = int(p.get("tries") or 0) + 1
+        st = _ota_state()
+        if st.pop("pending", None):
+            _ota_state_write(st)
     except Exception:
-        return
-    if not same:
-        st.pop("pending", None)          # 已经在跑别的版本 (手动回滚过), 清掉记录
-        _ota_state_write(st)
-        return
-    if tries >= 2:
-        print("ota: 新版本连续 %d 次启动未确认, 自动回滚到 %s" % (tries, st.get("prev")))
-        ok, msg = _ota_rollback_now()
-        if not ok:
-            print("ota: 自动回滚失败: %s" % msg)
-        # 成功时 _ota_rollback_now 已经 execv, 走不到这里
-    p["tries"] = tries
-    st["pending"] = p
-    _ota_state_write(st)
-
-    def _confirm():
-        time.sleep(10)
-        cur = _ota_state()
-        if (cur.get("pending") or {}).get("v") == APP_VERSION:
-            cur.pop("pending", None)
-            cur["confirmed"] = {"v": APP_VERSION, "at": int(time.time())}
-            _ota_state_write(cur)
-
-    threading.Thread(target=_confirm, daemon=True).start()
+        pass
 
 
 def ota_rollback():
