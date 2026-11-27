@@ -319,7 +319,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "26.0.27"
+APP_VERSION = "26.0.29"
 VIEWER_BUILD = APP_VERSION
 OTA_REPO = os.environ.get("TSF_OTA_REPO", "baicyber/tesla-sentry-f50")
 _OTA_DEFAULT = ",".join([
@@ -2085,7 +2085,7 @@ body.watching { overflow:hidden; }
 .player .vgrid.one .vcell { cursor:default; }
 .player .clabel { z-index:2; left:10px; top:10px; right:auto; bottom:auto; letter-spacing:.05em; }
 /* Keep the last frame visible during brief decoder and network waits. */
-.player .cload.buffering { inset:auto 8px 8px auto; border-radius:4px; padding:3px 7px;
+.player .cload.buffering { z-index:2; inset:auto 8px 8px auto; border-radius:4px; padding:3px 7px;
   animation:show-buffering 0s .65s backwards; }
 @keyframes show-buffering { from { visibility:hidden; } to { visibility:visible; } }
 .player .cload button { pointer-events:auto; padding:6px; }
@@ -2093,6 +2093,11 @@ body.watching { overflow:hidden; }
 .player .vcell canvas.hold { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; pointer-events:none; z-index:1; }
 .player .vcell canvas.hold.fade { animation:hold-fade .35s ease forwards; }
 @keyframes hold-fade { to { opacity:0; } }
+/* MSE seek/分片切换时, 浏览器会保留解码器里的旧帧直到新帧到位。若旧帧恰好是
+   之前看过的别的镜头(车身), 就会闪出"无关镜头帧"。等待窗口盖一层深色遮罩,
+   新帧解码后立即淡出, 既不黑屏闪烁也不暴露陈旧帧。z-index 低于 clabel/cload。 */
+.player .vcell .stale { position:absolute; inset:0; z-index:1; background:var(--stage); opacity:0; pointer-events:none; transition:opacity .12s linear; }
+.player .vcell .stale.on { opacity:1; }
 .player .cambar { order:1; justify-content:flex-start; flex-wrap:nowrap; overflow-x:auto; padding:2px 0; }
 .player .cambar button { white-space:nowrap; border-radius:6px; padding:7px 13px; min-height:38px; }
 .player .cambar button.on { background:var(--text); color:var(--bg); border-color:var(--text); }
@@ -4306,6 +4311,8 @@ function previewStream(video, file, seconds, quality, signal, failed) {
         updateBufferedTimeline();
         const target = position(), playable = bufferedPosition(video, target);
         if (playable > target && !video.dataset.positioning) {
+          // 分片边界 seek 会暴露解码器里上一分片的旧帧, 先盖住, 新帧解码后再撤。
+          if (typeof staleOn === 'function') staleOn(video);
           video.dataset.seekTarget = String(playable);
           video.currentTime = playable;
         }
@@ -4365,6 +4372,66 @@ function makeVideo() {
   v.muted = true; v.defaultMuted = true; v.playsInline = true;
   v.preload = 'auto';
   return v;
+}
+
+// MSE seek/分片切换时, 浏览器会保留上一次解码的帧, 甚至跨事件/跨镜头复用同一帧
+// (真机证据: 三个不同事件/不同镜头截图逐像素相同)。用不透明遮罩盖住, 只有
+// requestVideoFrameCallback 确认"呈现帧的 mediaTime 已到达 seek 目标"才撤除。
+function staleOn(v, target) {
+  if (!v) return;
+  const cell = v.parentElement;
+  if (!cell) return;
+  let m = cell.querySelector('.stale');
+  if (!m) { m = document.createElement('div'); m.className = 'stale'; cell.append(m); }
+  // 新一轮等待: 作废上一轮的回调/计时器, 避免它提前撤掉本轮遮罩。
+  if (v._staleDone != null) v._staleDone = false;
+  v._staleTarget = typeof target === 'number' ? target : (Number(v.dataset.seekTarget) || v.currentTime || 0);
+  if (v._staleTimer) { clearTimeout(v._staleTimer); v._staleTimer = null; }
+  if (v._staleCb != null && typeof v.cancelVideoFrameCallback === 'function') {
+    try { v.cancelVideoFrameCallback(v._staleCb); } catch (e) {}
+    v._staleCb = null;
+  }
+  m.classList.add('on');
+  const finish = () => {
+    if (v._staleDone) return;
+    v._staleDone = true; v._staleCb = null;
+    if (v._staleTimer) { clearTimeout(v._staleTimer); v._staleTimer = null; }
+    if (m.isConnected) m.classList.remove('on');
+  };
+  v._staleFinish = finish;
+  if (typeof v.requestVideoFrameCallback === 'function') {
+    const step = (now, meta) => {
+      if (v._staleDone) return;
+      const mt = meta && meta.mediaTime;
+      // 只有呈现帧确实来到目标位置才算新帧; 否则继续等下一帧。
+      if (typeof mt === 'number' && isFinite(mt) && mt >= v._staleTarget - 0.4) { finish(); return; }
+      try { v._staleCb = v.requestVideoFrameCallback(step); } catch (e) { finish(); }
+    };
+    try { v._staleCb = v.requestVideoFrameCallback(step); } catch (e) {}
+  }
+  // 兜底: rvfc 长期不回调时, 只有视频确实解码出帧才撤; 慢速网络(手机 0.03MB/s)
+  // 首帧可能十几秒才到, 没帧就维持遮罩, 绝不提前露出旧帧。加载失败走 error 撤罩
+  // 露出"重试"按钮, 避免永久黑屏。
+  v.addEventListener('error', finish, {once:true});
+  const waitFrame = () => {
+    if (v._staleDone) return;
+    if (v.readyState >= 2 && v.videoWidth > 0) finish();
+    else v._staleTimer = setTimeout(waitFrame, 2000);
+  };
+  v._staleTimer = setTimeout(waitFrame, 6000);
+}
+function staleOffIfCurrent(v) {
+  // 支持 rvfc 时完全由呈现帧的 mediaTime 决定, 避免旧帧 timeupdate 误撤。
+  if (!v) return;
+  if (typeof v.requestVideoFrameCallback === 'function') return;
+  if (v._staleDone) return;
+  const cell = v.parentElement;
+  const m = cell && cell.querySelector('.stale');
+  if (!m || !m.classList.contains('on')) return;
+  if (v.readyState >= 2 && !v.seeking && !v.dataset.positioning && !v.dataset.startBuffer &&
+      v.videoWidth > 0 && (!v.dataset.mse || hasPreviewLead(v))) {
+    if (v._staleFinish) v._staleFinish(); else m.classList.remove('on');
+  }
 }
 
 async function prepareNext() {
@@ -4581,6 +4648,10 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false,
     v.dataset.positioning = '1';
   }
   cell.prepend(v);
+  // 新挂载的视频在真实首帧解码呈现前, 浏览器(iOS 尤其)会继续显示上一次的旧帧。
+  // 先看截图证据: 三个不同事件/不同镜头显示逐像素相同的同一帧。这里首帧未到就
+  // 盖住, 由 requestVideoFrameCallback 确认是新帧后才撤, 杜绝旧帧串台。
+  if (!reused) staleOn(v, offset);
   status.classList.add('buffering');
   status.textContent = '缓冲中…';
   if (!reused) {
@@ -4615,7 +4686,10 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false,
   v.onloadeddata = v.oncanplay = v.onplaying = () => {
     if (generation !== renderId) return;
     if (!v.dataset.outside && (!v.dataset.startBuffer || !wantedPlay)) status.hidden = true;
+    staleOffIfCurrent(v);
   };
+  v.addEventListener('timeupdate', () => staleOffIfCurrent(v));
+  v.addEventListener('seeked', () => staleOffIfCurrent(v));
   v.onwaiting = () => {
     // A queued waiting event can arrive after decoding recovered or the clip changed.
     if (generation !== renderId || !wantedPlay || v.readyState >= 3) return;
@@ -4625,6 +4699,7 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false,
     if (v.dataset.mse) {
       v.dataset.startBuffer = '1';
       v.pause();
+      staleOn(v);
     }
   };
   v.onended = () => {
@@ -5738,6 +5813,7 @@ function seekWall(target, direction = 1) {
       if (v.dataset.mse && !hasPreviewLead(v, offset)) {
         v.dataset.startBuffer = '1';
         v.pause();
+        staleOn(v);
         status.classList.add('buffering');
         status.textContent = '缓冲中…';
       } else delete v.dataset.startBuffer;
@@ -5885,6 +5961,9 @@ function closePlayer() {
   setTrafficValue('play-rate', 0); setTrafficValue('play-bytes', 0);
   if (document.fullscreenElement === document.documentElement) document.exitFullscreen().catch(() => {});
   closePlayback(); liveMode = false;
+  // 关闭播放器时彻底释放解码器, 否则下次打开别的事件, iOS 会在新 src 首帧
+  // 解码出来前继续显示上一次的旧帧(跨事件串台的根源之一)。
+  activeVideos().forEach(v => { try { releaseVideo(v); } catch (e) {} });
   byId('vgrid').replaceChildren();
   byId('player').classList.remove('open', 'expanded', 'library-open');
   byId('livep').hidden = true;
