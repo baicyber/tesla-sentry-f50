@@ -539,7 +539,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.28.002"
+APP_VERSION = "2026.11.28.003"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3918,9 +3918,9 @@ body.settings-open { overflow:hidden; }
       <div class="usage-chart-row"><span class="usage-chart-label">整卡</span><div class="usage-chart" id="usage-chart" role="img" aria-label="存储卡容量与占用"></div></div>
       <div class="usage-chart-total" id="usage-total">—</div>
       <div class="usage-legend" id="usage-legend"></div>
-      <div class="hint" style="margin-top:7px">整卡图显示车机 U 盘设定容量、归档区总上限、安全预留与剩余空间，不显示归档区实际占用；随下方容量设置实时联动。</div>
+      <div class="hint" style="margin-top:7px">整卡图显示车机 U 盘设定容量、归档区总上限、安全预留与剩余空间，不显示归档区实际占用；随下方归档区容量设置实时联动。</div>
     <details class="storage-quota storage-tools" id="storage-extcard">
-      <summary>外置卡管理 / 调整车机 U 盘容量</summary>
+      <summary>外置卡管理 / 设置车机 U 盘容量</summary>
       <div class="ext-cards">
       <section class="storage-quota">
       <h4>外置卡信息</h4>
@@ -3941,12 +3941,12 @@ body.settings-open { overflow:hidden; }
       <div class="hint" id="card-config-msg" role="status" aria-live="polite"></div>
       </section>
       <section class="storage-quota" id="storage-usb-box">
-      <h4>调整车机 U 盘容量</h4>
+      <h4>设置车机 U 盘容量</h4>
       <div class="storage-row cap"><label for="storage-usb">车机 U 盘容量</label><input class="ninput" id="storage-usb" type="number" min="1" max="128" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="车机 U 盘容量说明" aria-expanded="false" aria-controls="storage-tip" data-help="usb">?</button></div>
-      <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。调整会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；调整期间请勿在车机上读写 U 盘。</div>
-      <div class="hint">格式化：用空白 exFAT 按当前容量重建车机 U 盘，清空镜像内全部内容（归档区保留）。车机上格式化 U 盘后网页一直提示「镜像未就绪」，或 U 盘内容损坏、调整容量失败时，用它一键恢复。</div>
+      <div class="hint">车机 U 盘镜像最大为存储卡实际容量的一半：归档区要和车机内容保持一致（车机录像会复制到归档区），且归档区还要存放转码缓存、铃声、涂装等文件。设置会清空车机 U 盘全部内容，归档区保留；容量按归档实际占用校验，不会因为归档上限设得高而误报；设置期间请勿在车机上读写 U 盘。</div>
+      <div class="hint">格式化：用空白 exFAT 按当前容量重建车机 U 盘，清空镜像内全部内容（归档区保留）。车机上格式化 U 盘后网页一直提示「镜像未就绪」，或 U 盘内容损坏、设置容量失败时，用它一键恢复。</div>
       <div class="storage-usb-actions">
-        <button class="mini primary" id="storage-resize" onclick="storageResize()" disabled>调整 U 盘容量</button>
+        <button class="mini primary" id="storage-resize" onclick="storageResize()" disabled>设置 U 盘容量</button>
         <button class="mini" id="storage-format" onclick="storageFormat()" disabled>格式化 U 盘</button>
       </div>
       <div id="storage-resize-status"></div>
@@ -3955,7 +3955,7 @@ body.settings-open { overflow:hidden; }
     </details>
     </div>
     <div class="hint card-gate-note" id="card-gate-note" role="status" hidden>外置卡未检测到或未挂载：车机 U 盘容量设定、格式化、归档区设定、同步管理与一键迁移已暂停。请先在上方「外置卡管理」中挂载外置卡。</div>
-    <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
+    <div class="storage-columns"><section class="storage-quota"><h3>归档区容量设置</h3>
     <div class="storage-row cap"><div class="cap-label"><label for="storage-archive">归档区总上限</label><span class="cap-note" id="archive-limit-note" hidden></span><span class="cap-note" id="storage-budget" role="status"></span></div><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
     <div class="storage-nested"><div class="storage-row cap"><label for="storage-drive">其中：驾驶记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="驾驶记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row cap"><label for="retention-recentmax">其中：实时滚动记录上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="实时滚动记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div>
     <div class="storage-row cap"><label for="storage-sentry">其中：哨兵上限</label><input class="ninput" id="storage-sentry" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="哨兵录像上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="sentrymax">?</button></div>
@@ -4389,7 +4389,7 @@ body.settings-open { overflow:hidden; }
     <ol>
       <li>确认 TF 卡已插入并挂载；新卡可在「外置卡管理」里先做「初始格式化」（ext4）。</li>
       <li>在「存储分配」里设置车机 U 盘容量、归档区上限与安全预留。</li>
-      <li>点击「调整 U 盘容量」创建镜像，完成后即可插到车机上录制。</li>
+      <li>点击「设置 U 盘容量」创建镜像，完成后即可插到车机上录制。</li>
     </ol>
     <div class="setup-actions"><button class="mini primary" onclick="setupGuideGo()">前往存储设置</button><button class="mini" onclick="setupGuideClose()">稍后</button></div>
   </div>
@@ -8434,7 +8434,7 @@ function storageRenderAllocation() {
   else if (values.reserve < reserveMin) { message = '安全预留不能低于整卡的 10%（' + reserveMin + ' G）'; blocking = true; }
   else if (values.minimum > values.reserve) { message = '暂停同步保护线不能高于安全预留'; blocking = true; }
   else if (!unlimited && allocated > budget && resizeAllocated <= budget)
-    message = '归档上限预留超出 ' + (allocated - budget).toFixed(1) + ' G，但按归档实际占用仍可调整 U 盘容量';
+    message = '归档上限预留超出 ' + (allocated - budget).toFixed(1) + ' G，但按归档实际占用仍可设置 U 盘容量';
   else if (!unlimited && allocated > budget) { message = '超过可分配容量 ' + (allocated - budget).toFixed(1) + ' G'; blocking = true; }
   budgetText.dataset.error = String(blocking);
   // 不设上限的说明放到「归档区总上限」文字右边, 窄屏自动折行, 不再挤在底部被按钮遮挡
@@ -8570,7 +8570,7 @@ async function storageLoad() {
     const totalBytes = (data.disk && data.disk.total_bytes) || 0;
     usbInput.max = String(diskReady
       ? Math.max(1, Math.floor(totalBytes / 1073741824 / 2)) : 128);
-    // 首次设置还没有镜像: 给一个不超过整卡一半的默认容量, 方便直接点「调整 U 盘容量」创建
+    // 首次设置还没有镜像: 给一个不超过整卡一半的默认容量, 方便直接点「设置 U 盘容量」创建
     // 外置卡未挂载时整卡容量为 0, 保留输入框原值, 不要写成 1 G
     if (data.usb_gib > 0) usbInput.value = data.usb_gib;
     else if (diskReady) usbInput.value = Math.max(1, Math.min(64, Math.floor(totalBytes / 1073741824 / 2)));
@@ -8606,7 +8606,7 @@ function storageShowJob(job) {
   const busy = job.state === 'running';
   storageDisable(busy || !storageData);
   let text = job.state === 'running' ? job.message + ' ' + job.percent + '%' : (job.message || '');
-  if (job.state === 'recovery') text += '（可直接展开「调整车机 U 盘容量」点按钮自动清理后重试）';
+  if (job.state === 'recovery') text += '（可直接展开「设置车机 U 盘容量」点按钮自动清理后重试）';
   // recovery 提示放在容量设置顶部, 避免被折叠的 U 盘区域挡住
   storageMessage(text, job.state !== 'recovery');
   if (job.state === 'running') storageTimer = setTimeout(storagePoll, 1500);
@@ -8962,9 +8962,9 @@ async function storageResize() {
   const first = !(storageData.disk && storageData.disk.usb_bytes > 0);
   if (first) {
     if (!confirm('首次设置将按填写的容量创建车机 U 盘镜像。\n创建期间请保持供电，完成后即可插到车机上录制。确认创建？')) return;
-  } else if (!confirm('调整容量将清空车机 U 盘中的全部录像和其他文件，无法撤销。归档区保留。\n调整期间车机暂停录像，请保持供电。确认清空并继续？')) return;
+  } else if (!confirm('设置容量将清空车机 U 盘中的全部录像和其他文件，无法撤销。归档区保留。\n设置期间车机暂停录像，请保持供电。确认清空并继续？')) return;
   storageDisable(true);
-  storageMessage(first ? '正在创建车机 U 盘…' : '正在调整容量…', true);
+  storageMessage(first ? '正在创建车机 U 盘…' : '正在设置容量…', true);
   try {
     const result = await storageFetch('/api/storage/resize', {usb_gib:Number(document.getElementById('storage-usb').value), revision:storageData.revision, clear_confirmed:true});
     storageShowJob(result.job);
@@ -9092,7 +9092,19 @@ async function extCardJobPoll(then) {
     } else {
       if (msg) msg.textContent = (job.state === 'done' ? '✅ ' : '❌ ') + (job.message || '');
     }
-    if (job.kind === 'format' && job.state === 'done') { extCardInfo(); try { storageLoad(); } catch (e) {} }
+    if (job.kind === 'format' && job.state === 'done') {
+      extCardInfo();
+      try { storageLoad(); } catch (e) {}
+      // 格式化后镜像已清空: 直接展开并定位到容量设置, 引导用户创建车机U盘
+      const extBox = document.getElementById('storage-extcard');
+      const usbInput = document.getElementById('storage-usb');
+      if (extBox) extBox.open = true;
+      if (usbInput) {
+        try { usbInput.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
+        setTimeout(() => { try { usbInput.focus(); usbInput.select(); } catch (e) {} }, 300);
+      }
+      toast('✅ 格式化完成，请设置车机 U 盘容量');
+    }
     if (then) then(job);
     return;
   }
@@ -11973,7 +11985,7 @@ def usb_attach():
     """临时断开车机读取, 挂载镜像到 MNT (读写). 返回 (ok, msg)"""
     global usb_attached, usb_timer
     if storage_busy():
-        return False, "正在调整容量或格式化 U 盘"
+        return False, "正在设置容量或格式化 U 盘"
     if not usb_img_ready():
         return False, "镜像未就绪: 车机可能正在格式化 U 盘, 请稍后再试"
     # 文件管理要尽快读到镜像: 先停掉正在跑的车机 U 盘只读同步, 避免和挂载抢 I/O
@@ -11983,7 +11995,7 @@ def usb_attach():
     with usb_lock:
         if storage_busy():
             _ARCH_SYNC_PAUSE.update(on=False, why="")
-            return False, "正在调整容量或格式化 U 盘"
+            return False, "正在设置容量或格式化 U 盘"
         if usb_attached and os.path.ismount(MNT):
             return True, "already"
         # 先拿跨进程锁再动 UDC: 归档/自愈正在操作镜像时直接让开, 不抢 loop 与挂载点。
@@ -12077,10 +12089,10 @@ def usb_detach():
     """卸载镜像并恢复车机导出. 返回 (ok, msg)"""
     global usb_attached, usb_timer
     if storage_busy():
-        return False, "正在调整容量或格式化 U 盘"
+        return False, "正在设置容量或格式化 U 盘"
     with usb_lock:
         if storage_busy():
-            return False, "正在调整容量或格式化 U 盘"
+            return False, "正在设置容量或格式化 U 盘"
         if usb_timer:
             usb_timer.cancel()
             usb_timer = None
@@ -14275,7 +14287,7 @@ if storage_resize.pending_recovery(IMG):
         print('storage: ' + _repair_note, flush=True)
     else:
         _storage_job.update(state='recovery', started=0.0,
-                            message='检测到旧版容量调整残留，点「调整 U 盘容量」或「格式化 U 盘」会自动清理')
+                            message='检测到旧版容量调整残留，点「设置 U 盘容量」或「格式化 U 盘」会自动清理')
 
 
 def refresh_storage_settings():
@@ -14934,10 +14946,10 @@ def storage_apply(body):
     if not card_data_ready():
         raise ValueError(CARD_NOT_READY_MSG)
     if storage_busy():
-        raise ValueError('正在调整容量或格式化 U 盘')
+        raise ValueError('正在设置容量或格式化 U 盘')
     with _storage_edit_lock:
         if storage_busy():
-            raise ValueError('正在调整容量或格式化 U 盘')
+            raise ValueError('正在设置容量或格式化 U 盘')
         current = storage_status()
         if body.get('revision') != current['revision']:
             return dict(ok=False, msg='存储配置已变化，请重新加载', conflict=True)
@@ -15139,7 +15151,7 @@ def _storage_recover_stale():
 def storage_start_resize(body):
     # Old pages only acknowledged pausing recording and must never authorize erasure.
     if not isinstance(body, dict) or body.get('clear_confirmed') is not True:
-        raise ValueError('请确认清空车机 U 盘中的全部内容后再调整容量')
+        raise ValueError('请确认清空车机 U 盘中的全部内容后再设置容量')
     if not card_data_ready():
         raise ValueError(CARD_NOT_READY_MSG)
     _storage_wait_for_job()
@@ -15174,7 +15186,7 @@ def storage_start_resize(body):
         with _CARD_LIFECYCLE_LOCK:
             if _card_job_running():
                 raise ValueError('正在挂载/卸载/格式化外置卡，请稍后再试')
-            return _storage_run_rewrite(size, '调整容量')
+            return _storage_run_rewrite(size, '设置容量')
 
 
 def storage_start_format(body):
@@ -15197,7 +15209,7 @@ def storage_start_format(body):
         if body.get('revision') != current['revision']:
             raise ValueError('存储配置已变化，请重新加载')
         if current['disk']['usb_bytes'] <= 0:
-            raise ValueError('未找到车机 U 盘镜像，请先在「调整车机 U 盘容量」中创建')
+            raise ValueError('未找到车机 U 盘镜像，请先在「设置车机 U 盘容量」中创建')
         # 保持当前容量重建; 镜像容量本身就是整数 GiB, round 只是兜底
         size = max(1, int(round(current['usb_gib'])))
         with _CARD_LIFECYCLE_LOCK:
@@ -15507,7 +15519,7 @@ def external_card_speed(body):
         raise ValueError("请先挂载外置卡后再测速")
     with _CARD_LIFECYCLE_LOCK:
         if storage_busy():
-            raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再测速")
+            raise ValueError("正在设置车机 U 盘容量或格式化，请稍后再测速")
         if _ARCH_SYNC["state"] == "running":
             raise ValueError("正在同步归档区，请稍后再测速")
         _card_job_claim("speed", "正在写入测试文件（已暂停同步写入）")
@@ -16140,7 +16152,7 @@ def external_card_format(body):
         raise ValueError("这是系统盘，不能格式化")
     with _CARD_LIFECYCLE_LOCK:
         if storage_busy():
-            raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
+            raise ValueError("正在设置车机 U 盘容量或格式化，请稍后再试")
         # 格式化前先停掉正在跑的车机 U 盘只读同步, 避免边写边格
         if not _stop_archive_sync_wait():
             raise ValueError("正在同步归档区，请稍后再试")
@@ -16236,9 +16248,9 @@ def external_card_format(body):
                 except OSError:
                     pass
             if mounted:
-                _card_job_set(state="done", message="格式化完成（ext4），已挂载到默认位置 %s" % target)
+                _card_job_set(state="done", message="格式化完成（ext4），已挂载到默认位置 %s。请设置车机 U 盘容量" % target)
             else:
-                _card_job_set(state="done", message="格式化完成（ext4），但自动挂载失败：%s"
+                _card_job_set(state="done", message="格式化完成（ext4），但自动挂载失败：%s。挂载后请设置车机 U 盘容量"
                               % (mount_err or "可稍后刷新后手动挂载"))
         except Exception as ex:
             _card_job_set(state="error", message=str(ex)[:200])
@@ -16312,7 +16324,7 @@ def external_card_mount(body):
         raise ValueError("挂载点不合法（不能是根目录、系统目录或当前视频目录）")
     with _CARD_LIFECYCLE_LOCK:
         if storage_busy():
-            raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
+            raise ValueError("正在设置车机 U 盘容量或格式化，请稍后再试")
         if _ARCH_SYNC["state"] == "running":
             raise ValueError("正在同步归档区，请稍后再试")
         mounted = _device_mounts(dev)
@@ -16362,7 +16374,7 @@ def external_card_unmount(body):
         return {"ok": True, "msg": "%s 未挂载" % dev, "ready": card_data_ready()}
     with _CARD_LIFECYCLE_LOCK:
         if storage_busy():
-            raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
+            raise ValueError("正在设置车机 U 盘容量或格式化，请稍后再试")
         # 卸载前先停掉车机 U 盘只读同步, 否则同步进程还在读卡, 卡卸不干净
         if not _stop_archive_sync_wait():
             raise ValueError("正在同步归档区，请稍后再卸载")
@@ -16651,7 +16663,7 @@ def archive_sync_start():
     if _ARCH_SYNC_PAUSE["on"]:
         raise ValueError("文件管理正在查看车机U盘，归档同步已暂停；断开文件管理后自动恢复")
     if storage_busy():
-        raise ValueError("正在调整容量或格式化 U 盘，请稍后再试")
+        raise ValueError("正在设置容量或格式化 U 盘，请稍后再试")
     if sync_write_paused():
         raise ValueError("正在进行外置卡测速，已暂停所有同步写入，请测速结束后再试")
     if not usb_img_ready():
@@ -16708,7 +16720,7 @@ def archive_sync_start():
                 if sync_write_paused():
                     raise ValueError("外置卡测速开始，已暂停同步写入，测速结束后请重新同步")
                 if storage_busy():
-                    raise ValueError("U 盘正在调整容量/格式化，同步已中断")
+                    raise ValueError("U 盘正在设置容量/格式化，同步已中断")
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 tmp = dest + ".part"
                 written = 0
@@ -16924,7 +16936,7 @@ def archive_migrate(body):
     if _ARCH_SYNC["state"] == "running":
         raise ValueError("已有同步任务在进行")
     if storage_busy():
-        raise ValueError("正在调整容量或格式化 U 盘，请稍后再试")
+        raise ValueError("正在设置容量或格式化 U 盘，请稍后再试")
     if _card_job_running():
         raise ValueError("正在挂载/卸载/格式化外置卡，请稍后再试")
     if sync_write_paused():
@@ -16932,7 +16944,7 @@ def archive_migrate(body):
     img_items = [i for i in items if i["type"] == "img"]
     if img_items and not os.path.isfile(IMG):
         return {"ok": False, "need_img": True,
-                "msg": "默认车机 U 盘镜像不存在，无法接收迁移内容。请先到「存储分配 → 调整车机 U 盘容量」"
+                "msg": "默认车机 U 盘镜像不存在，无法接收迁移内容。请先到「存储分配 → 设置车机 U 盘容量」"
                        "按源镜像容量创建默认镜像（创建后即可直接插车使用），再重新执行迁移。"}
     conflicts, plans = [], []
     total = 0
@@ -16999,7 +17011,7 @@ def archive_migrate(body):
         return {"ok": False, "no_space": True, "img_short": True,
                 "total": img_need, "free": img_free,
                 "msg": "默认车机 U 盘空间不足：待迁入内容 %s，镜像内剩余 %s。解决方案：\n"
-                       "1）到「存储分配 → 调整车机 U 盘容量」把容量调到至少 %dG 再迁移"
+                       "1）到「存储分配 → 设置车机 U 盘容量」把容量调到至少 %dG 再迁移"
                        "（会清空默认镜像内现有内容，归档区不受影响，建议先点「立即同步到归档区」）；\n"
                        "2）或减少勾选的镜像/分类，分批迁移；\n"
                        "3）或先在文件管理里删除默认镜像中不需要的录像。"
