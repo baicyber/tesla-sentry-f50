@@ -1,12 +1,15 @@
 {
-  "version": "2026.11.27.057",
-  "date": "2026-11-27",
+  "version": "2026.11.28.001",
+  "date": "2026-11-28",
   "files": [
     "storage_allocation.py",
     "storage_resize.py",
     "tesla-live-sync.py"
   ],
   "notes": [
+    "继续根治外置卡格式化 Resource busy：格式化前执行 tesla-gadget.sh off 彻底移除 mass_storage 导出（等同于断开再重连车机U盘），并暂停 OpenWrt 自动挂载(mountd)，避免 umount 后立刻被挂回",
+    "格式化期间暂停预转码，结束后恢复自动挂载；失败且镜像仍存在时自动恢复车机U盘导出；占用报告新增「车机U盘导出仍绑定」提示",
+    "—— 以下为 2026.11.27.057 更新 ——",
     "同步管理：外置卡未挂载或车机U盘镜像不存在时，「开启实时同步」按钮不可用（后端同样拒绝开启），已开启时仍可随时关闭",
     "修复外置卡格式化报 Resource busy：先解绑 UDC 再清空 LUN 并回读确认，格式化全程持有 U 盘互斥锁、卸载 /tmp/teslamnt 并 detach 卡内 loop，挂载表无占用也能格式化",
     "—— 以下为 2026.11.27.056 更新 ——",

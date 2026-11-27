@@ -539,7 +539,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.057"
+APP_VERSION = "2026.11.28.001"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -15820,6 +15820,36 @@ def _release_card_holders(dev, mounts):
     return sorted(set(names))
 
 
+def _card_pause_automount():
+    """主动暂停 OpenWrt 的自动挂载服务 (block-mount / mountd)。
+
+    自动挂载会在我们 umount 之后立刻把卡重新挂上, 检查挂载表的瞬间又是空的,
+    于是 mkfs 表现成「没有任何占用却 Resource busy」。返回已停掉的服务列表。"""
+    stopped = []
+    for init in ("/etc/init.d/fstab", "/etc/init.d/block"):
+        if not os.path.exists(init):
+            continue
+        try:
+            if _run_cmd([init, "stop"], timeout=20).returncode == 0:
+                stopped.append(init)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    for name in ("mountd", "blockd"):
+        try:
+            subprocess.run(["killall", name], capture_output=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return stopped
+
+
+def _card_resume_automount(stopped):
+    for init in reversed(stopped or []):
+        try:
+            _run_cmd([init, "start"], timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
 def _card_umount_all(dev):
     """尽力卸载这张卡上的全部挂载点 (普通 -> 懒卸载 -> 强制), 返回仍挂载的列表。
 
@@ -15911,6 +15941,9 @@ def _device_busy_report(dev):
         names.append("%s(%d)" % (comm, pid) if comm else str(pid))
     if names:
         info.append("占用进程: " + "、".join(sorted(set(names))[:5]))
+    lun = _lun_image_path()
+    if lun:
+        info.append("车机U盘导出仍绑定: " + lun)
     if not mps and os.path.isdir("/proc"):
         # 本进程挂载表没有, 可能挂在其它挂载命名空间里, 扫一遍其它进程的 mounts
         ns_hits = []
@@ -15975,6 +16008,13 @@ def _format_card_ext4(dev):
             pass
         _card_umount_all(dev)
         _card_swapoff(dev)
+        # 自动挂载可能又把卡挂回来了 (block-mount), 每轮都让 OpenWrt 帮手再卸一次
+        try:
+            if os.path.exists("/sbin/block"):
+                _run_cmd(["/sbin/block", "umount", dev], timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        _card_umount_all(dev)
         if attempt >= 3:
             names = _release_card_holders(dev, _device_mounts(dev))
             _drop_caches()
@@ -16123,6 +16163,8 @@ def external_card_format(body):
         was_data = bool(root and (root == os.path.abspath(target) or
                                   root.startswith(os.path.abspath(target).rstrip("/") + "/")))
         live_stopped = False
+        auto_mount_stopped = []
+        PREWARM["paused"] = True   # 先停预转码, 避免还有 ffmpeg 在写卡内文件
         try:
             # 格式化全程持有 U 盘互斥锁: usb-selfheal / tesla-sync 的 cron 会
             # 抢着重绑 LUN 或挂 loop, 只要它们插进来, 卡上的 ext4 就再次忙,
@@ -16132,6 +16174,11 @@ def external_card_format(body):
                 _force_image_offline()
             if not _acquire_usb_flock():
                 raise ValueError("车机 U 盘任务占用中，请稍后再试")
+            # 关掉 OpenWrt 自动挂载: 它会在 umount 后立刻把卡挂回去, mkfs 随即 EBUSY,
+            # 而检查挂载表的瞬间又是空的 (表现为"找不到任何占用")
+            auto_mount_stopped = _card_pause_automount()
+            if auto_mount_stopped:
+                time.sleep(0.3)
             lun_path = _lun_image_path()
             card_prefix = os.path.abspath(target).rstrip("/") + "/"
             under_card = bool(lun_path) and os.path.abspath(lun_path).startswith(card_prefix)
@@ -16150,7 +16197,22 @@ def external_card_format(body):
                         _run_cmd(["umount", flag, MNT], timeout=20)
                         if not os.path.ismount(MNT):
                             break
-                _release_card_export()
+                # 彻底断开导出: 先执行 tesla-gadget.sh off (解绑 UDC 并移除
+                # mass_storage 功能), 内核对镜像文件的引用才会真正消失;
+                # 仅清 LUN 在某些内核上仍会残留引用, 表现为 Resource busy。
+                script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tesla-gadget.sh")
+                gadget_off = False
+                if os.path.isfile(script):
+                    try:
+                        gadget_off = subprocess.run(["sh", script, "off"], capture_output=True,
+                                                    text=True, timeout=60).returncode == 0
+                    except (OSError, subprocess.SubprocessError):
+                        gadget_off = False
+                if not gadget_off:
+                    _release_card_export()
+                else:
+                    _CARD_EXPORT_RELEASED = True
+                time.sleep(0.5)
                 _detach_loops_under(list(_device_mounts(dev)) +
                                     [target, os.environ.get("TSF_CARD_MNT") or "",
                                      MNT, VIDEO_ROOT, ARCHIVE])
@@ -16185,6 +16247,14 @@ def external_card_format(body):
             _card_job_set(state="error", message=str(ex)[:200])
         finally:
             _release_usb_flock()
+            _card_resume_automount(auto_mount_stopped)
+            PREWARM["paused"] = False
+            # 格式化失败但卡与镜像还在时, 把车机 U 盘导出恢复回去
+            if _CARD_EXPORT_RELEASED and os.path.isfile(IMG):
+                try:
+                    _restore_card_export()
+                except (OSError, subprocess.SubprocessError):
+                    pass
             if live_stopped:
                 try:
                     subprocess.Popen(["/etc/init.d/tesla-live", "start"],
