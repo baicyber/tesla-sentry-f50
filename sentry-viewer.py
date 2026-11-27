@@ -538,7 +538,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.054"
+APP_VERSION = "2026.11.27.055"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2680,6 +2680,34 @@ select.ninput { cursor:pointer; }
 .fm-picker-foot button { background:var(--panel2); border:1px solid var(--line2); color:var(--text); border-radius:8px; padding:7px 12px; font-size:12.5px; cursor:pointer; }
 .fm-picker-foot button.fm-go { background:var(--accent); border-color:var(--accent); color:#fff; }
 .fm-picker-foot button[disabled] { opacity:.5; cursor:not-allowed; }
+/* 文件管理: 路径栏 / 列表表头 / 文件信息 / 预览 */
+.fm-pathbar { display:flex; align-items:center; gap:10px; margin-top:10px; padding-top:9px; border-top:1px solid var(--line2); cursor:text; }
+.fm-pathbar #crumb { flex:1; min-width:0; font-size:12px; line-height:1.8; word-break:break-all; }
+.fm-pathform { display:flex; gap:8px; margin-top:10px; }
+.fm-pathform input { flex:1; min-width:0; background:var(--bg); border:1px solid var(--line2); border-radius:8px; color:var(--text); padding:8px 10px; font-size:12.5px; outline:none; }
+.fm-pathform button { flex:0 0 auto; background:var(--accent); border:1px solid var(--accent); color:#fff; border-radius:8px; padding:0 16px; font-size:12.5px; cursor:pointer; }
+.fm-listhead { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:0 12px 7px; font-size:11.5px; color:var(--muted); }
+.fm-listhead .fm-allwrap { display:flex; align-items:center; gap:6px; cursor:pointer; }
+.fm-listhead input[type=checkbox] { width:17px; height:17px; accent-color:var(--accent); cursor:pointer; }
+.fm-listhead .fm-cols { display:flex; gap:12px; }
+.fm-listhead .fm-cols span { text-align:right; }
+.fm-listhead .fm-cols span:first-child { width:64px; }
+.fm-listhead .fm-cols span:last-child { width:104px; }
+.item .fm-meta { display:flex; gap:12px; flex:0 0 auto; font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
+.item .fm-meta .fm-size { width:64px; text-align:right; }
+.item .fm-meta .fm-time { width:104px; text-align:right; white-space:nowrap; }
+.item .n.fm-open { color:#5ea9ff; cursor:pointer; }
+.item.fm-back { background:transparent; border:1px dashed var(--line2); padding:0; }
+.item.fm-back button { width:100%; text-align:left; background:transparent; border:none; color:var(--muted); padding:10px 12px; font-size:12.5px; border-radius:9px; cursor:pointer; }
+.item.fm-back button:hover { color:var(--accent); }
+.fm-preview { position:fixed; inset:0; z-index:430; background:rgba(4,8,12,.72); display:flex; align-items:center; justify-content:center; padding:16px; }
+.fm-preview[hidden] { display:none; }
+.fm-preview-box { width:min(1080px,100%); max-height:92vh; display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line2); border-radius:14px; overflow:hidden; box-shadow:0 18px 50px rgba(0,0,0,.5); }
+.fm-preview-body { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#000; overflow:auto; }
+.fm-preview-body img, .fm-preview-body video { max-width:100%; max-height:calc(92vh - 60px); display:block; }
+@media (max-width:600px) {
+  .item .fm-meta .fm-time, .fm-listhead .fm-cols span:last-child { display:none; }
+}
 .fm-bar button.fm-go { background:var(--accent); border-color:var(--accent); color:#fff; }
 .fm-bar button.fm-go:hover { color:#fff; }
 .fm-bar .fm-dest-input { flex:1; min-width:130px; background:var(--bg); border:1px solid var(--line2); border-radius:8px; color:var(--text); padding:7px 9px; font-size:12px; outline:none; }
@@ -2700,6 +2728,9 @@ select.ninput { cursor:pointer; }
 .support-qrs figure { margin:0; flex:1 1 120px; min-width:0; max-width:150px; text-align:center; }
 .support-qrs img { width:100%; aspect-ratio:1; object-fit:contain; border-radius:8px; border:1px solid var(--line2); background:#fff; display:block; }
 .support-qrs figcaption { font-size:10.5px; color:var(--muted); margin-top:5px; line-height:1.4; }
+#tab-about #about-logs { margin-top:0; }
+#about-readme .about-list { margin:0 0 10px; padding-left:18px; color:var(--muted2); font-size:11.5px; line-height:1.75; }
+#about-readme .about-list li { margin:1px 0; }
 .item .tag { font-size:10.5px; color:#4cc38a; }
 .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--accent); color:#fff; padding:9px 20px; border-radius:20px; font-size:13px; z-index:300; display:none; }
 /* 全新安装首次进入: 引导到存储分配完成设置 */
@@ -4078,18 +4109,8 @@ body.settings-open { overflow:hidden; }
       <span class="hint">仅删除 TeslaCam/ 内所有视频与事件文件夹，保留目录结构；Boombox、Wraps 等其他根目录不受影响。需先连接 U 盘。</span>
     </div>
     <div id="dir-nav" style="display:none">
-      <div style="display:flex;gap:8px;margin-bottom:10px">
-        <input id="dest-dir" placeholder="/" style="flex:1;background:#161c22;border:1px solid #3a4652;border-radius:8px;color:#e8eaed;padding:8px 10px;font-size:12px;outline:none">
-        <button onclick="goDir(document.getElementById('dest-dir').value)" style="background:#e8443f;border:none;color:#fff;border-radius:8px;padding:0 14px;font-size:12px;cursor:pointer">跳转</button>
-      </div>
-      <div id="crumb" style="font-size:12px;color:#5ea9ff;margin-bottom:8px;line-height:1.8"></div>
       <div id="fm-bar" class="fm-bar">
-        <div class="row" style="justify-content:space-between;margin-bottom:8px">
-          <label class="row" style="cursor:pointer;font-size:12.5px;gap:6px">
-            <input type="checkbox" id="fm-all" style="width:17px;height:17px;accent-color:var(--accent);cursor:pointer" onchange="fmAll(this.checked)"> 全选
-          </label>
-          <span class="fm-count" id="fm-count">已选 0 项</span>
-        </div>
+        <!-- 第一行: 上传 / 移动 / 复制 / 重命名 / 删除 -->
         <div class="row fm-actions">
           <button class="fm-go" title="上传文件到当前目录 (≤100MB)" onclick="document.getElementById('anyfile-file').click()"><svg class="ic"><use href="#i-upload"/></svg>上传</button>
           <button onclick="fmOp('move')"><svg class="ic"><use href="#i-move"/></svg>移动</button>
@@ -4099,8 +4120,28 @@ body.settings-open { overflow:hidden; }
           <input type="file" id="anyfile-file" hidden>
         </div>
         <div class="row" id="fm-dest" style="display:none;margin-top:8px"></div>
+        <!-- 第二行: 路径 (点击面包屑跳转, 双击原位编辑, 回车跳转) -->
+        <div class="fm-pathbar" id="fm-pathbar" ondblclick="fmPathEdit()" title="双击编辑路径">
+          <div id="crumb"></div>
+          <span class="fm-count" id="fm-count">已选 0 项</span>
+        </div>
+        <form class="fm-pathform" id="fm-pathform" hidden onsubmit="return fmPathSubmit(event)">
+          <input id="dest-dir" placeholder="/" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Escape')fmPathCancel()">
+          <button type="submit" class="fm-go">跳转</button>
+        </form>
+      </div>
+      <!-- 第三行: 文件列表 (首项返回上级, 左侧全选, 右侧大小/修改时间) -->
+      <div class="fm-listhead">
+        <label class="fm-allwrap"><input type="checkbox" id="fm-all" onchange="fmAll(this.checked)"> 全选</label>
+        <span class="fm-cols"><span>大小</span><span>修改时间</span></span>
       </div>
       <div id="file-list"></div>
+    </div>
+  </div>
+  <div class="fm-preview" id="fm-preview" hidden role="dialog" aria-modal="true" aria-label="文件预览">
+    <div class="fm-preview-box">
+      <div class="fm-picker-head"><b id="fm-preview-title"></b><button type="button" class="fm-picker-x" onclick="fmPreviewClose()" aria-label="关闭">✕</button></div>
+      <div class="fm-preview-body" id="fm-preview-body"></div>
     </div>
   </div>
   <div class="fm-picker" id="fm-picker" hidden role="dialog" aria-modal="true" aria-labelledby="fm-picker-title">
@@ -4307,23 +4348,6 @@ body.settings-open { overflow:hidden; }
     <div class="hint">界面语言，保存在本机浏览器</div>
   </div>
   <div id="tab-about" style="display:none">
-    <div class="hint">哨兵一剪梅 · 特斯拉哨兵视频查看器。扫码交流或赞助，感谢支持。</div>
-    <div class="support-sec">
-      <div class="support-title">💬 交流加群</div>
-      <div class="support-text">交流加群请联系作者，扫码关注抖音或添加微信好友~</div>
-      <div class="support-qrs">
-        <figure><img src="/sponsor/douyin?v=__SPONSOR_VER__" alt="抖音二维码" loading="lazy"><figcaption>抖音 · @耶基大学懂事长</figcaption></figure>
-        <figure><img src="/sponsor/wechatauthor?v=__SPONSOR_VER__" alt="作者微信二维码" loading="lazy"><figcaption>微信 · 联系作者</figcaption></figure>
-      </div>
-    </div>
-    <div class="support-sec">
-      <div class="support-title">☕ 赞助</div>
-      <div class="support-text">本项目完全开源免费，如果它帮到了你，欢迎支持博主一些token，助力项目持续更新~</div>
-      <div class="support-qrs">
-        <figure><img src="/sponsor/alipay?v=__SPONSOR_VER__" alt="支付宝收款码" loading="lazy"><figcaption>支付宝</figcaption></figure>
-        <figure><img src="/sponsor/wechatpay?v=__SPONSOR_VER__" alt="微信收款码" loading="lazy"><figcaption>微信支付</figcaption></figure>
-      </div>
-    </div>
     <details class="support-sec" id="about-logs">
       <summary class="support-title" style="cursor:pointer">日志分析</summary>
       <div class="support-text">更新失败、同步异常、无法转码等问题先看这里：日志概述给出关键状态与最近异常，详细日志可一键复制后发给作者定位。</div>
@@ -4336,6 +4360,22 @@ body.settings-open { overflow:hidden; }
       <pre class="logview" id="log-summary">展开后读取日志</pre>
       <pre class="logview" id="log-detail" hidden></pre>
     </details>
+    <section class="support-sec" id="about-readme">
+      <div class="support-title">📖 项目说明 · README</div>
+      <div class="support-text">哨兵一剪梅 · 特斯拉哨兵云盘：把中兴 F50 存储版顶替原车 U 盘插进手套箱，车机照常录制，手机连 F50 WiFi 打开网页即可回看 4 / 6 路同步画面、逐帧读取 SEI 行车遥测，并导出带行车信息水印的视频。</div>
+      <ul class="about-list">
+        <li>虚拟 U 盘：稀疏 exFAT 镜像经 USB Gadget mass_storage 导出，网页设容量后即插即用</li>
+        <li>实时同步：每 15 秒只读解析镜像，不挂载、不断 USB，车机边写边看</li>
+        <li>多路回放：单路点开即播；全览 4 路 2×2 / 6 路 3×2，250 ms 同步校正</li>
+        <li>行车遥测：挡位 / 车速 / 油门 / 刹车 / 方向盘 / 转向灯 / AP / 坐标 / 加速度</li>
+        <li>清晰度：原画 / 720p / 480p / 360p，服务端转码缓存，首帧先发已有档</li>
+        <li>视频导出：单路 / zip / 多路合成，设备端直出带水印 H.264 mp4</li>
+        <li>文件管理 / 驾驶记录 / 推送通知 / 存储分配 / 录像保护 / 在线升级 / 登录保护 / 个性化</li>
+      </ul>
+      <div class="support-text">仅支持中兴 F50 存储版：OpenWrt + USB Gadget / configfs + 内核 exFAT + loop / losetup + root + Python 3.11+；镜像与归档建议放在 TF 卡。</div>
+      <div class="support-text"><a href="https://github.com/jiaoting/tesla-sentry-f50" target="_blank" rel="noopener">github.com/jiaoting/tesla-sentry-f50</a> · MIT License</div>
+      <div class="hint" style="margin:6px 0 0">本说明与仓库 README 同步，随程序更新一起发布。</div>
+    </section>
   </div></div>
 </div>
 <div class="toast" id="toast"></div>
@@ -10296,6 +10336,77 @@ function fmtSize(n) {
   if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
   return (n / 1048576).toFixed(1) + ' MB';
 }
+function fmtTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts * 1000), p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+    p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function fmParentDir(d) {
+  if (area === 'usb') {
+    const s = (d || '').replace(/^\/+|\/+$/g, '');
+    if (!s) return null;
+    const i = s.lastIndexOf('/');
+    return i < 0 ? '' : s.slice(0, i);
+  }
+  const s = (d || '/archive').replace(/\/+$/g, '');
+  if (!s || s === '/archive') return null;
+  const i = s.lastIndexOf('/');
+  return i <= 0 ? '/archive' : s.slice(0, i);
+}
+function fmPathEdit() {
+  const bar = document.getElementById('fm-pathbar'), form = document.getElementById('fm-pathform');
+  if (!bar || !form) return;
+  bar.hidden = true;
+  form.hidden = false;
+  const input = document.getElementById('dest-dir');
+  input.value = curDir;
+  input.focus();
+  input.select();
+}
+function fmPathCancel() {
+  const bar = document.getElementById('fm-pathbar'), form = document.getElementById('fm-pathform');
+  if (bar) bar.hidden = false;
+  if (form) form.hidden = true;
+}
+function fmPathSubmit(e) {
+  if (e) e.preventDefault();
+  const input = document.getElementById('dest-dir');
+  const v = input ? input.value : '';
+  fmPathCancel();
+  goDir(v);
+  return false;
+}
+function fmPreview(path, name, isVideo) {
+  const box = document.getElementById('fm-preview'), body = document.getElementById('fm-preview-body');
+  if (!box || !body) return;
+  const url = (area === 'usb' ? '/usbdl?path=' : '/dl?path=') + encodeURIComponent(path);
+  body.innerHTML = '';
+  if (isVideo) {
+    const v = document.createElement('video');
+    v.controls = true;
+    v.autoplay = true;
+    v.playsInline = true;
+    v.src = url;
+    body.appendChild(v);
+  } else {
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = name || '';
+    body.appendChild(img);
+  }
+  const title = document.getElementById('fm-preview-title');
+  if (title) title.textContent = name || '';
+  box.hidden = false;
+}
+function fmPreviewClose() {
+  const box = document.getElementById('fm-preview'), body = document.getElementById('fm-preview-body');
+  if (body) body.innerHTML = '';
+  if (box) box.hidden = true;
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') fmPreviewClose(); });
+const _fmPrevEl = document.getElementById('fm-preview');
+if (_fmPrevEl) _fmPrevEl.addEventListener('click', e => { if (e.target === e.currentTarget) fmPreviewClose(); });
 function fmUpdate() {
   const cnt = document.getElementById('fm-count');
   if (!cnt) return;
@@ -10684,6 +10795,7 @@ async function refreshFiles(dir) {
     let acc = '';
     for (const seg of curDir.split('/').filter(Boolean)) { acc += '/' + seg; mkLink(seg, acc, true); }
   }
+  fmPathCancel();
   list.innerHTML = '';
   let empty = true;
   const mkChk = (full, row) => {
@@ -10692,6 +10804,16 @@ async function refreshFiles(dir) {
     c.onchange = () => fmToggle(full, c.checked, row);
     return c;
   };
+  // 列表第一项: 返回上级目录 (根目录下不显示)
+  const parent = fmParentDir(curDir);
+  if (parent !== null) {
+    const back = document.createElement('div'); back.className = 'item fm-back';
+    const bb = document.createElement('button'); bb.type = 'button';
+    bb.textContent = '↩ 返回上级目录';
+    bb.onclick = () => goDir(parent);
+    back.appendChild(bb);
+    list.appendChild(back);
+  }
   for (const d of j.dirs) {
     empty = false;
     const full = area === 'usb' ? (curDir ? curDir + '/' + d : d) : curDir + '/' + d;
@@ -10706,8 +10828,19 @@ async function refreshFiles(dir) {
     empty = false;
     const full = area === 'usb' ? (curDir ? curDir + '/' + f.name : f.name) : curDir + '/' + f.name;
     const el = document.createElement('div'); el.className = 'item';
-    const n = document.createElement('span'); n.className = 'n'; n.textContent = f.name;
-    const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = fmtSize(f.size || 0);
+    const n = document.createElement('span'); n.className = 'n';
+    const isImg = /\.(jpe?g|png|webp|gif|bmp|svg)$/i.test(f.name);
+    const isVid = /\.(mp4|m4v|webm|mov|avi|mkv)$/i.test(f.name);
+    n.textContent = (isImg ? '🖼 ' : (isVid ? '🎬 ' : '📄 ')) + f.name;
+    if (isImg || isVid) {
+      n.classList.add('fm-open');
+      n.title = isVid ? '点击播放视频' : '点击查看图片';
+      n.onclick = () => fmPreview(full, f.name, isVid);
+    }
+    const meta = document.createElement('span'); meta.className = 'fm-meta';
+    const sz = document.createElement('span'); sz.className = 'fm-size'; sz.textContent = fmtSize(f.size || 0);
+    const mt = document.createElement('span'); mt.className = 'fm-time'; mt.textContent = fmtTime(f.mtime);
+    meta.append(sz, mt);
     const btnDl = document.createElement('button'); btnDl.className = 'primary fm-mini';
     btnDl.textContent = '⬇'; btnDl.title = t('下载');
     btnDl.onclick = async () => {
@@ -10726,10 +10859,14 @@ async function refreshFiles(dir) {
     const btnDel = document.createElement('button'); btnDel.className = 'danger fm-mini';
     btnDel.textContent = '✕'; btnDel.title = t('删除');
     btnDel.onclick = () => delFile(full);
-    el.append(mkChk(full, el), n, tag, btnDl, btnDel);
+    el.append(mkChk(full, el), n, meta, btnDl, btnDel);
     list.appendChild(el);
   }
-  if (empty) list.innerHTML = '<div class="hint" style="margin:0">' + t('空目录') + '</div>';
+  if (empty) {
+    const h = document.createElement('div'); h.className = 'hint'; h.style.margin = '0';
+    h.textContent = t('空目录');
+    list.appendChild(h);
+  }
   fmUpdate();
 }
 async function delFile(p) {
@@ -22342,7 +22479,8 @@ class Handler(BaseHTTPRequestHandler):
                 if os.path.isdir(ep):
                     dirs.append(e)
                 elif os.path.isfile(ep):
-                    files.append({"name": e, "size": os.path.getsize(ep)})
+                    files.append({"name": e, "size": os.path.getsize(ep),
+                                  "mtime": int(os.path.getmtime(ep))})
             relative = os.path.relpath(d, os.path.realpath(ARCHIVE))
             virtual_dir = "/archive" if relative == "." else "/archive/" + relative.replace(os.sep, "/")
             self._json({"ok": True, "dir": d, "virtual_dir": virtual_dir, "dirs": dirs, "files": files})
@@ -22363,7 +22501,8 @@ class Handler(BaseHTTPRequestHandler):
                 if os.path.isdir(ep):
                     dirs.append(e)
                 elif os.path.isfile(ep):
-                    files.append({"name": e, "size": os.path.getsize(ep)})
+                    files.append({"name": e, "size": os.path.getsize(ep),
+                                  "mtime": int(os.path.getmtime(ep))})
             rel = os.path.relpath(fp, MNT).replace("\\", "/")
             self._json({"ok": True, "attached": True, "dir": "" if rel == "." else rel,
                         "dirs": dirs, "files": files})
