@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.030"
+APP_VERSION = "2026.11.27.031"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -8838,8 +8838,7 @@ async function extCardFormat() {
   if (!EXT_CARD) { toast('未检测到外置卡'); return; }
   const dev = EXT_CARD.device;
   if (!confirm('⚠️ 初始格式化会把 ' + dev + ' 格式化为 ext4 文件系统，并清空其中全部数据，无法撤销。\n如果这是正在使用的数据卡，归档录像会全部丢失。\n如系统缺少 mkfs.ext4，会自动联网安装 e2fsprogs。\n格式化完成后会自动挂载到默认位置 /mnt/sdcard。\n确认继续？')) return;
-  const typed = prompt('请输入设备名确认格式化：' + dev, '');
-  if (typed !== dev) { toast('已取消格式化'); return; }
+  if (!confirm('再次确认：将格式化 ' + dev + '，清空其中全部数据且无法撤销。确认格式化？')) return;
   const msg = document.getElementById('ext-card-msg');
   if (msg) msg.textContent = '正在格式化 ' + dev + '…';
   try {
