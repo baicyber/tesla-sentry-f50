@@ -39,49 +39,45 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # 内嵌副本: 仅当同目录找不到同名 .py 时启用 (旧版 OTA 只下发主程序的兼容路径)
 _EMBED_MODULES = {
     "storage_allocation": (
-        "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"
+        "H4sIAAAAAAACCq1a61IbRxb+z1N0cLk0Y8YCnDiV9UapcmzMUuXLFiapTXldqkHTgllGM9rpETabTZVsEDdLQLLmTmLjYBvHiWCzXhZLwjwM6tHoF6+w25cZ"
+        "zeiCnU2olKGnT399+pyvzzndnfb29pvDsgkVgCzDlIcgGEwpQ9BCQNYVoKRMeVCDAEHLUvUh9HuA1L9BBGQTAlW34BA0QW+4vb29TU0kDdMCwzIa1tRBt/kX"
+        "ZOju3wnZGnb/NlBb3DQSIClbRBzwz3/0iVgwkYyrGmxr6+37FERAN/j4Y/B+V9uVvp6rl2+CCBBCshkbVkdhdEgdDEkgpJi+RtyEMJpQ9UDbks0haNFPYtsp"
+        "0AUioLyfc/Jvyvuz1dWFCwAffGNvft9ZffGm+mLPye/ig0U8/wOeX658f6+yvlJ5Uagu/1w+/Nae3aoUDiuFZ/a3jySCgSdzdnbGTherU/P2fqayMNn22fWr"
+        "fdf6Bnoun6yr2NbWpsC4Z+IosYkgXmgDAAATWilTp3YRDBSG+qhqGnp4CFpCaODmlejNgRv9F3t7ojd7Bgb6rvfeDInAMOlI/w8dHo0Sa0ajYtiEyNBGoSCG"
+        "76jWcFSXE1AIce+HicdCoquUAuNySrNQnT6KGrME34oiqm411e9i/6U/9H3eEx24MXDxarT3U7L097tCoig1KOlZpCXY5X4Cde3inzhQ97mmQH7Pt8S60t/T"
+        "E73Wdz16jUJ90PW7D0OiCDpBd9e5D1pg1thzMuzAxf7engGOTPC6atCuYUdlTVVkC0ZHZS0FkcB+SSCFBskE3NwqpQXvFMF7EdpkO4CLUK/IKoLgcyLVY5qG"
+        "KYTwTyv4/jaev28v7hJ25rP24quQSEfEDRNQRKDqQDjDwMNcD7FeBa6GilQdWbIeg0wbCQwahkbYBnTDatItqLolgbhmyJbog2qhbv51dWq+ulks7xfsxVf2"
+        "4i7o5dq2nJ9B0yhFNCDRJayiuKqrFpf5LabVufWp8elfvwKUWJ7sNmJ45sQamGbcARHQRSZ1RWoBBGoIgm6/YmTJZMjHXCt0i4y6TdqEy29Vksa58v5cMNLt"
+        "4M2XoAs4m9uVrYK9/Li6uoCn945L6zizVy4u+ZcGuo8PviNTeatT4y51wCeg+9xHJ/HzM1BZX/Hg8MY2hes+9xHoBU52HK+/wpOZGi5fYiCI3qaud3tq8fQ2"
+        "+KS5/En6BMxA1SJ5YfzA2cs4h1PMWna6yLoa9QokG78C9VnnRCXsjXT5YI7lGPrvq4AS+Rmc2a4+magsrrJergePyV8SAlyoMZYzQmzCuq94EDLhX1OqCZXo"
+        "4JjVGIMkEJNjwywkn+d76RTPkE7+jT294FHFn0QlwLSrPPxnXbrEmQ1cWHTTpZPfxJmnbD3k3/zyUfo+n8Q5+LHy+F6l9A/804qzelCZ2HMWDvDGNpu8sp4n"
+        "bprMSKB8MFkpPiJQrOfhNsm/y3vOk5c4t1h58KM99011dUsC9ky6XHyKDzOEbrSHzSy5y1p4hqdXj9JZd2eQpYAOUF3cwOPzoAP4zX+UzuHpNfz0AOce28VN"
+        "e3lPAkxZ/OS76uJhuZgrl9bs2VlC8slVu7jpLs2zKIiAhHxX6PIZmcTSroBLBXc/dbTYAR2tiQY6asgiOAN6+z7lXtcMWRFIkRG5buhukGQ4/6uHahmffrfM"
+        "sRplkTwKFRChVV2YwCCBlhYEjGhfV8KQSkNWoha8awlQjxmKqg9FQikrfvYjUmEQRHg3BpMWuKJq8LphXTFSukI3g2+bMFMw/dqCXwIZlCongW7RI/eoilRD"
+        "92itJuQhd7mBZal63AARViUxoTCyZEuoZYJBQxlz162kEkkk3PJQ9bgRRlZUgaO1hqobtQapmG9LABmmFR2BYygyYKbguy7/FMCZbXtpF+dnnO8zzuGK/fOm"
+        "vTHjHDyzNwqMnBdA5eE2Xi/g/BpOl/D8/fL+nLd6CVSfLdk/buLpdVzkA/DCnDP1A57dxvMrOLv0LqvsYv+1WAb3CK/9w2hYPnf+Q4HAhanfIeHCMLyrqEMQ"
+        "EbvyindMj0UV1YQxyzDHKItqdY+BwjRoRSIgpFuhekKwfErIaKCwkYQ6HS6R1o1o/+Ub169+Af7OWpf7+nsuDdzo/6IJow0UjhM1hLjCU7Sqy5oWlIhpBoJU"
+        "gustj0KPVfUbSYHIUnXZUg3d5VSr7VEvH07KJtStcGJEUU2BNZiZJQDvqsiKGiM+q8cViR6SDFM2id/cA1M4MYLI30LShHH1biQU5rX92ZAEFNWMNE7ZxDLk"
+        "aEDNo1DrkslCd0ISaNjIQEYAWSaUE8Giw6ORZyomRSBQyoRRGcVUNXJF1hBsTisv7NBx4TsmqexCf9ZDTbvjWgoNC8Euz72ujKpB3XBNzyVMmNTkGBQ8W0p+"
+        "p9RE6+jayooNDGJkJj4PUy+i2kx1FaqBwildU/URnwTnnEXiewrJQ5ATHUGoU95JAI2oST8F29vbLxkpnRzGTYXAQQWQlSNg6DH4exJ1tJQCARpLkF5yqB9R"
+        "k4QaCNwZNhAEJpQ1yloVkaqBdIfbKDaVrDzcLhfm7NlZf1bG2QKezFTWJvzJm6XfWuam+bn8+gHeWgICzo+zVMxKATaClQKimzDJ1QKdF0Kyn+gveioivxEt"
+        "g8nKWYVMDkdiTc0I+8V2Hu/QjCE1JmsgAmRNM2KyRRNaV5uvrPb2rOj6S2xIRxxGqqF4Bb5pGBbdZ0jiVld14tk7sjbij3HkZ4RE/wi4ddv74i/WCEaQICg1"
+        "6AYVNg0RDVKeGCc1GFZRlLtXqCMZLUMM3VL1FGwYOaImG6UDcaFuhMtslzECSg2KLmeaj2qpgC8j3rhZlwf9P0kZoUAHMWNYTiahrghBixAT3rpwG0SoTFMr"
+        "Ux8FJ2J11Nss3dQsvJZgCGGtro54t5z/Ni9xcL+L3XN4rYssi30XWpUozE8Q6u84NRENy4oitEYMLtXdbB2RQDEUkKltw44IGIKWbFkmxZdACFnRQc2IjaCQ"
+        "VFsFQQAd4Hx3twg6O8H57nOkvD3ffa7t5P3Jc7cuJ9GwYbFCTwK8nuZluFt+NOsLVogSa3ARt8lAWlaYdKi/tnw7F/hIEuMaYd3DABfizV82QR2GNxG9/Igb"
+        "gSBLDtwB+ZM6OT/IvYmveeIhnFWn3/AzGLlnOMiVC3N4IVveT9uLu3YuX1lf4en/FD+b8dPg/A45KdP6GBcLQCA1c26TFb/24xIuzePsEugETNx58pLd0oq0"
+        "erY30s7h15W1CXKE29iuPF3CmWl77on97wf20lS5uFf5V7FSfBQ8LAJi59E4AvSst97EyCDUmdCtTqTEZFPptCDS5LMI6pY51qkmhkIULWkag9DjBiskaMed"
+        "YVWD1LxUxMtF1NBs1HsR3seG1Wzrgvp7eXGiQTRGykNWOfMlCFRQrJE/GsiOfjLUsq27WQNc/f92rZfdLUFsPtmXrWPOV80uDRoKkwug6UUBL1Dy4xLAk7lW"
+        "5UigpvBqieDZmNRIJDg2ZEQWFAL7sSG9eSnN3UEpRA6zbsvvDV8l6AUoYj9WB4q+awbmdxBhzTpS+UWC3AoMfi8SlKxnWrOZgrJNomFjaKm7r4RxGjoCkcOT"
+        "gJoabxmGWgE1iUw+QNRaAd+25IG1fjhbs6FHyS6vt0FgCDnMcugT2VCPSM9IPsc2LV0Dg+qxWhCIdjL6iLe6WRVKbpJAxBcpwvHooDwqqxo4E/waN71s7n8X"
+        "sgxL1tiVYiSIQqNCcxSJPbHwUSaEjW8w7F3SJwI6GoJVR5Mt01Fvg0Zocs/GcAPxqlkOpNGoqxHCnZfBBLZxi6cuJtm4nUEnCF0mEpc0NYlC4q2u2+4pMDYM"
+        "YyNRZojG61pFRSPNLm11SP3+zre93vU2HfgJxb0V8pv/xHvswHL5cwienqxmcoHb9Jk0ybTrKyTrzu+QKywqCU6Hu+Og97i0Vt1IO8/u0fZxaZpfxJ4m/gzc"
+        "0bIvvttZ9oWFb3BaOS7NHJeyoTqt6IwU+yh933k+gadXj0trXsKou//lqrmoXm9gWnKt/WbZv0acLXjLPC6tN+pgz856bwsM9Ch9zz/HUfqeXwN7esk/pbM7"
+        "jnfnj0tZ8n130nk+WX3yNXv6sx++xtO79vorvPW8sjZRWV85St8PKnAaCAL18NmmHiYvlr19n0qMBfxvlyz1lG56PS21vp2W6DtF3dV3A2oztZgmYnBHmJDs"
+        "11+8Mdrb253dcXvxVcDGy3t2dsZ7CcD576qrGZx7XHm4fZTOOTsT5dLucSnrpLPl/Zy9suMnI7m1oMj+j/bKTnXx0N54xCrOyk9LlcWnx6VsdY3Mhed3ysWn"
+        "5f0Hzu74cWndnp1lo6iTv2V+LpfWnPyLo3SWOHzrOaCvZ0fpHJtqY5uUvRsz+M003lqzN35gm429wtjLe+XXj5wnL52dHTy9Vd4vOHsZPFVgNGIrPkrf97Oq"
+        "vD/np2C5mKtM7PnVqb+b8UJuzErRqxX+skHMzp7GA8ExJIEu8eSnvcbjCY9hCdW9z69/CjnDCBrUhRddgfxehxgc4I+X7uMLRfZlFtp90suLO6D5Aw9/i/nN"
+        "QyxjMvcuDW+MAU0DKmlPUxr5IyrjOhP4VTEV9JKouvMfPDWPd+eB77WXB6vMNNsM7v9vs5orH8z5J8QLc9WpnLOz+JuGraAPWWerUPaOMevkIPVfiZTkNF4l"
         "AAA="
     ),
     "storage_resize": (
@@ -509,7 +505,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.018"
+APP_VERSION = "2026.11.27.019"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -13460,7 +13456,20 @@ def _storage_wait_for_job(timeout=20.0):
         time.sleep(0.3)
 
 
+def _ensure_storage_dirs():
+    """镜像目录 / 归档 / 转码缓存可能被手动删掉, 也可能是新卡第一次使用:
+    查状态与格式化、调整前自动补建, 避免 statvfs/open 直接报 No such file or directory。"""
+    for d in (os.path.dirname(IMG), ARCHIVE, TRANSCODE_DIR):
+        if not d:
+            continue
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
+
+
 def storage_status():
+    _ensure_storage_dirs()
     # 启动时 USB 可能还没绑好导致残骸清不掉; 等后续状态查询时再自愈, 避免永久卡在「请检查恢复文件」
     if _storage_job["state"] == "recovery":
         if not storage_resize.pending_recovery(IMG):

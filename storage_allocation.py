@@ -151,7 +151,12 @@ def snapshot(image, archive, cache):
         archive_info = None
     if info is not None and archive_info is not None and archive_info.st_dev != info.st_dev:
         raise ValueError('镜像和归档须位于同一数据盘')
-    filesystem = os.statvfs(image.parent)
+    # 镜像目录可能还没建 (新卡首次格式化 / 目录被清理): 用最近的存在祖先探测文件系统,
+    # 否则 statvfs 会抛 FileNotFoundError: '/mnt/sdcard/tesla-sentry/img'
+    probe = image.parent
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    filesystem = os.statvfs(probe)
     image_allocated = 0 if info is None else getattr(
         info, 'st_blocks', (info.st_size + 511) // 512) * 512
     seen = set() if info is None else {(info.st_dev, info.st_ino)}
