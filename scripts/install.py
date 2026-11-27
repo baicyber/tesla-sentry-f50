@@ -928,11 +928,14 @@ class Installer:
                 print('旧配置已备份 -> %s  (回滚: cp %s %s)' % (backup, backup, target))
                 old_conf_text = target.read_text(encoding='utf-8')
             write(target, self.configuration(old_conf_text=old_conf_text), created=created)
-            # Only the mount gate starts at boot. It starts the dependent services in order.
-            for name in ('S08tsf-mount', 'K99tsf-mount'):
-                target = self.path('/etc/rc.d/' + name)
-                target.symlink_to('../init.d/tsf-mount')
-                created.append(target)
+            # tsf-mount 负责挂卡并拉起各服务; tesla-viewer 另加 S99 自启链接,
+            # 即使 tsf-mount 因配置/卡异常提前退出, 网页也能起来
+            for name, service in (('S08tsf-mount', 'tsf-mount'), ('K99tsf-mount', 'tsf-mount'),
+                                  ('S99tesla-viewer', 'tesla-viewer'),
+                                  ('K10tesla-viewer', 'tesla-viewer')):
+                link = self.path('/etc/rc.d/' + name)
+                link.symlink_to('../init.d/' + service)
+                created.append(link)
             cron_new = self.cron_text((old_cron or b'').decode('utf-8'))
             if (cron_path.read_bytes() if cron_path.exists() else None) != old_cron:
                 raise InstallError('安装期间定时任务被其他程序修改，停止发布')
@@ -1070,6 +1073,10 @@ class Installer:
                 target = self.path('/etc/rc.d/' + name)
                 if not os.path.lexists(target):
                     target.symlink_to('../init.d/tsf-mount')
+            for name in ('S99tesla-viewer', 'K10tesla-viewer'):
+                target = self.path('/etc/rc.d/' + name)
+                if not os.path.lexists(target):
+                    target.symlink_to('../init.d/tesla-viewer')
             if conf_path.exists():
                 conf_backup = self.backup_conf(conf_path)
             self._replace_file(conf_path, self.configuration(old_conf_text=old_conf_text, upgrade=True))

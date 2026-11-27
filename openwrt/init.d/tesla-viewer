@@ -1,12 +1,28 @@
 #!/bin/sh /etc/rc.common
 START=99
 USE_PROCD=1
+# 逐行解析 conf, 绝不 source: 旧写法 . conf 遇到含空格/括号/引号的值会直接语法错误,
+# 整个 init 脚本中途退出, 表现为「重启或开机后网页服务没启动」。
+load_conf() {
+    [ -f /etc/tesla-sentry.conf ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; *=*) ;; *) continue ;; esac
+        key=${line%%=*}
+        case "$key" in TSF_*|PATH) ;; *) continue ;; esac
+        value=${line#*=}
+        case "$value" in
+            \'*\') value=${value#\'}; value=${value%\'} ;;
+            \"*\") value=${value#\"}; value=${value%\"} ;;
+        esac
+        export "$key=$value"
+    done < /etc/tesla-sentry.conf
+}
 start_service() {
     # set -a 兼容会继承 shell 环境的 init; procd 不继承 export,
     # 程序启动时会自己读 conf 补齐, 因此自定义清理/同步参数在 F50 上也能生效。
     # TSF_DIR 必须有 fallback: 老设备 conf 里可能没设置, procd_set_param 里的路径
     # 就会变成 /sentry-viewer.py —— 文件不存在, procd 不断 respawn, 网页永远打不开。
-    set -a; [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf; set +a
+    load_conf
     TSF_DIR="${TSF_DIR:-/opt/tesla-sentry}"
     if [ -n "${TSF_CARD_UUID:-}" ]; then
         # 数据卡未就绪也要启动网页: 卡没插/没格式化/挂载失败时, 网页是唯一的排查与格式化入口,

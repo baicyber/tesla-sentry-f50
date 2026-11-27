@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.034"
+APP_VERSION = "2026.11.27.035"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1248,6 +1248,10 @@ def _ota_sidecars(base):
                 os.chmod(tmp, 0o755 if name.endswith(".sh") else 0o644)
             except OSError:
                 pass
+            # init.d 脚本只认语法正确的版本: 半截/损坏的下载写进去会让下次开机起不来
+            if name.startswith("init.d.") and _sh_syntax_ok(tmp) is False:
+                os.unlink(tmp)
+                raise ValueError("脚本语法校验未通过")
             os.replace(tmp, dest)
             updated.append(name)
         except Exception as ex:
@@ -14474,12 +14478,22 @@ def external_card_config(body):
     mountpoint = os.path.normpath(mountpoint)
     if not _card_mount_target_ok(mountpoint):
         raise ValueError("挂载点不合法")
-    sync_conf({"TSF_CARD_AUTOMOUNT": str(enabled), "TSF_CARD_MOUNT_DELAY": str(delay),
-               "TSF_CARD_DEVICE": device, "TSF_CARD_MOUNTPOINT": mountpoint})
+    # 开机脚本 tsf-mount 按 UUID 挂卡: 这里必须一并写入, 否则网页保存的自动挂载
+    # 在重启后不生效 (UUID 为空或还是格式化前的旧值, 卡永远挂不上)。
+    uuid = _blkid(device, "UUID") if device else ""
+    conf = {"TSF_CARD_AUTOMOUNT": str(enabled), "TSF_CARD_MOUNT_DELAY": str(delay),
+            "TSF_CARD_DEVICE": device, "TSF_CARD_MNT": mountpoint,
+            "TSF_CARD_MOUNTPOINT": mountpoint}
+    if uuid:
+        conf["TSF_CARD_UUID"] = uuid
+    sync_conf(conf)
     os.environ["TSF_CARD_AUTOMOUNT"] = str(enabled)
     os.environ["TSF_CARD_MOUNT_DELAY"] = str(delay)
     os.environ["TSF_CARD_DEVICE"] = device
+    os.environ["TSF_CARD_MNT"] = mountpoint
     os.environ["TSF_CARD_MOUNTPOINT"] = mountpoint
+    if uuid:
+        os.environ["TSF_CARD_UUID"] = uuid
     _card_write_init(bool(enabled), device, mountpoint, delay)
     return {"ok": True, "msg": "已保存，下次开机由 init.d 自动挂载（建议延迟 5 秒）",
             "boot": card_boot_config()}
@@ -14631,10 +14645,21 @@ INITD_DEPLOY = (
 )
 
 
+def _sh_syntax_ok(path):
+    """用 busybox sh -n 校验脚本语法; sh 不可用时返回 None (无法判断, 不拦截)。"""
+    try:
+        r = subprocess.run(["sh", "-n", path], capture_output=True, timeout=10)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def _deploy_init_scripts():
     """OTA 会把 init.d 脚本下发到程序目录, 启动时同步进 /etc/init.d.
 
-    网页升级后不需要再手动跑 install.sh apply."""
+    写临时文件 -> 语法校验 -> 原子替换: 旧实现直接覆盖目标文件, 如果这期间
+    服务被重启 (execv/OTA), /etc/init.d 里的脚本可能只剩半截, 下次开机
+    procd 无法启动服务, 表现为「重启 OpenWrt 后网页打不开」。"""
     app = os.environ.get("TSF_DIR", "/opt/tesla-sentry")
     for name, dest in INITD_DEPLOY:
         try:
@@ -14648,17 +14673,31 @@ def _deploy_init_scripts():
                     current = f.read()
             except OSError:
                 current = ""
-            if current != content:
-                with open(dest, "w", encoding="utf-8") as f:
-                    f.write(content)
-                os.chmod(dest, 0o755)
-                print("init.d 已随 OTA 更新: %s" % dest, flush=True)
+            if current == content:
+                continue
+            temporary = dest + ".tmp"
+            with open(temporary, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(temporary, 0o755)
+            if _sh_syntax_ok(temporary) is False:
+                os.unlink(temporary)
+                print("init.d 内容语法错误, 保留旧文件: %s" % dest, flush=True)
+                continue
+            os.replace(temporary, dest)
+            print("init.d 已随 OTA 更新: %s" % dest, flush=True)
         except Exception as ex:
             print("deploy %s: %s" % (dest, ex), flush=True)
     try:
-        for link in ("/etc/rc.d/S08tsf-mount", "/etc/rc.d/K99tsf-mount"):
+        # tsf-mount 负责挂卡并拉起各服务; tesla-viewer 额外加一条 S99 自启链接,
+        # 这样即使 tsf-mount 因配置/卡异常提前退出, 网页也一定能起来, 不会失联。
+        for link, target in (("/etc/rc.d/S08tsf-mount", "../init.d/tsf-mount"),
+                             ("/etc/rc.d/K99tsf-mount", "../init.d/tsf-mount"),
+                             ("/etc/rc.d/S99tesla-viewer", "../init.d/tesla-viewer"),
+                             ("/etc/rc.d/K10tesla-viewer", "../init.d/tesla-viewer")):
             if not os.path.lexists(link):
-                os.symlink("../init.d/tsf-mount", link)
+                os.symlink(target, link)
     except Exception:
         pass
 
@@ -15118,6 +15157,14 @@ def external_card_format(body):
                 except (OSError, subprocess.SubprocessError):
                     live_stopped = False
             _format_card_ext4(dev)
+            # 重新格式化会生成新的文件系统 UUID: 写回 conf, 否则开机 tsf-mount
+            # 用旧 UUID 找不到卡, 数据卡不会被自动挂载 (表现为重启后录像全"消失")
+            new_uuid = _blkid(dev, "UUID")
+            if new_uuid:
+                sync_conf({"TSF_CARD_UUID": new_uuid, "TSF_CARD_DEVICE": dev,
+                           "TSF_CARD_MNT": target})
+                os.environ["TSF_CARD_UUID"] = new_uuid
+                os.environ["TSF_CARD_DEVICE"] = dev
             _card_job_set(message="格式化完成，正在挂载到默认位置 %s" % target)
             # 挂载前会先清空默认位置内的全部残留文件, 再挂新文件系统
             mounted, mount_err = _card_mount_default(dev, target)
@@ -15218,6 +15265,12 @@ def external_card_mount(body):
             raise ValueError(err or "挂载失败")
         _card_job_set(state="done", message="已挂载到 %s" % target)
         _restore_card_services()
+        # 记录当前卡的 UUID: 换卡/格式化后保证开机仍能按 UUID 自动挂载
+        uuid = _blkid(dev, "UUID")
+        if uuid:
+            sync_conf({"TSF_CARD_UUID": uuid, "TSF_CARD_DEVICE": dev, "TSF_CARD_MNT": target})
+            os.environ["TSF_CARD_UUID"] = uuid
+            os.environ["TSF_CARD_DEVICE"] = dev
         CARD_WATCH["last"] = True
         return {"ok": True, "msg": "已挂载到 %s" % target, "ready": card_data_ready()}
     except Exception as ex:

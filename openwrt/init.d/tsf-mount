@@ -6,9 +6,23 @@
 START=08
 STOP=99
 
-set -a
-[ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf
-set +a
+# 逐行解析 conf, 不 source: 旧写法遇到含空格/括号/引号的值会让整个脚本退出,
+# 结果是既没挂卡, 也没启动 tesla-viewer, 开机后网页打不开。
+load_conf() {
+    [ -f /etc/tesla-sentry.conf ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; *=*) ;; *) continue ;; esac
+        key=${line%%=*}
+        case "$key" in TSF_*|PATH) ;; *) continue ;; esac
+        value=${line#*=}
+        case "$value" in
+            \'*\') value=${value#\'}; value=${value%\'} ;;
+            \"*\") value=${value#\"}; value=${value%\"} ;;
+        esac
+        export "$key=$value"
+    done < /etc/tesla-sentry.conf
+}
+load_conf
 UUID=${TSF_CARD_UUID:-}
 MNT=${TSF_CARD_MNT:-/mnt/sdcard}
 # 挂载点防呆: 旧配置若指向系统目录, 覆盖挂载会让设备不可用
@@ -54,12 +68,15 @@ stop_apps() {
 }
 
 mount_card() {
-    [ -n "$UUID" ] || return 1
     tsf_storage_ready && return 0
     # An unrelated mounted disk must never be used as this installation's data disk.
     awk -v m="$MNT" '$2 == m {found=1} END {exit !found}' /proc/mounts && return 1
     mkdir -p "$MNT" || return 1
     DEV=$(blkid -U "$UUID" 2>/dev/null)
+    # UUID 失效 (重新格式化/换卡后还没写回配置) 时退回设备路径, 保证开机仍能挂上数据卡
+    if [ -z "$DEV" ] || [ ! -b "$DEV" ]; then
+        DEV=${TSF_CARD_DEVICE:-}
+    fi
     [ -n "$DEV" ] && [ -b "$DEV" ] || return 1
     [ "$(blkid -o value -s TYPE "$DEV" 2>/dev/null)" = "ext4" ] || return 1
     mount -t ext4 -o noatime "$DEV" "$MNT" 2>/dev/null || return 1
@@ -81,13 +98,17 @@ wait_and_start_services() {
         i=$((i + 1))
     done
     # 卡挂不上也要把网页拉起来: 否则没有格式化/换卡/排查的入口, 只能 SSH
-    logger -t tsf-mount "FAILED: card UUID $UUID not mountable after 60s; 仅启动网页以便排查"
-    /etc/init.d/tesla-viewer start
+    logger -t tsf-mount "FAILED: card UUID $UUID not mountable after 60s; 仅启动网页以便排查"    /etc/init.d/tesla-viewer start
     return 1
 }
 
 start() {
-    [ -n "$UUID" ] || { logger -t tsf-mount "TSF_CARD_UUID is required"; return 1; }
+    # 网页优先: 先拉起 tesla-viewer, 再等数据卡。卡异常时原本要等满 60 秒才有网页入口。
+    /etc/init.d/tesla-viewer start
+    if [ -z "$UUID" ] && [ -z "${TSF_CARD_DEVICE:-}" ]; then
+        logger -t tsf-mount "TSF_CARD_UUID/TSF_CARD_DEVICE 均未配置"
+        return 1
+    fi
     wait_and_start_services
 }
 
