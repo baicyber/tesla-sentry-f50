@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.029"
+APP_VERSION = "2026.11.27.030"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2470,8 +2470,8 @@ body.watching { overscroll-behavior:none; }
 .storage-row { display:grid; grid-template-columns:minmax(0,1fr) 84px 24px; gap:8px; align-items:center; margin:8px 0; min-height:40px; font-size:13px; }
 .storage-row .ninput { margin:0; width:100%; text-align:right; }
 .storage-row output { text-align:right; font-variant-numeric:tabular-nums; }
-.storage-help { display:grid; place-items:center; width:24px; height:36px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:0; -webkit-tap-highlight-color:transparent; }
-.storage-help::before { content:'?'; display:block; width:14px; height:14px; box-sizing:border-box; border:1px solid currentColor; border-radius:50%; font:10px/12px system-ui,sans-serif; text-align:center; }
+.storage-help { display:flex; align-items:center; justify-content:center; width:24px; height:36px; padding:0; border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:0; -webkit-tap-highlight-color:transparent; }
+.storage-help::before { content:'?'; display:flex; align-items:center; justify-content:center; width:14px; height:14px; box-sizing:border-box; border:1px solid currentColor; border-radius:50%; font:10px/1 system-ui,sans-serif; position:relative; top:1px; }
 .storage-help:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .storage-summary { display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px 12px; margin:12px 0 8px; font-size:12px; }
 .storage-bar { display:flex; height:20px; overflow:hidden; border-radius:5px; background:var(--panel2); }
@@ -3229,6 +3229,8 @@ body.settings-open { overflow:hidden; }
 #storage-paths { margin-top:20px; }
 #storage-retention { margin-top:0; }
 #storage-retention .storage-row { max-width:420px; }
+/* 保留时间与保留事件数量两卡等高, 保存按钮统一贴底, 始终处在同一水平线 */
+#storage-retention .updbtns, #storage-event-count .updbtns { margin-top:auto; padding-top:10px; }
 #storage-prewarm .storage-row { max-width:none; grid-template-columns:minmax(0,1fr) minmax(88px,150px) minmax(0,auto); }
 /* 播放设置与转码任务并排: 等宽等高的两张卡片, 移动端自动上下排列 */
 .play-cols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; align-items:stretch; margin-top:6px; }
@@ -3826,8 +3828,8 @@ body.settings-open { overflow:hidden; }
       <div class="storage-nested"><div class="storage-row note"><label for="retention-keep">空间紧张时至少保留</label><input class="ninput" id="retention-keep" type="number" min="0" max="1440" step="1" inputmode="numeric"><span class="retention-unit">分钟</span></div></div>
       <div class="storage-row note"><label for="retention-sentrydays">哨兵录像保留</label><input class="ninput" id="retention-sentrydays" type="number" min="0" max="3650" step="1" inputmode="numeric"><span class="retention-unit">天</span></div>
       <div class="storage-row note"><label for="retention-saveddays">手动保存保留</label><input class="ninput" id="retention-saveddays" type="number" min="0" max="3650" step="1" inputmode="numeric"><span class="retention-unit">天</span></div>
-      <div class="updbtns"><button class="mini primary" id="retention-save" onclick="storageSaveRetention()" disabled>保存时间限制</button></div>
       <div class="hint" id="retention-msg" role="status" aria-live="polite"></div>
+      <div class="updbtns"><button class="mini primary" id="retention-save" onclick="storageSaveRetention()" disabled>保存时间限制</button></div>
     </section>
     <section class="storage-quota" id="storage-event-count">
       <h3>保留事件数量设置</h3>
@@ -3835,8 +3837,8 @@ body.settings-open { overflow:hidden; }
       <div class="storage-row cap"><label for="retention-sentrycount">哨兵录像最多保留</label><input class="ninput" id="retention-sentrycount" type="number" min="0" max="9999" step="1" inputmode="numeric"><span class="retention-unit">个</span><button class="storage-help" type="button" aria-label="哨兵事件容量预估" aria-expanded="false" aria-controls="storage-tip" data-est="sentrycount">?</button></div>
       <div class="storage-row cap"><label for="retention-savedcount">手动保存最多保留</label><input class="ninput" id="retention-savedcount" type="number" min="0" max="9999" step="1" inputmode="numeric"><span class="retention-unit">个</span><button class="storage-help" type="button" aria-label="手动保存事件容量预估" aria-expanded="false" aria-controls="storage-tip" data-est="savedcount">?</button></div>
       <div class="storage-row cap"><label for="retention-drivecount">驾驶记录最多保留</label><input class="ninput" id="retention-drivecount" type="number" min="0" max="9999" step="1" inputmode="numeric"><span class="retention-unit">个</span><button class="storage-help" type="button" aria-label="驾驶记录事件容量预估" aria-expanded="false" aria-controls="storage-tip" data-est="drivecount">?</button></div>
-      <div class="updbtns"><button class="mini primary" id="retention-count-save" onclick="storageSaveRetentionCount()" disabled>保存事件数量</button></div>
       <div class="hint" id="retention-count-msg" role="status" aria-live="polite"></div>
+      <div class="updbtns"><button class="mini primary" id="retention-count-save" onclick="storageSaveRetentionCount()" disabled>保存事件数量</button></div>
     </section>
     </div>
     <section class="storage-quota storage-tools" id="storage-archive-sync">
