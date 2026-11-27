@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.041"
+APP_VERSION = "2026.11.27.042"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -8912,6 +8912,7 @@ async function extCardInfo() {
     EXT_CARDS = j.cards || [];
     EXT_BOOT = j.boot || EXT_BOOT || {};
     // 外置卡是否挂载: 未挂载时禁用容量设定/格式化/归档设定/同步/迁移
+    const wasReady = CARD_READY;
     CARD_READY = j.ready !== false;
     const auto = document.getElementById('card-automount'), delay = document.getElementById('card-mount-delay');
     if (auto) auto.checked = !!EXT_BOOT.automount;
@@ -8921,6 +8922,8 @@ async function extCardInfo() {
     EXT_CARD = sameCard || EXT_CARDS[0] || null;
     extCardRender();
     applyCardGate();
+    // 挂载/卸载/拔卡后立即刷新容量数字, 避免继续显示上一张卡或 eMMC 的容量
+    if (wasReady !== CARD_READY) { try { await storageLoad(); } catch (e) {} }
   } catch (e) { if (box) box.textContent = '读取失败: ' + e; }
 }
 async function extCardJobPoll(then) {
@@ -8942,7 +8945,7 @@ async function extCardJobPoll(then) {
     } else {
       if (msg) msg.textContent = (job.state === 'done' ? '✅ ' : '❌ ') + (job.message || '');
     }
-    if (job.kind === 'format' && job.state === 'done') extCardInfo();
+    if (job.kind === 'format' && job.state === 'done') { extCardInfo(); try { storageLoad(); } catch (e) {} }
     if (then) then(job);
     return;
   }
@@ -13017,8 +13020,11 @@ def live_status():
     return {"running": running, "pending": pending, "ago": ago, "last": last,
             "copy_bps": copy_bps, "sync": live_sync_state(copy_bps),
             "disk": disk_usage(), "sys": sys_status(),
-            # 全新安装尚未创建车机镜像: 前端据此引导到「存储分配」完成首次设置
-            "setup_needed": not os.path.isfile(IMG)}
+            # 全新安装尚未创建车机镜像: 前端据此引导到「存储分配」完成首次设置。
+            # 已配置数据卡但当前被卸载时不算「首次」, 否则每次卸载都会弹首次向导。
+            "setup_needed": not os.path.isfile(IMG) and (
+                card_data_ready() or not (os.environ.get("TSF_CARD_UUID")
+                                          or os.environ.get("TSF_CARD_MNT")))}
 
 
 def _log_tail(fp, max_lines=200, max_bytes=131072):
