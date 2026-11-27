@@ -505,7 +505,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.019"
+APP_VERSION = "2026.11.27.020"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1310,7 +1310,14 @@ def _ota_sidecars(base):
 
 
 def _ota_restart():
-    """优先交给 procd 的 init 脚本重启 (找不到就原地 exec)"""
+    """替换完文件后让 procd respawn 新版本:
+
+    关键设计:
+    - 不能只靠 init.d restart 异步 kill —— Timer 线程 return 后主进程和 HTTP 服务还在跑旧代码
+    - 不能在 Timer 线程里 sys.exit() —— 只会终止 Timer 线程, 主进程不受影响
+    - 正确做法: 通知 procd 重启 + 发送 SIGTERM 让进程整体退出 → procd 自动 respawn 新版本
+    - 非 procd 管理 (没有 init.d): execv 原地替换
+    """
     here = os.path.realpath(__file__)
     d = os.path.dirname(here)
     cands = []
@@ -1327,12 +1334,21 @@ def _ota_restart():
         cands.append((score, p))
     cands.sort(reverse=True)
     if cands and cands[0][0] > 0:
+        # 通知 procd 协调 stop/start —— 让看门狗、依赖服务都同步到新版本
         try:
             subprocess.Popen([cands[0][1], "restart"], stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
-            return
         except Exception:
             pass
+        # 无论 init.d restart 是否成功, 立刻让自己退出 —— procd 自动 respawn 新版本
+        # 用 os._exit 而不是 sys.exit: Timer 线程里 sys.exit 只结束 Timer, 主进程不受影响
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        except Exception:
+            pass
+        time.sleep(0.2)
+        os._exit(0)
+    # 没有 init.d (非 procd 管理): execv 原地替换
     try:
         os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception:

@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.27.019",
+  "version": "2026.11.27.020",
   "date": "2026-11-27",
   "files": [
     "storage_allocation.py",
@@ -7,6 +7,9 @@
     "tesla-live-sync.py"
   ],
   "notes": [
+    "修复 OTA 后网页打不开：升级替换完文件后，Timer 线程调 init.d restart 但只发命令不自杀，主进程和 HTTP 服务继续跑旧代码；init.d restart 异步 kill 不及时就永远占着端口。修复为先通知 procd 协调 stop/start，再立即 SIGTERM + os._exit 退出自己，procd 自动 respawn 新版本",
+    "init.d 脚本 TSF_DIR 加 fallback（${TSF_DIR:-/opt/tesla-sentry}），老设备 conf 没设 TSF_DIR 时不会跑 /sentry-viewer.py 不存在的路径",
+    "—— 以下为 2026.11.27.019 更新 ——",
     "修复车机 U 盘格式化/调整时报 No such file or directory: '/mnt/sdcard/tesla-sentry/img'：状态查询与写操作前自动补建镜像、归档、转码缓存目录",
     "statvfs 改用最近的存在上级目录探测，目录暂时缺失时不再直接抛错；内嵌 storage_allocation 副本已同步",
     "—— 以下为 2026.11.27.018 更新 ——",

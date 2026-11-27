@@ -9,7 +9,10 @@ start_service() {
     rm -f "$STOP_FLAG" /tmp/tsf-watchdog.pause
     # set -a 兼容会继承 shell 环境的 init; procd 不继承 export,
     # 程序启动时会自己读 conf 补齐, 因此自定义清理/同步参数在 F50 上也能生效。
+    # TSF_DIR 必须有 fallback: 老设备 conf 里可能没设置, procd_set_param 里的路径
+    # 就会变成 /sentry-viewer.py —— 文件不存在, procd 不断 respawn, 网页永远打不开。
     set -a; [ -f /etc/tesla-sentry.conf ] && . /etc/tesla-sentry.conf; set +a
+    TSF_DIR="${TSF_DIR:-/opt/tesla-sentry}"
     if [ -n "${TSF_CARD_UUID:-}" ]; then
         # 数据卡未就绪也要启动网页: 卡没插/没格式化/挂载失败时, 网页是唯一的排查与格式化入口,
         # 这里 return 1 会让用户连设置页都进不去, 只能 SSH 或拆机。
