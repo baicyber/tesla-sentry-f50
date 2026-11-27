@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.037"
+APP_VERSION = "2026.11.27.038"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2257,30 +2257,41 @@ body.watching { overscroll-behavior:none; }
 .video-toolbar { order:-1; display:flex; align-items:center; flex-wrap:wrap; gap:10px; width:100%; max-width:1200px; margin:0 auto; }
 .player .video-toolbar .cambar { order:0; flex:0 0 auto; width:auto; max-width:none; margin:0; }
 .telhud { display:none; align-items:center; justify-content:flex-end; gap:10px; flex:0 0 auto;
-  width:max-content; max-width:100%; margin:0 0 0 auto; padding:5px 9px;
-  border-radius:6px; background:var(--panel); border:1px solid var(--line);
+  width:max-content; max-width:100%; margin:0 0 0 auto; padding:6px 9px;
+  border-radius:10px; background:var(--panel); border:1px solid var(--line);
   color:var(--text); font-variant-numeric:tabular-nums; }
 .telhud.show { display:flex; animation:thIn .2s ease-out; }
+/* 桌面端两段 line 用 display:contents 摊平成一行; 窄屏由 JS 加 .wrap 后变成两行 */
+.telhud .th-line { display:contents; }
+.telhud.wrap { flex:1 0 100%; width:100%; max-width:980px; margin:6px auto 0;
+  flex-wrap:wrap; justify-content:center; gap:6px 10px; }
+.telhud.wrap .th-line { display:flex; flex:1 0 100%; align-items:center; gap:8px; min-width:0; justify-content:center; }
+.telhud.wrap .th-line-rest { flex-wrap:wrap; row-gap:6px; }
 @keyframes thIn { from { opacity:0; transform:translateY(-4px) } to { opacity:1; transform:none } }
-.th-sig { display:inline-flex; opacity:.26; color:var(--muted); }
-.th-sig svg { width:20px; height:20px; display:block; }
-.th-sig.on { opacity:1; color:#ffb340; animation:tpBlink 1.05s steps(1,end) infinite; }
-.th-gear { min-width:22px; height:22px; padding:0 4px; border-radius:11px; background:#34c759; color:#fff;
-  font-size:12px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
-.th-ap { display:none; min-width:24px; height:20px; padding:0 6px; border-radius:5px; background:#2f7cf6; color:#fff;
-  font-size:11px; font-weight:700; letter-spacing:.02em; align-items:center; justify-content:center; }
-.th-ap.on { display:inline-flex; }
-.th-wheel { width:32px; height:32px; flex:none; color:var(--text); transition:transform .1s linear; }
+.th-sig { display:inline-flex; opacity:.3; color:var(--muted2); }
+.th-sig svg { width:24px; height:24px; display:block; }
+.th-sig.on { opacity:1; color:#f5a623; animation:tpBlink 1.15s steps(1,end) infinite; }
+.th-gear { min-width:24px; height:24px; padding:0 5px; border-radius:12px; background:#34c759; color:#fff;
+  font-size:12.5px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; }
+/* 方向盘 + 自动驾驶状态合并成一颗胶囊: 未开启显示「关」, 开启后整颗变蓝并显示 AP/FSD */
+.th-wheelitem { display:inline-flex; align-items:center; gap:5px; height:34px; padding:0 10px 0 2px;
+  border-radius:17px; background:var(--panel2); flex:none; }
+.th-wheel { width:30px; height:30px; flex:none; color:var(--muted); transition:transform .1s linear; }
 .th-wheel svg { width:100%; height:100%; display:block; }
-.th-wheel.ap { color:#5aa2ff; filter:drop-shadow(0 0 6px rgba(90,162,255,.55)); }
-.th-spdbox { display:flex; align-items:baseline; gap:2px; white-space:nowrap; }
-.th-spdbox b { font-size:22px; line-height:1; font-weight:800; letter-spacing:-.5px; }
+.th-ap-txt { font-size:11.5px; font-weight:700; color:var(--muted); }
+.th-wheelitem.ap-on { background:linear-gradient(135deg,#2f7cf6,#1d5fd0); }
+.th-wheelitem.ap-on .th-wheel { color:#fff; }
+.th-wheelitem.ap-on .th-ap-txt { color:#fff; }
+.th-spdbox { display:flex; align-items:baseline; gap:3px; white-space:nowrap; }
+.th-spdbox b { font-size:24px; line-height:1; font-weight:800; letter-spacing:-.5px; }
 .th-spdbox i { font-size:10px; font-style:normal; color:var(--muted); }
-.th-pedal { display:inline-flex; align-items:center; gap:3px; color:var(--muted); white-space:nowrap; font-size:11px; }
-.th-pedal svg { width:18px; height:18px; }
-.th-pedal b { font-weight:600; }
-.th-brk.on { color:#ff453a; }
-.th-thr { color:var(--blue); }
+/* 刹车 / 油门胶囊: 踩下刹车变红, 未踩为灰底; 油门蓝底带开启度 */
+.th-badge { display:inline-flex; align-items:center; gap:5px; height:30px; padding:0 11px 0 8px;
+  border-radius:15px; font-size:12.5px; font-weight:700; flex:none; white-space:nowrap; }
+.th-badge svg { width:16px; height:16px; flex:none; }
+.th-badge.th-thr { background:#1f7ae0; color:#fff; }
+.th-badge.th-brk { background:var(--panel2); color:var(--muted); }
+.th-badge.th-brk.on { background:#ff453a; color:#fff; box-shadow:0 0 9px #ff453a66; }
 .th-acc { display:flex; align-items:center; gap:5px; height:16px; min-width:82px; }
 .th-bar { position:relative; flex:1; height:5px; border-radius:3px; background:var(--line2); overflow:hidden; }
 .th-bar i { position:absolute; left:50%; top:0; bottom:0; width:0; border-radius:3px; background:#8e99a5;
@@ -2293,7 +2304,9 @@ body.watching { overscroll-behavior:none; }
 .th-place { display:inline-flex; align-items:center; gap:3px; min-width:0; max-width:140px; color:var(--muted); font-size:11px; }
 .th-place svg { width:18px; height:18px; flex:none; }
 #th-loc { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.th-fold { border:0; background:transparent; color:var(--muted); padding:3px; font-size:11px; cursor:pointer; white-space:nowrap; }
+.th-fold { border:0; background:var(--panel2); color:var(--muted); height:30px; padding:0 12px;
+  border-radius:8px; font-size:12.5px; font-weight:600; cursor:pointer; white-space:nowrap; }
+.th-fold:hover { color:var(--text); }
 .telmore { display:none; flex:0 0 auto; width:max-content; max-width:100%; margin-left:auto; padding:10px 12px; border:1px solid var(--line); border-radius:6px; background:var(--panel); }
 .telmore.open { display:block; }
 #th-rows { display:block; color:var(--text); font-size:12px; line-height:1.7; }
@@ -2304,17 +2317,20 @@ body.watching { overscroll-behavior:none; }
 @media (max-width:640px) {
   .video-toolbar { gap:6px; }
   .telhud { gap:6px; padding:4px 7px; }
-  .telhud .th-sig svg { width:17px; height:17px; }
-  .telhud .th-gear { min-width:19px; height:19px; font-size:11px; border-radius:9px; }
-  .telhud .th-ap { height:18px; min-width:20px; font-size:10px; padding:0 4px; }
+  .telhud .th-sig svg { width:20px; height:20px; }
+  .telhud .th-gear { min-width:21px; height:21px; font-size:11px; border-radius:10px; }
+  .telhud .th-wheelitem { height:30px; padding:0 8px 0 1px; }
   .telhud .th-wheel { width:26px; height:26px; }
-  .telhud .th-spdbox b { font-size:18px; }
+  .telhud .th-ap-txt { font-size:10.5px; }
+  .telhud .th-spdbox b { font-size:20px; }
   .telhud .th-spdbox i { font-size:9px; }
+  .telhud .th-badge { height:27px; padding:0 9px 0 7px; font-size:11.5px; }
   .telhud .th-acc { min-width:52px; height:14px; }
   .telhud .th-acct { font-size:9px; min-width:20px; }
-  .th-place { max-width:90px; }
+  .th-place { max-width:150px; }
+  .telhud.wrap .th-line { gap:6px; }
   .player .video-toolbar .cambar { order:1; flex:1 0 100%; }
-  .telhud { order:2; flex:1 0 100%; width:100%; margin:0; justify-content:flex-start; overflow-x:auto; }
+  .telhud { order:2; }
   .telmore { order:3; }
   .system-status .netspeed { font-size:inherit; padding:0; }
 }
@@ -2379,7 +2395,7 @@ body.watching { overscroll-behavior:none; }
   grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:1px 20px; }
 .tp-rows div { color:var(--text); font-size:13px; padding:3px 0; font-variant-numeric:tabular-nums; }
 .tp-rows .k { color:var(--muted); margin-right:9px; }
-.vgrid { display:grid; gap:3px; background:var(--stage); }
+.vgrid { display:grid; gap:3px; background:var(--stage); -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; touch-action:pan-y; }
 .vcell { position:relative; overflow:hidden; background:var(--stage); cursor:zoom-in; aspect-ratio:16/9; }
 .vcell.focused { grid-column:1/-1; grid-row:1/-1; cursor:zoom-out; }
 /* 单路: 格子高度由 JS 按画面真实比例算 (4:3 片源不裁上下), 关掉 16/9 的 CSS 约束 */
@@ -2742,20 +2758,32 @@ html[data-style="claude"] .panel { border-radius:16px; border:1px solid var(--li
 html[data-style="claude"] .upbtn { border-radius:11px; }
 html[data-style="claude"] .storbar { border-radius:3px; }
 html[data-style="claude"] .toast { border-radius:12px; }
-/* 界面风格选择卡 (设置 → 外观) */
-.stylepick { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin:9px 0 14px; }
-.stylepick button { position:relative; padding:9px 9px 8px; border-radius:12px; border:1.5px solid var(--line);
+/* 界面风格选择卡 (设置 → 外观): 紧凑精致, 不占满整行高度 */
+.stylepick { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; margin:8px 0 12px; }
+.stylepick button { position:relative; padding:7px 8px 6px; border-radius:10px; border:1px solid var(--line);
   background:var(--panel2); color:var(--text); cursor:pointer; text-align:left;
-  font-size:12.5px; font-weight:600; line-height:1.2; transition:border-color .15s,background .15s; }
+  font-size:12px; font-weight:600; line-height:1.2; transition:border-color .15s,background .15s,box-shadow .15s; }
 .stylepick button:hover { border-color:var(--muted2); }
 .stylepick button.on { border-color:var(--blue); background:var(--chipbg); }
-.stylepick button.on::after { content:'✓'; position:absolute; right:7px; top:6px; font-size:11px;
-  color:#fff; background:var(--blue); width:15px; height:15px; line-height:15px; border-radius:50%;
+.stylepick button.on::after { content:'✓'; position:absolute; right:5px; top:4px; font-size:9px;
+  color:#fff; background:var(--blue); width:13px; height:13px; line-height:13px; border-radius:50%;
   text-align:center; font-weight:700; }
-.stylepick .sw { display:flex; gap:3px; margin-bottom:7px; }
-.stylepick .sw i { display:block; height:16px; flex:1; border-radius:4px; border:1px solid #00000012; }
+.stylepick .sw { display:flex; gap:2px; margin-bottom:5px; }
+.stylepick .sw i { display:block; height:10px; flex:1; border-radius:3px; border:1px solid #00000012; }
+/* Apple 风格下用系统设置那种克制、轻量的分组样式 */
+html[data-style="apple"] .stylepick button { background:#fff; border-color:#e8e8ed; border-radius:11px;
+  box-shadow:0 .5px 1.5px #0000000f; }
+html[data-style="apple"][data-theme="dark"] .stylepick button { background:#1c1c1e; border-color:#2c2c2e; }
+html[data-style="apple"] .stylepick .sw i { border-color:#0000000a; }
+html[data-style="apple"] .stabs { gap:3px; padding:3px; border-radius:12px; background:#e9e9ec; }
+html[data-style="apple"] .stab { padding:7px 4px; border-radius:9px; background:transparent;
+  color:#6e6e73; font-size:12px; font-weight:600; }
+html[data-style="apple"] .stab.active { background:#fff; color:#1d1d1f; box-shadow:0 .5px 2px #0000001f; }
+html[data-style="apple"][data-theme="dark"] .stabs { background:#1c1c1e; }
+html[data-style="apple"][data-theme="dark"] .stab { color:#a1a1a6; }
+html[data-style="apple"][data-theme="dark"] .stab.active { background:#3a3a3c; color:#fff; }
 @media (max-width:520px){ .stylepick { grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
-  .stylepick button { padding:8px 7px; font-size:12px; } }
+  .stylepick button { padding:7px 7px 6px; font-size:11.5px; } }
 /* 标题与图标 (设置 → 外观) */
 .brandbox { display:flex; align-items:center; gap:12px; padding:12px; margin-bottom:12px;
   border:1px solid var(--line); border-radius:12px; background:var(--panel2); }
@@ -3660,15 +3688,23 @@ body.settings-open { overflow:hidden; }
     <div class="video-toolbar">
       <div class="cambar" id="cambar" aria-label="摄像头"></div>
       <div class="telhud" id="telhud" aria-label="行车遥测">
-        <span class="th-ap" id="th-ap" title="Autopilot 状态">AP</span>
-        <span class="th-gear" id="th-gear" title="挡位">D</span>
-        <div class="th-spdbox" title="时速"><b id="th-spd">0</b><i>km/h</i></div>
-        <span class="th-wheel" id="th-wheel" title="方向盘角度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/><path d="M3.2 10.5h6M14.8 10.5h6M12 14.6V21"/></svg></span>
-        <span class="th-pedal th-brk" id="th-brk" title="刹车"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="7.6"/><circle cx="12" cy="12" r="2.5"/><path d="M17.4 6.6l2.7-2.7"/></svg><b>刹车</b></span>
-        <span class="th-pedal th-thr" id="th-thr" title="油门"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M9.4 3.6h5.2a1.7 1.7 0 0 1 1.68 1.93l-1.35 12.3a1.8 1.8 0 0 1-1.79 1.6h-2.28a1.8 1.8 0 0 1-1.79-1.6L7.72 5.53A1.7 1.7 0 0 1 9.4 3.6z"/><path d="M8.6 15.1h6.8"/></svg><b id="th-thr-n">0%</b></span>
-        <div class="th-acc" id="th-acc" title="加减速"><span class="th-bar"><i id="th-bar"></i></span><span class="th-acct" id="th-acct">定速</span></div>
-        <span class="th-place" title="定位"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0z"/><circle cx="12" cy="10" r="2.5"/></svg><span id="th-loc">—</span></span>
-        <button class="th-fold" id="th-fold" type="button" onclick="toggleTelRows()" aria-expanded="false" aria-controls="telmore">详细数据 ⌄</button>
+        <div class="th-line th-line-main">
+          <div class="th-spdbox" title="行驶速度"><b id="th-spd">0</b><i>km/h</i></div>
+          <span class="th-gear" id="th-gear" title="挡位">D</span>
+          <span class="th-sig" id="th-bl" title="左转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M17 12H8.2M12.2 7.3 7.5 12l4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span class="th-wheelitem" id="th-st" title="方向盘角度与自动驾驶状态">
+            <span class="th-wheel" id="th-wheel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.6"/><path d="M3.2 10.5h6M14.8 10.5h6M12 14.6V21"/></svg></span>
+            <b class="th-ap-txt" id="th-ap">关</b>
+          </span>
+          <span class="th-sig" id="th-br" title="右转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M7 12h8.8M11.8 7.3 16.5 12l-4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        </div>
+        <div class="th-line th-line-rest">
+          <span class="th-badge th-brk" id="th-brk" title="刹车 (踩下变红, 未踩为灰)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="7.6"/><circle cx="12" cy="12" r="2.5"/><path d="M17.4 6.6l2.7-2.7"/></svg><b id="th-brk-t">刹车</b></span>
+          <span class="th-badge th-thr" id="th-thr" title="油门踏板开启度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M9.4 3.6h5.2a1.7 1.7 0 0 1 1.68 1.93l-1.35 12.3a1.8 1.8 0 0 1-1.79 1.6h-2.28a1.8 1.8 0 0 1-1.79-1.6L7.72 5.53A1.7 1.7 0 0 1 9.4 3.6z"/><path d="M8.6 15.1h6.8"/></svg><b id="th-thr-n">0%</b></span>
+          <div class="th-acc" id="th-acc" title="前后加速度"><span class="th-bar"><i id="th-bar"></i></span><span class="th-acct" id="th-acct">定速</span></div>
+          <span class="th-place" title="地址定位"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0z"/><circle cx="12" cy="10" r="2.5"/></svg><span id="th-loc">—</span></span>
+          <button class="th-fold" id="th-fold" type="button" onclick="toggleTelRows()" aria-expanded="false" aria-controls="telmore">详情 ⌄</button>
+        </div>
       </div>
       <div class="telmore" id="telmore"><div id="th-rows"></div></div>
     </div>
@@ -3683,7 +3719,7 @@ body.settings-open { overflow:hidden; }
       <div class="playtools">
         <div class="playback-help"><div class="ph-line"><span class="ph-kb-t">画面</span><span class="ph-key">单击播放/暂停</span><span class="ph-key">右半屏长按<span class="ph-hold-rate">3</span>×快进</span><span class="ph-key">左半屏长按<span class="ph-hold-rate">3</span>×快退</span></div><div class="ph-line"><span class="ph-kb-t">键盘</span><span class="ph-key">空格播放/暂停</span><span class="ph-key">长按<span class="ph-hold-rate">3</span>×快进</span><span class="ph-key">←→1s</span><span class="ph-key">↑↓10s</span></div></div>
         <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="skip-back-one" aria-label="回退一秒">−1s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next-one" aria-label="前进一秒">+1s</button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
-        <div class="viewtools"><button id="record-lock" disabled onclick="manageRecording('lock')" aria-pressed="false" title="锁定"><svg class="ic"><use href="#i-lock"/></svg><span>锁定</span></button><button id="record-delete" class="delbtn" disabled onclick="manageRecording('delete')" title="删除"><svg class="ic"><use href="#i-trash"/></svg><span>删除</span></button><button class="pdl" onclick="openExport()" title="导出"><svg class="ic"><use href="#i-download"/></svg></button><div class="qsel" id="bsel"><button class="qbtn" id="bbtn" title="画面亮度 1–10×" aria-label="画面亮度" aria-expanded="false" onclick="toggleBright(event)"><svg class="ic"><use href="#i-sun"/></svg></button><div class="bpop" id="bpop" onclick="event.stopPropagation()"><output id="bval">1.0×</output><div class="bslider"><input type="range" id="brange" min="1" max="10" step="0.1" value="1" aria-label="画面亮度" oninput="onBrightInput(this.value)" onchange="flashBright()"></div><button type="button" class="breset" onclick="setBright(1)">复位</button></div></div><button id="shotbtn" title="截屏下载" aria-label="截屏下载" onclick="captureFrame()"><svg class="ic"><use href="#i-camera"/></svg></button><div class="qsel" id="qsel"></div><select id="spdsel" aria-label="播放速度" title="播放速度" onchange="setSpeed(Number(this.value))"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
+        <div class="viewtools"><button id="record-lock" disabled onclick="manageRecording('lock')" aria-pressed="false" title="锁定"><svg class="ic"><use href="#i-lock"/></svg><span>锁定</span></button><button id="record-delete" class="delbtn" disabled onclick="manageRecording('delete')" title="删除"><svg class="ic"><use href="#i-trash"/></svg><span>删除</span></button><button class="pdl" onclick="openExport()" title="导出"><svg class="ic"><use href="#i-download"/></svg></button><div class="qsel" id="bsel"><button class="qbtn" id="bbtn" title="画面亮度 1–4×" aria-label="画面亮度" aria-expanded="false" onclick="toggleBright(event)"><svg class="ic"><use href="#i-sun"/></svg></button><div class="bpop" id="bpop" onclick="event.stopPropagation()"><output id="bval">1.0×</output><div class="bslider"><input type="range" id="brange" min="1" max="4" step="0.1" value="1" aria-label="画面亮度" oninput="onBrightInput(this.value)" onchange="flashBright()"></div><button type="button" class="breset" onclick="setBright(1)">复位</button></div></div><button id="shotbtn" title="截屏下载" aria-label="截屏下载" onclick="captureFrame()"><svg class="ic"><use href="#i-camera"/></svg></button><div class="qsel" id="qsel"></div><select id="spdsel" aria-label="播放速度" title="播放速度" onchange="setSpeed(Number(this.value))"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
       </div>
       <div id="livep" class="watch-live" hidden>
         <div class="live-row"><span id="lv-status"></span><button type="button" class="live-info" aria-label="间隔说明" onclick="this.classList.toggle('open')" data-tip="「间隔」是自动检查新片段的频率：间隔越短，新片段出现得越快，也更耗流量；选「仅手动」后只有点「立即更新」才会刷新。">i</button><button id="lv-back" onclick="backToLatest()">回到最新</button>
@@ -3850,7 +3886,7 @@ body.settings-open { overflow:hidden; }
       <div class="hint">只读解析车机 U 盘镜像（不挂载，车机可继续正常读写），把归档区还没有的文件增量复制过来，已存在的文件直接跳过。复制时显示实时速度、百分比、已复制/总量与剩余时间。同步过程中可随时停止，已复制的文件保留。</div>
       <div class="tool-actions">
         <button class="mini primary" id="arch-sync-btn" onclick="archiveSyncStart()">立即同步到归档区</button>
-        <button class="mini" id="arch-sync-stop" onclick="archiveSyncStop()" disabled>停止车机 U 盘只读同步</button>
+        <button class="mini" id="arch-sync-stop" onclick="archiveSyncStop()" disabled>停止车机U盘实时同步</button>
       </div>
       <div class="sync-progress" id="arch-sync-progress" hidden>
         <div class="sync-line"><span>状态</span><b id="arch-sync-state"><span class="spin"></span>同步中</b></div>
@@ -3990,9 +4026,9 @@ body.settings-open { overflow:hidden; }
       <label class="nrow"><span>外网默认画质</span>
         <select class="ninput" id="play-quality" onchange="playSave()">
           <option value="orig">原画 — 不转码，最清晰；码率约 5～8 Mbps，外网流量大</option>
-          <option value="720p">720p — 清晰，约 2.2 Mbps</option>
-          <option value="480p">480p — 均衡（推荐），约 1.2 Mbps</option>
-          <option value="360p">360p — 省流量，约 0.7 Mbps</option>
+          <option value="720p">720p — 清晰，约 1.5 Mbps</option>
+          <option value="480p">480p — 均衡（推荐），约 0.9 Mbps</option>
+          <option value="360p">360p — 省流量，约 0.5 Mbps</option>
         </select>
       </label>
       <div class="hint" id="play-net"></div>
@@ -4402,16 +4438,16 @@ function setQuality(q) {
   renderQSel();
   if (curClips.length) showClip(curClipIx, playbackOffset());
 }
-/* ---------- 画面亮度 1×~10× (竖向滑块, 只影响本机显示, 不改变源文件) ---------- */
+/* ---------- 画面亮度 1×~4× (竖向滑块, 只影响本机显示, 不改变源文件) ---------- */
 let vbright = 1;
 try {
   let v = parseFloat(localStorage.getItem('tsf-bright') || '1') || 1;
   if (v >= 100) v = v / 100;                    // 兼容旧版百分比 (100/110/…/200)
-  vbright = clampBright(v);                     // 越界值 (含损坏的本地存储) 一律夹到 1~10
+  vbright = clampBright(v);                     // 越界值 (含损坏的本地存储) 一律夹到 1~4
 } catch (e) { vbright = 1; }
 function clampBright(v) {
   v = Math.round((parseFloat(v) || 1) * 10) / 10;
-  return Math.min(10, Math.max(1, v));
+  return Math.min(4, Math.max(1, v));
 }
 function renderBright() {
   const range = document.getElementById('brange');
@@ -5183,6 +5219,9 @@ function render(cat) {
 
 const byId = id => document.getElementById(id);
 let camSel = 'front', baseRate = 1, wantedPlay = false, clipOffset = 0;
+/* 长按临时快进倍率: >0 时 tick 与挂载新画面都按它设置 playbackRate。
+   以前 tick 每帧把 playbackRate 写回 baseRate, 长按 3× 只闪提示不生效。 */
+let rateOverride = 0;
 let sessionId = 0, renderId = 0, lastTick = 0, editingSeek = false;
 let seekPointerStart = null;
 let prefetch = null, triggerTime = null, triggerSource = null, libraryCat = '', listScroll = 0;
@@ -5327,6 +5366,7 @@ function layoutPlayer() {
     immersive ? Math.max(160, available) : Math.max(160, Math.min(viewH * .58, available));
   grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0,1fr))';
   grid.style.gridAutoRows = Math.max(1, Math.min(width / cols * ratio, limit / rows)) + 'px';
+  layoutTelhud();
 }
 
 function toggleLibrary(show) {
@@ -5575,10 +5615,10 @@ function setCam(cam) {
 }
 
 const hlsPreview = document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
-const PREVIEW_START_SECONDS = 5;
-const PREVIEW_HD_START_SECONDS = 5;
-const PREVIEW_HD_RECOVERY_SECONDS = 5;
-const PREVIEW_HD_READ_AHEAD_SECONDS = 15;
+const PREVIEW_START_SECONDS = 10;
+const PREVIEW_HD_START_SECONDS = 10;
+const PREVIEW_HD_RECOVERY_SECONDS = 10;
+const PREVIEW_HD_READ_AHEAD_SECONDS = 25;
 function previewMime(quality) {
   return quality === '720p' ? 'video/mp4; codecs="avc1.42C01F"' : 'video/mp4; codecs="avc1.42C01E"';
 }
@@ -5643,7 +5683,7 @@ function previewStream(video, file, seconds, quality, signal, failed) {
   video.dataset.mse = '1';
   video.dataset.startBuffer = '1';
   video.dataset.previewLead = String(quality === '720p' ? PREVIEW_HD_START_SECONDS : PREVIEW_START_SECONDS);
-  const readAhead = quality === '720p' ? PREVIEW_HD_READ_AHEAD_SECONDS : 12;
+  const readAhead = quality === '720p' ? PREVIEW_HD_READ_AHEAD_SECONDS : 20;
   const source = new MediaSource(), url = URL.createObjectURL(source);
   let buffer, timer, fetching = null, stopped = false;
   let fetchingIndex = -1, fetchingPriority = 2, fetchingSeekRevision = 0;
@@ -6019,7 +6059,7 @@ function mountCell(cam, file, prepared, offset, generation, seekStartup = false)
       if (Math.abs(v.currentTime - pos) > 0.025) v.currentTime = pos;
     }
     delete v.dataset.positioning;
-    v.playbackRate = baseRate;
+    v.playbackRate = rateOverride || baseRate;
     layoutPlayer();
     if (wantedPlay) tryPlay(v);
   };
@@ -6345,6 +6385,24 @@ function syncTelWidth() {
   }
 }
 window.addEventListener('resize', syncTelWidth);
+/* 行驶信息条布局: 桌面端与全览按钮同一行靠右; 一行放不下时整条移到全览下方,
+   变成「速度/挡位/转向灯/方向盘」+「刹车/油门/加速度/地址/详情」两行。 */
+function layoutTelhud() {
+  const hud = document.getElementById('telhud');
+  if (!hud) return;
+  const wasWrap = hud.classList.contains('wrap');
+  hud.classList.remove('wrap');
+  if (!hud.classList.contains('show')) return;
+  const bar = hud.closest('.video-toolbar');
+  if (!bar) return;
+  const cam = document.getElementById('cambar');
+  const camW = cam && cam.classList.contains('show') ? cam.offsetWidth : 0;
+  const need = hud.offsetWidth + camW + 24;
+  const narrow = need > bar.clientWidth + 2;
+  hud.classList.toggle('wrap', narrow);
+  if (narrow !== wasWrap) requestAnimationFrame(syncTelWidth);
+}
+window.addEventListener('resize', layoutTelhud);
 (function watchTelWidth() {
   const hud = document.getElementById('telhud');
   if (!hud || typeof ResizeObserver === 'undefined') return;
@@ -6440,18 +6498,21 @@ function renderHud(f) {
   const th = id => document.getElementById(id);
   const md = TEL_META || {};
   if (th('th-gear')) {
-    const apTxt = apv ? (apNames[apv] || 'AP') : '';
+    const apTxt = apv ? (apNames[apv] || 'AP') : '关';
     const apBadge = th('th-ap');
-    apBadge.textContent = apTxt || 'AP';
-    apBadge.classList.toggle('on', !!apv);
-    apBadge.title = 'Autopilot：' + (apTxt || '未启用');
+    apBadge.textContent = apTxt;
+    // 方向盘状态挂在整颗胶囊上: 开启 AP 后变蓝白, 未开启保持灰底
+    th('th-st').classList.toggle('ap-on', !!apv);
+    th('th-st').title = '方向盘 ' + f[4] + '° · ' + (apv ? apTxt + ' 已启动' : '自动驾驶未启动');
     th('th-gear').textContent = f[1];
     th('th-spd').textContent = Math.max(0, Math.round(f[2]));
+    // 转向灯: 与上方隐藏面板同源, 点亮时闪烁
+    th('th-bl').classList.toggle('on', f[6] === 1);
+    th('th-br').classList.toggle('on', f[6] === 2);
     const wheel = th('th-wheel');
-    wheel.classList.toggle('ap', !!apv);
-    wheel.title = '方向盘 ' + f[4] + '° · ' + apTxt;
     wheel.querySelector('svg').style.transform = 'rotate(' + ang + 'deg)';
     th('th-brk').classList.toggle('on', !!f[5]);
+    th('th-brk-t').textContent = f[5] ? '踩下' : '刹车';
     th('th-thr-n').textContent = f[3] + '%';
     // 定位: 优先当前帧 GPS, 否则沿用事件坐标; 道路名由高德接口解析
     const fl = Number(f[8]), fn = Number(f[9]);
@@ -6491,6 +6552,7 @@ function renderHud(f) {
     th('th-acct').className = 'th-acct' + (state ? ' ' + state : '');
     th('th-acct').textContent = state === 'acc' ? '加速' : state === 'dec' ? '减速' : '定速';
     th('telhud').classList.add('show');
+    layoutTelhud();
     syncTelWidth();
     requestRoad(lat, lon);
   }
@@ -6504,7 +6566,7 @@ function renderHud(f) {
 function toggleTelRows() {
   const panel = document.getElementById('telmore'), button = document.getElementById('th-fold');
   const open = panel.classList.toggle('open');
-  button.textContent = open ? '收起详细数据 ⌃' : '详细数据 ⌄';
+  button.textContent = open ? '收起 ⌃' : '详情 ⌄';
   button.setAttribute('aria-expanded', String(open));
   layoutPlayer();
   if (open) requestAnimationFrame(syncTelWidth);
@@ -7297,7 +7359,7 @@ function tick() {
   if (lead) {
     clockVideo = lead;
     clipOffset = Math.max(clipOffset, lead.currentTime);
-    lead.playbackRate = baseRate;
+    lead.playbackRate = rateOverride || baseRate;
     for (const v of videos) {
       if (v === lead || v.ended || v.error || v.seeking || v.readyState < 2 || v.dataset.positioning) continue;
       const diff = v.currentTime - clipOffset;
@@ -7308,7 +7370,7 @@ function tick() {
           v.dataset.seekTarget = String(target);
         }
       }
-      v.playbackRate = baseRate * (Math.abs(diff) > 0.06 && Math.abs(diff) <= 0.45 ? 1 - diff * 0.2 : 1);
+      v.playbackRate = (rateOverride || baseRate) * (Math.abs(diff) > 0.06 && Math.abs(diff) <= 0.45 ? 1 - diff * 0.2 : 1);
     }
   } else if (wantedPlay) {
     const ended = videos.filter(v => v.ended);
@@ -7317,7 +7379,7 @@ function tick() {
     // still waiting for its URL must not pin the clock at that last frame.
     const onlyWaiting = videos.every(v => v.ended || v.error || v.dataset.positioning);
     if (ended.length === videos.length || (onlyWaiting && ended.length && currentClip().length - endedAt <= 0.1)) {
-      clipOffset = Math.max(endedAt, clipOffset + elapsed * baseRate);
+      clipOffset = Math.max(endedAt, clipOffset + elapsed * (rateOverride || baseRate));
     }
   }
   const remaining = currentClip().length - clipOffset;
@@ -7460,6 +7522,7 @@ try {
 function setSpeed(r) {
   r = Number(r);
   baseRate = SPEEDS.indexOf(r) >= 0 ? r : 1;
+  rateOverride = 0;
   applyRate(baseRate);
   updateControls();
   updateHoldHints();
@@ -7551,6 +7614,7 @@ function closePlayback() {
   gapSignature = ''; gapEvidence.clear();
   clearInterval(syncTimer); clearInterval(liveTimer);
   liveReading = false; atEnd = false; wantedPlay = false; editingSeek = false; overviewPosition = null;
+  rateOverride = 0;
   resetPlaybackClock();
   activeVideos().forEach(v => { v.onended = v.onerror = null; releaseVideo(v); });
   dropPrefetch();
@@ -7702,6 +7766,7 @@ function releasePictureSpeed() {
   clearInterval(pictureRewindTimer); pictureRewindTimer = 0;
   if (!pictureHolding) return;
   pictureHolding = false; suppressPictureClick = true;
+  rateOverride = 0;
   applyRate(baseRate);
   // 长按前是暂停的, 松手回到暂停; 长按前在播放的, 松手继续播放
   if (!picturePrevPlaying) pauseAll();
@@ -7720,6 +7785,7 @@ byId('vgrid').addEventListener('pointerdown', event => {
     pictureHolding = true;
     picturePrevPlaying = wantedPlay && !atEnd;
     const rate = holdRate();
+    rateOverride = rate;
     if (dir > 0) {
       if (!picturePrevPlaying) playAll();
       applyRate(rate);
@@ -7740,7 +7806,8 @@ byId('vgrid').addEventListener('pointerdown', event => {
 byId('vgrid').addEventListener('pointerup', releasePictureSpeed);
 byId('vgrid').addEventListener('pointercancel', releasePictureSpeed);
 byId('vgrid').addEventListener('pointerleave', releasePictureSpeed);
-byId('vgrid').addEventListener('contextmenu', event => { if (pictureHolding || suppressPictureClick) event.preventDefault(); });
+/* 屏蔽触摸长按的浏览器菜单/选中, 否则长按到 450ms 前就被原生菜单打断, 3× 快进不生效 */
+byId('vgrid').addEventListener('contextmenu', event => { if (curClips.length) event.preventDefault(); });
 byId('vgrid').addEventListener('click', event => {
   if (event.target.closest('button')) return;
   if (suppressPictureClick) { suppressPictureClick = false; return; }
@@ -7752,6 +7819,7 @@ function releaseSpaceHold() {
   clearTimeout(spaceHoldTimer); spaceHoldTimer = 0;
   if (!spaceHolding) return;
   spaceHolding = false;
+  rateOverride = 0;
   applyRate(baseRate);
   if (!spacePrevPlaying) pauseAll();
   else if (!wantedPlay) playAll();
@@ -7772,6 +7840,7 @@ document.addEventListener('keydown', e => {
       spaceHoldTimer = setTimeout(() => {
         spaceHolding = true;
         if (!spacePrevPlaying) playAll();
+        rateOverride = holdRate();
         applyRate(holdRate());
         flashPlayer(holdRate() + '× 快进');
       }, 450);
@@ -7861,7 +7930,7 @@ function stab(which) {
     // 外置卡管理默认折叠, 只有首次使用向导会主动展开
     const extCard = document.getElementById('storage-extcard');
     if (extCard) extCard.open = false;
-    storageLoad(); extCardInfo(); archiveScan(false);
+    storageLoad(); extCardInfo(); archiveScan(false); archiveSyncResume();
   }
   if (which === 'about') loadLogs();
 }
@@ -9130,6 +9199,21 @@ async function archiveSyncStop() {
     if (btn) btn.disabled = false;
     toast('❌ ' + e.message);
   }
+}
+/* 进入存储页时同步一次真实的同步状态: 不然刷新/换标签后按钮会一直灰着,
+   看不到正在进行的同步, 也停不掉。 */
+async function archiveSyncResume() {
+  try {
+    const j = await (await fetch('/api/archive/sync/status', { cache: 'no-store' })).json();
+    const job = j.job || {};
+    if (job.state === 'running' || job.state === 'stopped') {
+      archiveSyncPaint(job);
+      if (job.state === 'running') archiveSyncPoll();
+      return;
+    }
+  } catch (e) {}
+  const stopBtn = document.getElementById('arch-sync-stop');
+  if (stopBtn) stopBtn.disabled = true;
 }
 async function archiveMigrate(policy) {
   if (!CARD_READY) { toast('外置卡未挂载，请先在「外置卡管理」中挂载'); return; }
@@ -13322,12 +13406,12 @@ def thumb_file(fp, ss_t=1.0):
 # ---------- 在线清晰度: 按需转码 + eMMC 缓存 (设备端单任务串行, 防止重转码打崩内核) ----------
 # 源 1280x960 (4:3); 用固定目标码率: 公网 5G 上行只有 ~120KB/s, CRF 模式码率不可控会传不完
 # 8 核 T760 实测: -threads 8 + superfast 比 2 线程快一倍 (20s->10s/分钟片段), 内存峰值充足 (720p 后仍余 ~980MB)
-RES_SCALE = {"360p": (480, 360, 320), "480p": (640, 480, 500), "720p": (960, 720, 900)}  # 宽,高,kbps
+RES_SCALE = {"360p": (480, 360, 520), "480p": (640, 480, 900), "720p": (960, 720, 1500)}  # 宽,高,kbps
 # F50 转码保持单任务、默认 3 线程，与正常温控档的 3 核一致，避免六路起播时瞬时压满更多核心。
 # 内存或散热紧张时可通过 TSF_TR_THREADS 进一步降低。
 TR_THREADS = max(1, min(8, int(os.environ.get("TSF_TR_THREADS", "3"))))
 # 编码参数版本号: 参与缓存 key。改码率/帧率等参数时 +1, 旧缓存自动失效重新生成。
-RES_ENC_VER = "2"   # v2: 统一 24fps, 码率 500->320/800->500/1500->900 (4G+frp 链路 4 路同播实测扛不住旧码率)
+RES_ENC_VER = "3"   # v3: 提高码率与峰值上限 (320/500/900 -> 520/900/1500), 减少动态画面方块
 RES_DIR = TRANSCODE_DIR  # 转码缓存放在归档区内(数据卡), 删归档视频时对应缓存会自动清理
 try:
     os.makedirs(RES_DIR, exist_ok=True)
@@ -14184,6 +14268,9 @@ def _storage_run_rewrite(size, action):
     def work():
         recovery = False
         try:
+            # 调整/格式化前先停掉车机 U 盘只读同步, 否则同步还在读镜像, 重建会失败
+            if not _stop_archive_sync_wait():
+                raise ValueError('正在同步归档区，请稍后再试')
             with _storage_edit_lock, usb_lock:
                 # 网页 U 盘管理/loop 挂载会占着镜像, 直接强制卸载再继续, 不要求用户手动操作
                 _force_image_offline()
@@ -14215,6 +14302,11 @@ def _storage_run_rewrite(size, action):
                         _release_usb_flock()
             # 新镜像的用量缓存必须立刻失效, 否则面板会继续显示旧镜像的占用
             _IMG_USED_CACHE.update(t=0.0, path='', v=None)
+            # 默认目录缺失 (新卡/手动清理过) 时自动补齐, 再让车机侧看到新 U 盘
+            try:
+                ensure_dirs()
+            except OSError:
+                pass
             with _storage_job_lock:
                 _storage_job.update(state='done', message=action + '完成', percent=100, started=0.0)
         except Exception as exc:
@@ -15220,10 +15312,12 @@ def external_card_format(body):
     with _CARD_LIFECYCLE_LOCK:
         if storage_busy():
             raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
-        if _ARCH_SYNC["state"] == "running":
+        # 格式化前先停掉正在跑的车机 U 盘只读同步, 避免边写边格
+        if not _stop_archive_sync_wait():
             raise ValueError("正在同步归档区，请稍后再试")
         if usb_attached or os.path.ismount(MNT):
-            raise ValueError("请先恢复车机导出再格式化外置卡")
+            # 网页 U 盘管理正挂着镜像: 直接强制收起, 不再要求用户先手动恢复导出
+            _force_image_offline()
         _card_job_claim("format", "正在准备格式化…")
 
     def work():
@@ -15266,11 +15360,12 @@ def external_card_format(body):
             # 挂载前会先清空默认位置内的全部残留文件, 再挂新文件系统
             mounted, mount_err = _card_mount_default(dev, target)
             if was_data and mounted:
-                for sub in ("img", "archive", "logs"):
-                    try:
-                        os.makedirs(os.path.join(VIDEO_ROOT, sub), exist_ok=True)
-                    except OSError:
-                        pass
+                # 新文件系统是空的: 把镜像/归档/缓存等默认目录自动建好,
+                # 用户不用再手动建目录 (与首次安装的目录结构一致)
+                try:
+                    ensure_dirs()
+                except OSError:
+                    pass
             if mounted:
                 _card_job_set(state="done", message="格式化完成（ext4），已挂载到默认位置 %s" % target)
             else:
@@ -15390,8 +15485,9 @@ def external_card_unmount(body):
     with _CARD_LIFECYCLE_LOCK:
         if storage_busy():
             raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
-        if _ARCH_SYNC["state"] == "running":
-            raise ValueError("正在同步归档区，请先等待同步结束或稍后再卸载")
+        # 卸载前先停掉车机 U 盘只读同步, 否则同步进程还在读卡, 卡卸不干净
+        if not _stop_archive_sync_wait():
+            raise ValueError("正在同步归档区，请稍后再卸载")
         _card_job_claim("unmount", "正在刷盘并强制卸载 %s…" % dev)
     try:
         root = os.path.abspath(VIDEO_ROOT)
@@ -15623,10 +15719,26 @@ class _ArchiveSyncStopped(Exception):
 def archive_sync_stop():
     """停止正在运行的车机 U 盘只读同步; 迁移任务不受影响。"""
     if _ARCH_SYNC["state"] != "running" or _ARCH_SYNC.get("kind") != "sync":
-        return {"ok": True, "msg": "当前没有正在进行的只读同步", "job": dict(_ARCH_SYNC)}
+        return {"ok": True, "msg": "当前没有正在进行的实时同步", "job": dict(_ARCH_SYNC)}
     _ARCH_SYNC["stop"] = True
     _ARCH_SYNC["message"] = "正在停止…"
-    return {"ok": True, "msg": "正在停止同步", "job": dict(_ARCH_SYNC)}
+    return {"ok": True, "msg": "正在停止实时同步", "job": dict(_ARCH_SYNC)}
+
+
+def _stop_archive_sync_wait(timeout=30):
+    """卡操作 (卸载/格式化/调整 U 盘) 前协作式停掉只读同步并等它退出。
+
+    迁移任务不支持中途停止, 返回 False 让调用方提示稍后再试。"""
+    if _ARCH_SYNC["state"] != "running":
+        return True
+    if _ARCH_SYNC.get("kind") != "sync":
+        return False
+    _ARCH_SYNC["stop"] = True
+    _ARCH_SYNC["message"] = "正在停止同步以执行外置卡操作…"
+    deadline = time.time() + timeout
+    while _ARCH_SYNC["state"] == "running" and time.time() < deadline:
+        time.sleep(0.2)
+    return _ARCH_SYNC["state"] != "running"
 
 
 def archive_sync_start():
@@ -15640,6 +15752,13 @@ def archive_sync_start():
         raise ValueError("正在进行外置卡测速，已暂停所有同步写入，请测速结束后再试")
     if not usb_img_ready():
         raise ValueError("镜像未就绪: 车机可能正在格式化 U 盘，请稍后再试")
+    # 归档区默认目录缺失 (新卡/首次同步/手动删过) 时自动建立, 不必用户手动建目录
+    try:
+        os.makedirs(ARCHIVE, exist_ok=True)
+        for cat in CATS:
+            os.makedirs(os.path.join(ARCHIVE, cat), exist_ok=True)
+    except OSError as exc:
+        raise ValueError("无法创建归档目录 %s：%s" % (ARCHIVE, exc))
     mod = _live_sync_module()
     ex, cur, tasks, total = _archive_sync_plan(mod)
     try:
@@ -15732,7 +15851,7 @@ def archive_sync_start():
                               message="同步完成，复制 %d 个文件（%s）" % (copied, _fmt_size(total)))
         except _ArchiveSyncStopped:
             _ARCH_SYNC.update(state="stopped", failed=failed,
-                              message="已停止只读同步（已复制的文件已保留）")
+                              message="已停止实时同步（已复制的文件已保留）")
         except Exception as ex2:
             _ARCH_SYNC.update(state="error", failed=failed, message=str(ex2)[:200])
         finally:
@@ -18686,8 +18805,8 @@ def get_variant(fp, qv, slot=True, wanted=None, jobs=None):
                "-filter_threads", "1", "-threads", str(TR_THREADS), "-i", fp,
                "-vf", "scale=%d:%d,fps=24" % (w, h),
                *enc_args, "-threads:v", str(TR_THREADS),
-               "-b:v", "%dk" % kbps, "-maxrate", "%dk" % (kbps * 3 // 2),
-               "-bufsize", "%dk" % (kbps * 3),
+               "-b:v", "%dk" % kbps, "-maxrate", "%dk" % (kbps * 2),
+               "-bufsize", "%dk" % (kbps * 2),
                "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
                "-progress", progress_file, "-nostats", "-f", "mp4", "-y", tmp]
         duration = probe_duration(fp) if _binary_ok(FFPROBE_BIN) else 0
@@ -18922,7 +19041,7 @@ def _encode_preview_parts(fp, quality, prefix, index, duration, transport, ahead
            *require_encoder_args("ultrafast"),
            "-pix_fmt", "yuv420p",
            "-profile:v", "baseline", "-level", level, "-threads:v", str(TR_THREADS),
-           "-b:v", "%dk" % bitrate, "-maxrate", "%dk" % (bitrate * 3 // 2), "-bufsize", "%dk" % (bitrate * 3),
+           "-b:v", "%dk" % bitrate, "-maxrate", "%dk" % (bitrate * 2), "-bufsize", "%dk" % (bitrate * 2),
            "-g", str(24 * seconds), "-sc_threshold", "0", "-force_key_frames", "expr:gte(t,n_forced*%d)" % seconds,
            "-f", "segment", "-segment_time_delta", "0.020833", "-segment_start_number", str(index)]
     if count > 1:
