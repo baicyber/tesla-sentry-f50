@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.031"
+APP_VERSION = "2026.11.27.032"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -8752,7 +8752,9 @@ async function extCardInfo() {
     const auto = document.getElementById('card-automount'), delay = document.getElementById('card-mount-delay');
     if (auto) auto.checked = !!EXT_BOOT.automount;
     if (delay) delay.value = EXT_BOOT.delay != null ? EXT_BOOT.delay : 5;
-    if (!EXT_CARD || !EXT_CARDS.some(c => c.device === EXT_CARD.device)) EXT_CARD = EXT_CARDS[0] || null;
+    // 同一张卡也要换成最新对象: 否则挂载/卸载后 EXT_CARD.mount 仍是旧值, 按钮不会实时切换
+    const sameCard = EXT_CARD ? EXT_CARDS.find(c => c.device === EXT_CARD.device) : null;
+    EXT_CARD = sameCard || EXT_CARDS[0] || null;
     extCardRender();
     applyCardGate();
   } catch (e) { if (box) box.textContent = '读取失败: ' + e; }
