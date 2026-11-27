@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.046"
+APP_VERSION = "2026.11.27.047"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3260,8 +3260,9 @@ body.settings-open { overflow:hidden; }
 #storage-usage .usage-actions { gap:8px; }
 #storage-usage .hint { margin-top:4px; }
 /* 存储分配卡片行距收紧, 一屏能看到更多设置 */
-#tab-storage .storage-row { min-height:40px; }
-#tab-storage .storage-quota h3 { margin-bottom:12px; }
+#tab-storage .storage-row { min-height:38px; }
+#tab-storage .storage-quota { padding:16px 18px; }
+#tab-storage .storage-quota h3 { margin-bottom:10px; }
 #tab-storage .storage-nested { margin-left:10px; padding-left:10px; }
 #tab-storage .storage-quota .updbtns { margin-top:8px; }
 .usage-chart-box { margin:0 0 12px; padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
@@ -3292,6 +3293,11 @@ body.settings-open { overflow:hidden; }
 #storage-retention .storage-row { max-width:420px; }
 /* 保留时间与保留事件数量两卡等高, 保存按钮统一贴底, 始终处在同一水平线 */
 #storage-retention .updbtns, #storage-event-count .updbtns { margin-top:auto; padding-top:10px; }
+/* 保留时间: 取消嵌套缩进, 所有输入框在同一列对齐 */
+#storage-retention .storage-nested { margin-left:0; padding-left:0; border-left:0; }
+#storage-retention .storage-nested .storage-row { max-width:420px; }
+/* 两张卡片等高等宽, 保存按钮贴底后始终处于同一水平线 */
+#storage-retention, #storage-event-count { display:flex; flex-direction:column; }
 #storage-prewarm .storage-row { max-width:none; grid-template-columns:minmax(0,1fr) minmax(88px,150px) minmax(0,auto); }
 /* 播放设置与转码任务并排: 等宽等高的两张卡片, 移动端自动上下排列 */
 .play-cols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; align-items:stretch; margin-top:6px; }
@@ -3916,7 +3922,7 @@ body.settings-open { overflow:hidden; }
       <div class="hint">只读解析车机 U 盘镜像（不挂载，车机可继续正常读写），把归档区还没有的文件增量复制过来，已存在的文件直接跳过。复制时显示实时速度、百分比、已复制/总量与剩余时间。同步过程中可随时停止，已复制的文件保留。</div>
       <div class="tool-actions">
         <button class="mini primary" id="arch-sync-btn" onclick="archiveSyncStart()">立即同步到归档区</button>
-        <button class="mini" id="arch-sync-stop" onclick="archiveSyncStop()" disabled>停止车机U盘实时同步</button>
+        <button class="mini" id="arch-sync-toggle" onclick="archiveSyncToggle()" disabled>开启实时同步</button>
       </div>
       <div class="sync-progress" id="arch-sync-progress" hidden>
         <div class="sync-line"><span>状态</span><b id="arch-sync-state"><span class="spin"></span>同步中</b></div>
@@ -8881,7 +8887,7 @@ function applyCardGate() {
   const off = !CARD_READY || STORAGE_LOCKED;
   ['storage-archive', 'storage-drive', 'storage-recentmax', 'storage-sentry', 'storage-saved',
    'storage-cache', 'storage-reserve', 'storage-minimum', 'storage-usb',
-   'storage-save', 'storage-resize', 'storage-format', 'arch-sync-btn'].forEach(id => {
+   'storage-save', 'storage-resize', 'storage-format', 'arch-sync-btn', 'arch-sync-toggle'].forEach(id => {
     const element = document.getElementById(id);
     if (element) element.disabled = off;
   });
@@ -9241,9 +9247,14 @@ function archiveSyncPaint(job) {
       : (job.state === 'error' ? '已中断' : (job.state === 'stopped' ? '已停止' : '同步中'));
     state.innerHTML = (job.state === 'running' ? '<span class="spin"></span>' : '') + label;
   }
-  // 停止按钮只在只读同步 (kind=sync) 运行时可用; 迁移任务不支持中途停止
-  const stopBtn = document.getElementById('arch-sync-stop');
-  if (stopBtn) stopBtn.disabled = !(job.state === 'running' && (job.kind || 'sync') === 'sync');
+  // 实时同步开关: 只读同步运行中显示「关闭实时同步」, 空闲时显示「开启实时同步」
+  const liveOn = job.state === 'running' && (job.kind || 'sync') === 'sync';
+  const tgl = document.getElementById('arch-sync-toggle');
+  if (tgl) {
+    tgl.textContent = liveOn ? '关闭实时同步' : '开启实时同步';
+    tgl.classList.toggle('primary', !liveOn);
+    tgl.disabled = !CARD_READY;
+  }
   document.getElementById('arch-sync-done').textContent = fmtBytes(done) + ' / ' + fmtBytes(total);
   document.getElementById('arch-sync-pct').textContent = (job.pct || 0) + '%';
   document.getElementById('arch-sync-fill').style.width = Math.min(100, job.pct || 0) + '%';
@@ -9265,13 +9276,31 @@ async function archiveSyncPoll() {
     document.getElementById('arch-sync-btn').disabled = false;
     document.getElementById('arch-sync-btn').textContent = job.state === 'done' ? '再同步一次' : '立即同步到归档区';
     applyCardGate();
+    archiveSyncIdlePoll();
     try { refreshLive(); } catch (e) {}
   }, 1200);
+}
+/* 空闲时也低频刷新按钮状态: 别的页面/后台任务改变了同步状态, 这里不用刷新页面也能跟上 */
+let ARCH_IDLE = null;
+function archiveSyncIdlePoll() {
+  clearInterval(ARCH_IDLE);
+  ARCH_IDLE = setInterval(async () => {
+    const panel = document.getElementById('tab-storage');
+    if (!panel || panel.style.display === 'none') return;
+    try {
+      const j = await (await fetch('/api/archive/sync/status', { cache: 'no-store' })).json();
+      const job = j.job || {};
+      archiveSyncPaint(job);
+      if (job.state === 'running') { clearInterval(ARCH_IDLE); archiveSyncPoll(); }
+    } catch (e) {}
+  }, 4000);
 }
 async function archiveSyncStart() {
   if (!CARD_READY) { toast('外置卡未挂载，请先在「外置卡管理」中挂载'); return; }
   const btn = document.getElementById('arch-sync-btn');
   if (btn) { btn.disabled = true; btn.textContent = '正在同步…'; }
+  const tgl = document.getElementById('arch-sync-toggle');
+  if (tgl) { tgl.disabled = true; tgl.textContent = '正在启动…'; }
   try {
     // 同步前先确认全盘扫描结果 (30 秒内直接复用缓存)
     await archiveScan(false);
@@ -9281,12 +9310,20 @@ async function archiveSyncStart() {
     archiveSyncPoll();
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = '立即同步到归档区'; }
+    if (tgl) { tgl.disabled = false; tgl.textContent = '开启实时同步'; }
     toast('❌ ' + e.message);
   }
 }
+/* 开启 / 关闭实时同步: 同一个按钮按当前状态切换 */
+async function archiveSyncToggle() {
+  const tgl = document.getElementById('arch-sync-toggle');
+  const running = !!tgl && tgl.textContent.indexOf('关闭') === 0;
+  if (running) await archiveSyncStop();
+  else await archiveSyncStart();
+}
 async function archiveSyncStop() {
-  const btn = document.getElementById('arch-sync-stop');
-  if (btn) btn.disabled = true;
+  const tgl = document.getElementById('arch-sync-toggle');
+  if (tgl) { tgl.disabled = true; tgl.textContent = '正在停止…'; }
   try {
     const j = await (await fetch('/api/archive/sync/stop', { method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' }, body: '{}' })).json();
@@ -9296,7 +9333,7 @@ async function archiveSyncStop() {
     // 继续轮询到 worker 真正停下, 界面才会切到「已停止」
     if ((j.job || {}).state === 'running') archiveSyncPoll();
   } catch (e) {
-    if (btn) btn.disabled = false;
+    if (tgl) tgl.disabled = false;
     toast('❌ ' + e.message);
   }
 }
@@ -9306,14 +9343,10 @@ async function archiveSyncResume() {
   try {
     const j = await (await fetch('/api/archive/sync/status', { cache: 'no-store' })).json();
     const job = j.job || {};
-    if (job.state === 'running' || job.state === 'stopped') {
-      archiveSyncPaint(job);
-      if (job.state === 'running') archiveSyncPoll();
-      return;
-    }
+    archiveSyncPaint(job);
+    if (job.state === 'running') { archiveSyncPoll(); return; }
   } catch (e) {}
-  const stopBtn = document.getElementById('arch-sync-stop');
-  if (stopBtn) stopBtn.disabled = true;
+  archiveSyncIdlePoll();
 }
 async function archiveMigrate(policy) {
   if (!CARD_READY) { toast('外置卡未挂载，请先在「外置卡管理」中挂载'); return; }
@@ -13871,9 +13904,69 @@ def _storage_wait_for_job(timeout=20.0):
         time.sleep(0.3)
 
 
+def _heal_storage_paths():
+    """修复重启后「卡已挂载却提示镜像未就绪」。
+
+    旧版把 img/archive 直接放在卡根目录 (/mnt/sdcard/img), 新版统一到
+    /mnt/sdcard/tesla-sentry。开机时若按旧路径建目录, 卡上就会多出空的
+    img/archive, 而真实镜像在另一种布局里。这里检测「配置的镜像不存在、
+    另一种布局有真实镜像」时自动切换, 并把新路径写回 /etc/tesla-sentry.conf。
+    """
+    global VIDEO_ROOT, IMG, ARCHIVE, SKIN_DIR, AUDIO_Q, AUDIO_DONE, FILES_DIR
+    global TRANSCODE_DIR, PRUNED_FILE, DRIVE_STATE
+    if not card_data_ready():
+        return
+    try:
+        if os.path.isfile(IMG) and os.path.getsize(IMG) > (1 << 20):
+            return
+    except OSError:
+        pass
+    root = (VIDEO_ROOT or DEFAULT_VIDEO_ROOT).rstrip("/") or DEFAULT_VIDEO_ROOT
+    candidates = []
+    if os.path.basename(root) == "tesla-sentry":
+        candidates.append(os.path.dirname(root))
+    else:
+        candidates.append(os.path.join(root, "tesla-sentry"))
+    candidates.append(DEFAULT_VIDEO_ROOT)
+    for cand in candidates:
+        cand = (cand or "").rstrip("/")
+        if not cand or os.path.abspath(cand) == os.path.abspath(root):
+            continue
+        img = os.path.join(cand, "img", "teslacam.img")
+        try:
+            if not (os.path.isfile(img) and os.path.getsize(img) > (1 << 20)):
+                continue
+        except OSError:
+            continue
+        VIDEO_ROOT = cand
+        IMG = img
+        ARCHIVE = os.path.join(cand, "archive")
+        SKIN_DIR = os.path.join(ARCHIVE, ".skins")
+        AUDIO_Q = os.path.join(ARCHIVE, "boombox-queue")
+        AUDIO_DONE = os.path.join(ARCHIVE, "boombox-done")
+        FILES_DIR = os.path.join(ARCHIVE, "files")
+        TRANSCODE_DIR = os.path.join(ARCHIVE, "transcode_cache")
+        PRUNED_FILE = os.path.join(ARCHIVE, ".pruned")
+        DRIVE_STATE = os.path.join(ARCHIVE, ".drive-retention.json")
+        for key, value in (("TSF_VIDEO_ROOT", VIDEO_ROOT), ("TSF_IMG", IMG),
+                           ("TSF_ARCHIVE", ARCHIVE), ("TSF_TRANSCODE_DIR", TRANSCODE_DIR)):
+            os.environ[key] = value
+        try:
+            sync_conf({"TSF_VIDEO_ROOT": VIDEO_ROOT, "TSF_IMG": IMG,
+                       "TSF_ARCHIVE": ARCHIVE, "TSF_TRANSCODE_DIR": TRANSCODE_DIR})
+        except (OSError, ValueError):
+            pass
+        return
+
+
 def _ensure_storage_dirs():
     """镜像目录 / 归档 / 转码缓存可能被手动删掉, 也可能是新卡第一次使用:
     查状态与格式化、调整前自动补建, 避免 statvfs/open 直接报 No such file or directory。"""
+    # 卡还没挂载时 /mnt/sdcard 只是 rootfs 目录: 这时建目录既会在卡挂载后被隐藏,
+    # 也会让开机早期按错误路径判断; 等卡就绪后再补建。
+    if VIDEO_ROOT.startswith(("/mnt/", "/media/")) and not card_data_ready():
+        return
+    _heal_storage_paths()
     for d in (os.path.dirname(IMG), ARCHIVE, TRANSCODE_DIR):
         if not d:
             continue

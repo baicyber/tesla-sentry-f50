@@ -395,9 +395,17 @@ class Installer:
             if old_tc.endswith('/.transcode'):
                 old['TSF_TRANSCODE_DIR'] = old_tc[:-len('/.transcode')] + '/transcode_cache'
                 print('迁移 TSF_TRANSCODE_DIR: %s -> %s' % (old_tc, old['TSF_TRANSCODE_DIR']))
-            # 2) 缺 VIDEO_ROOT 但有 ARCHIVE → 反推
+            # 2) 缺 VIDEO_ROOT 但有 ARCHIVE → 反推; 旧版把 img/archive 直接放在卡根,
+            #    新版统一到 <卡>/tesla-sentry, 镜像在后者时优先采用新布局
             if not old.get('TSF_VIDEO_ROOT') and old.get('TSF_ARCHIVE'):
-                old['TSF_VIDEO_ROOT'] = str(Path(old['TSF_ARCHIVE']).parent)
+                root = Path(old['TSF_ARCHIVE']).parent
+                alt = root / 'tesla-sentry'
+                if (alt / 'img' / 'teslacam.img').is_file() and not (root / 'img' / 'teslacam.img').is_file():
+                    root = alt
+                    old['TSF_IMG'] = str(root / 'img' / 'teslacam.img')
+                    old['TSF_ARCHIVE'] = str(root / 'archive')
+                    old['TSF_TRANSCODE_DIR'] = str(root / 'archive' / 'transcode_cache')
+                old['TSF_VIDEO_ROOT'] = str(root)
                 print('从旧 TSF_ARCHIVE 推导 TSF_VIDEO_ROOT = %s' % old['TSF_VIDEO_ROOT'])
             # 3) 其他键继承 (用户改过的 PORT / IDLE / GADGET / FFMPEG 等不被覆盖)
             #    排除视频路径四键 —— 让 install 自己的派生逻辑保持确定性
