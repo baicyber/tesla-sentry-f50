@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.044"
+APP_VERSION = "2026.11.27.045"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3246,17 +3246,22 @@ body.settings-open { overflow:hidden; }
 .usage-row.nested { margin:0 0 9px; padding-left:0; border-left:0; }
 .usage-row.nested:last-child { margin-bottom:0; }
 .usage-row.free { margin:0; padding-top:12px; border-top:1px solid var(--line); }
-/* 实际用量: 字号与行高对齐左侧容量设置, 行数撑满整张卡片 */
-#storage-usage .storage-usage { flex:1 1 auto; display:flex; flex-direction:column; margin:12px 0 0; font-size:14px; }
-#storage-usage .usage-row { flex:1 1 auto; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; column-gap:10px; row-gap:4px;
-  margin:0; padding:8px 0; min-height:48px; font-size:14px; border-bottom:1px solid var(--line); }
+/* 实际用量: 字号与行高对齐左侧容量设置; 条目靠上排列, 间隔均匀, 不拉伸填满整卡 */
+#storage-usage .storage-usage { flex:0 1 auto; display:flex; flex-direction:column; gap:7px; margin:10px 0 0; font-size:14px; }
+#storage-usage .usage-row { flex:0 0 auto; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; column-gap:10px; row-gap:3px;
+  margin:0; padding:6px 0; min-height:0; font-size:14px; border-bottom:1px solid var(--line); }
 #storage-usage .usage-row > span:first-child { font-size:14px; }
 #storage-usage .usage-row meter { grid-column:1 / -1; width:100%; }
-#storage-usage .usage-group { flex:1 1 auto; display:flex; flex-direction:column; margin:0; padding-left:12px; border-left:1px solid var(--line); }
-#storage-usage .usage-group .usage-row { border-bottom:0; min-height:44px; }
+#storage-usage .usage-group { flex:0 0 auto; display:flex; flex-direction:column; gap:4px; margin:0; padding-left:12px; border-left:1px solid var(--line); }
+#storage-usage .usage-group .usage-row { border-bottom:0; min-height:0; }
 #storage-usage .usage-row.free { border-bottom:0; border-top:1px solid var(--line); }
 #storage-usage .usage-actions { gap:8px; }
-#storage-usage .hint { margin-top:8px; }
+#storage-usage .hint { margin-top:4px; }
+/* 存储分配卡片行距收紧, 一屏能看到更多设置 */
+#tab-storage .storage-row { min-height:40px; }
+#tab-storage .storage-quota h3 { margin-bottom:12px; }
+#tab-storage .storage-nested { margin-left:10px; padding-left:10px; }
+#tab-storage .storage-quota .updbtns { margin-top:8px; }
 .usage-chart-box { margin:0 0 12px; padding:14px 18px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .usage-chart-row { display:flex; align-items:center; gap:10px; margin:0 0 10px; }
 .usage-chart-row:last-of-type { margin-bottom:0; }
@@ -3306,10 +3311,8 @@ body.settings-open { overflow:hidden; }
 #tab-storage .storage-row.cap .storage-help { align-self:center; }
 /* 设置说明跟在文字描述右边, 宽度不够时自动换到描述下方, 不会被输入框/按钮遮挡 */
 .cap-label { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 8px; min-width:0; }
-/* 归档区总上限的标题和其他条目同样大小; 说明统一放到该行下方, 不再挤在标题右侧 */
+/* 归档区总上限的标题和其他条目同样大小; 预算/不设上限说明贴在标题右侧 */
 .cap-label > label { font-size:14px; }
-.cap-notes { margin:-2px 0 8px; }
-.cap-notes .hint { margin:2px 0; }
 .cap-note { color:var(--muted); font-size:11.5px; line-height:1.4; font-weight:400; }
 @media (pointer:coarse) {
   #tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) 76px minmax(0,auto) 44px; gap:4px; }
@@ -3847,19 +3850,13 @@ body.settings-open { overflow:hidden; }
     </div>
     <div class="hint card-gate-note" id="card-gate-note" role="status" hidden>外置卡未检测到或未挂载：车机 U 盘容量设定、格式化、归档区设定、同步管理与一键迁移已暂停。请先在上方「外置卡管理」中挂载外置卡。</div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
-    <div class="storage-row cap"><div class="cap-label"><label for="storage-archive">归档区总上限</label></div><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
-    <div class="cap-notes">
-      <div class="hint" id="archive-limit-note" hidden></div>
-      <div class="hint" id="storage-budget" role="status"></div>
-    </div>
+    <div class="storage-row cap"><div class="cap-label"><label for="storage-archive">归档区总上限</label><span class="cap-note" id="archive-limit-note" hidden></span><span class="cap-note" id="storage-budget" role="status"></span></div><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
     <div class="storage-nested"><div class="storage-row cap"><label for="storage-drive">其中：驾驶记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="驾驶记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row cap"><label for="retention-recentmax">其中：实时滚动记录上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="实时滚动记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div>
     <div class="storage-row cap"><label for="storage-sentry">其中：哨兵上限</label><input class="ninput" id="storage-sentry" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="哨兵录像上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="sentrymax">?</button></div>
     <div class="storage-row cap"><label for="storage-saved">其中：手动保存上限</label><input class="ninput" id="storage-saved" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="手动保存上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="savedmax">?</button></div>
     <div class="storage-row cap"><label for="storage-cache">其中：转码缓存上限</label><input class="ninput" id="storage-cache" type="number" min="1" max="64" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="转码缓存上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="cachemax">?</button></div></div>
     <div class="storage-row cap"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
-    <div class="hint" id="storage-reserve-hint">建议预留整卡的 10%（动态按卡容量计算）：用于垃圾回收与磨损均衡，避免外置卡写入放大导致使用寿命缩短。</div>
-    <div class="storage-nested"><div class="storage-row cap"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
-    <div class="hint">建议 4 G：存储卡空闲低于该值时暂停新增同步，等待清理释放空间。</div></div>
+    <div class="storage-nested"><div class="storage-row cap"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div></div>
     <div class="updbtns"><button class="mini primary" id="storage-save" onclick="storageSave()" disabled>保存归档设置</button><button class="mini" onclick="storageLoad()">重新加载</button></div>
     <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
     <div class="storage-split"></div>
@@ -8257,9 +8254,10 @@ function storageSyncArchiveLimit() {
   const usb = document.getElementById('storage-usb');
   const card = Number(storageData.disk.total_bytes) / 1073741824;
   const usbLimit = Number(usb.value);
+  const reserveLimit = Number(document.getElementById('storage-reserve').value) || 0;
   if (!archive || !usb || !Number.isFinite(card) || !Number.isFinite(usbLimit)) return;
-  // 所有上限均为整数 G；向下取整，避免看似很小的尾数也突破整卡硬边界。
-  const archiveCap = Math.max(0, Math.floor(card - usbLimit));
+  // 归档总上限硬边界: 整卡容量 - 安全预留 (安全预留是必须保留的空闲空间)
+  const archiveCap = Math.max(0, Math.floor(card - reserveLimit));
   archive.max = String(archiveCap);
   let archiveLimit = Number(archive.value);
   if (Number.isFinite(archiveLimit) && archiveLimit > archiveCap) {
@@ -8300,6 +8298,8 @@ function storageRenderAllocation() {
   }
   if (budgetText.dataset.invalid === 'true') { budgetText.dataset.invalid = 'false'; storageMessage(''); }
   const budget = storageData.disk.budget_bytes / 1073741824;
+  const cardGb = Number(storageData.disk.total_bytes) / 1073741824;
+  const reserveMin = cardGb > 0 ? Math.max(4, Math.round(cardGb * 0.10)) : 1;
   const unlimited = values.archive === 0;          // 0 = 不设上限, 只受磁盘空闲保护线约束
   const allocated = values.usb + values.archive + values.reserve;
   values.free = Math.max(0, budget - allocated);
@@ -8309,6 +8309,7 @@ function storageRenderAllocation() {
   const resizeAllocated = values.usb + Math.min(unlimited ? actualArchive : values.archive, actualArchive)
     + values.reserve;
   if (!unlimited && values.drive > values.archive) { message = '驾驶记录上限不能超过归档总上限'; blocking = true; }
+  else if (values.reserve < reserveMin) { message = '安全预留不能低于整卡的 10%（' + reserveMin + ' G）'; blocking = true; }
   else if (values.minimum > values.reserve) { message = '暂停同步保护线不能高于安全预留'; blocking = true; }
   else if (!unlimited && allocated > budget && resizeAllocated <= budget)
     message = '归档上限预留超出 ' + (allocated - budget).toFixed(1) + ' G，但按归档实际占用仍可调整 U 盘容量';
@@ -8331,14 +8332,6 @@ function storageRenderUsage() {
   const {disk, values, usb_gib} = storageData;
   const G = 1073741824;
   const gb = (bytes) => (bytes || 0) / G;
-  // 安全预留建议: 按整卡容量动态显示 10% 对应多少 G
-  const reserveHint = document.getElementById('storage-reserve-hint');
-  if (reserveHint) {
-    const totalGb = Math.max(0, (disk.total_bytes || 0) / G);
-    const rec = totalGb > 0 ? Math.max(4, Math.round(totalGb * 0.10)) : 0;
-    reserveHint.textContent = '建议预留整卡的 10%' + (rec ? '（约 ' + rec + ' G）' : '')
-      + '：用于垃圾回收与磨损均衡，避免外置卡写入放大导致使用寿命缩短。';
-  }
   // 外置卡未挂载: 所有容量数字直接显示 -, 不要拿 /mnt 所在 eMMC 的容量冒充
   if (disk.disk_ready === false) {
     for (const name of ['usb', 'archive', 'drive', 'recent', 'sentry', 'saved', 'cache']) {
@@ -8461,6 +8454,12 @@ async function storageLoad() {
     else if (diskReady) usbInput.value = Math.max(1, Math.min(64, Math.floor(totalBytes / 1073741824 / 2)));
     if (data.prewarm) for (const [id, key] of [['prewarm-sentry','prewarm_sentry'],['prewarm-saved','prewarm_saved']]) document.getElementById(id).value = data.prewarm[key];
     for (const [id, key] of [['archive','archive_gib'],['drive','drive_gib'],['reserve','free_target_gib'],['minimum','free_min_gib']]) document.getElementById('storage-' + id).value = data.values[key];
+    // 安全预留强制执行整卡 10% 下限 (至少 4 G), 不允许填更小
+    const totalGb = diskReady ? Math.floor(totalBytes / 1073741824) : 0;
+    const reserveMin = totalGb > 0 ? Math.max(4, Math.round(totalGb * 0.10)) : 1;
+    const reserveInput = document.getElementById('storage-reserve');
+    reserveInput.min = String(reserveMin);
+    if (totalGb > 0 && Number(reserveInput.value) < reserveMin) reserveInput.value = String(reserveMin);
     if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['sentrydays','sentry_keep_days'],['saveddays','saved_keep_days']]) document.getElementById('retention-' + id).value = data.retention[key];
     if (data.retention) for (const [id, key] of [['sentrycount','sentry_max_events'],['savedcount','saved_max_events'],['drivecount','drive_max_events']]) { const el = document.getElementById('retention-' + id); if (el) el.value = data.retention[key]; }
     if (data.retention) {
@@ -13906,13 +13905,18 @@ def storage_status():
         for k in ('total_bytes', 'used_bytes', 'free_bytes', 'budget_bytes'):
             if k in disk:
                 disk[k] = 0
-    # 首次使用还没有 storage.json: 安全预留默认取整卡的 10%（至少 4G）,
-    # 用于垃圾回收和磨损均衡, 比固定 10G 更适配 32G/64G/128G 不同容量。
-    if (disk['disk_ready'] and not os.path.isfile(storage_allocation.settings_path())
-            and disk['total_bytes'] > 0):
+    # 安全预留是硬性下限: 至少整卡容量的 10% (4G 起), 用于垃圾回收与磨损均衡;
+    # 归档总上限不得超过 整卡容量 - 安全预留。旧配置偏低时按新规则抬到下限。
+    if disk['disk_ready'] and disk['total_bytes'] > 0:
         total_gib = int(disk['total_bytes'] // storage_allocation.GIB)
-        if total_gib > 0:
-            values['free_target_gib'] = max(4, int(round(total_gib * 0.10)))
+        reserve_min = max(4, int(round(total_gib * 0.10)))
+        if values['free_target_gib'] < reserve_min:
+            values['free_target_gib'] = reserve_min
+        if values['free_min_gib'] > values['free_target_gib']:
+            values['free_min_gib'] = values['free_target_gib']
+        archive_cap = max(0, total_gib - values['free_target_gib'])
+        if values['archive_gib'] and values['archive_gib'] > archive_cap:
+            values['archive_gib'] = archive_cap
     disk['usb_used_bytes'] = _exfat_used(IMG)
     disk['usb_ready'] = disk['usb_used_bytes'] is not None
     # 实际用量分项。四类录像之间用硬链接共享同一段视频, 必须共用 seen 集合,
@@ -14350,6 +14354,17 @@ def storage_apply(body):
         if body.get('revision') != current['revision']:
             return dict(ok=False, msg='存储配置已变化，请重新加载', conflict=True)
         values = storage_allocation.validate_values(body['values'], current['usb_gib'])
+        # 服务端再兜一次: 安全预留至少整卡 10%, 归档上限不超过 整卡 - 安全预留
+        total_gib = int(current['disk'].get('total_bytes', 0) // storage_allocation.GIB)
+        if total_gib > 0:
+            reserve_min = max(4, int(round(total_gib * 0.10)))
+            if values['free_target_gib'] < reserve_min:
+                raise ValueError('安全预留不能低于整卡容量的 10%%（%d G）' % reserve_min)
+            if values['free_min_gib'] > values['free_target_gib']:
+                raise ValueError('暂停同步保护线不能高于安全预留')
+            if values['archive_gib'] and values['archive_gib'] > total_gib - values['free_target_gib']:
+                raise ValueError('归档区总上限不能超过整卡容量减安全预留（%d G）'
+                                 % (total_gib - values['free_target_gib']))
         # 预留也要算上缓存上限, 否则归档上限+镜像+安全预留刚好占满时缓存会把盘写满
         storage_allocation.check_budget(values, current['usb_gib'], current['disk'],
                                         cache_gib=load_settings().get('cache_max_gb', 5))
