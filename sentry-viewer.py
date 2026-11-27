@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.038"
+APP_VERSION = "2026.11.27.039"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -8268,11 +8268,17 @@ function storageRenderUsage() {
   const sentryLimit = inputNum('storage-sentry', storageData.retention ? storageData.retention.sentry_max_gb : 0);
   const savedLimit = inputNum('storage-saved', storageData.retention ? storageData.retention.saved_max_gb : 0);
   const cacheLimit = inputNum('storage-cache', storageData.retention ? storageData.retention.cache_max_gb : 0);
+  const cardGb = gb(disk.total_bytes);
+  const reserveGb = inputNum('storage-reserve', values.free_target_gib);
+  const availableArchive = Math.max(0, cardGb - usbLimit - reserveGb);
+  // 「不限制」时上限位显示最多可分配的容量, 例如「12.3 / 140.0 G（无限制）」
+  const capLabel = (limit) => limit > 0 ? limit + ' G'
+    : (Math.round(availableArchive * 10) / 10).toFixed(1) + ' G（' + t('无限制') + '）';
   // 实际用量的限额文字与容量条都读容量设置输入框, 改上限时同步变化
   for (const [name, used, limit] of [['usb', disk.usb_used_bytes, usbLimit], ['archive', disk.archive_bytes, archiveLimit], ['drive', disk.drive_bytes, driveLimit], ['recent', disk.recent_bytes, recentLimit], ['sentry', disk.sentry_bytes, sentryLimit], ['saved', disk.saved_bytes, savedLimit], ['cache', disk.cache_bytes, cacheLimit]]) {
     const notReady = name === 'usb' && disk.usb_ready === false;
     const amount = notReady ? t('未就绪') : (used == null ? '—' : (used / G).toFixed(1));
-    document.getElementById('storage-used-' + name).textContent = amount + ' / ' + (limit > 0 ? limit + ' G' : t('无限制'));
+    document.getElementById('storage-used-' + name).textContent = amount + ' / ' + capLabel(limit);
     const meter = document.getElementById('storage-meter-' + name);
     if (!meter) continue;
     meter.hidden = notReady || used == null || !(limit > 0);
@@ -8282,10 +8288,7 @@ function storageRenderUsage() {
   const otherOutput = document.getElementById('storage-used-other');
   if (otherOutput) otherOutput.textContent = disk.other_bytes == null ? '—' : (disk.other_bytes / G).toFixed(2) + ' G';
   // 单行整卡只画设定容量，不用实际占用叠加；归档不限量时最多占满扣除 U 盘与安全预留后的空间。
-  const cardGb = gb(disk.total_bytes);
-  const reserveGb = inputNum('storage-reserve', values.free_target_gib);
   const unlimited = archiveLimit <= 0;
-  const availableArchive = Math.max(0, cardGb - usbLimit - reserveGb);
   const archCap = unlimited ? availableArchive : Math.min(archiveLimit, availableArchive);
   const freeGb = Math.max(0, cardGb - usbLimit - archCap - reserveGb);
   const bar = document.getElementById('usage-chart');
