@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.025"
+APP_VERSION = "2026.11.27.026"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -8092,7 +8092,7 @@ window.addEventListener('resize', storageHelpClose);
 document.querySelector('.settings-content').addEventListener('scroll', storageHelpClose);
 function storageDisable(disabled) {
   STORAGE_LOCKED = !!disabled;
-  document.querySelectorAll('#tab-storage input, #storage-save, #storage-resize, #storage-format, #retention-save, #retention-count-save, #paths-save, #paths-reset-all').forEach(element => element.disabled = disabled);
+  document.querySelectorAll('#tab-storage input, #tab-storage .path-reset, #storage-save, #storage-resize, #storage-format, #retention-save, #retention-count-save, #paths-save, #paths-reset-all').forEach(element => element.disabled = disabled);
   applyCardGate();
 }
 function storageMessage(message, resize = false) {
@@ -13633,13 +13633,13 @@ def save_retention(body):
             continue
         value = body[name]
         if isinstance(value, bool):
-            raise ValueError('时间限制须为整数')
+            raise ValueError('保留设置须为整数')
         try:
             value = int(value)
         except (TypeError, ValueError):
-            raise ValueError('时间限制须为整数')
+            raise ValueError('保留设置须为整数')
         if not low <= value <= high:
-            raise ValueError('时间限制超出范围（%s 须为 %d～%d）' % (name, low, high))
+            raise ValueError('保留设置超出范围（%d～%d）' % (low, high))
         current[name] = value
     save_settings(current)
     refresh_storage_settings()
@@ -15992,31 +15992,35 @@ class DriveArchive:
                     and _ev_dt(event["name"])
                     and not os.path.islink(os.path.join(retained, event["name"]))]
 
-        def drop(event):
+        def drop(event, need_size=True):
             name = event["name"]
             path = os.path.join(retained, name)
-            size = _dir_size(path)
+            size = _dir_size(path) if need_size else 0
             if not _tombstone("DriveClips", name):
                 raise OSError("无法记录驾驶记录清理状态")
             shutil.rmtree(path)
             return size
 
         removed = 0
-        # 1) 事件数量: 从最旧片段逐个删, 保留最新一个
+        limit = DRIVE_MAX_GB * (1 << 30)
+        # 1) 事件数量: 从最旧片段逐个删, 始终保留最新一个
         if max_events > 0:
             ordered = sorted(events_now(), key=lambda event: event["name"])
             total = len(ordered)
+            newest = ordered[-1]["name"] if ordered else None
             for event in ordered:
                 if total <= max_events:
                     break
+                if event["name"] == newest:     # 最新片段永远保留
+                    continue
                 if "DriveClips/" + event["name"] in locks:
                     continue
-                used -= drop(event)
+                # 没有容量上限时不必统计目录大小, 省一次目录遍历
+                used -= drop(event, limit > 0)
                 total -= 1
                 removed += 1
 
         # 2) 容量: 优先整段行程淘汰, 最新行程只保留最后一片
-        limit = DRIVE_MAX_GB * (1 << 30)
         if limit > 0 and used > limit:
             trips = list(reversed(drive_groups(events_now())))
             for index, trip in enumerate(trips):
@@ -16350,18 +16354,24 @@ def roll_category(cat, keep_days, max_gb, max_events=0):
             if not os.path.isdir(p):
                 total -= sz
                 n += 1
-    if max_events > 0 and rows:
-        for _dt, e, p, _sz in list(rows):
-            if len(rows) <= max_events:
-                break
-            if p == rows[-1][2]:            # 最新事件同样保留
-                continue
-            if cat + '/' + e in locks or not _tombstone(cat, e):
-                continue
-            shutil.rmtree(p, ignore_errors=True)
-            if not os.path.isdir(p):
-                rows = [row for row in rows if row[2] != p]
-                n += 1
+    if max_events > 0:
+        # 体积清理删掉的事件还在 rows 里, 先剔除再统计数量, 避免重复写墓碑 / 重复计数
+        if max_gb > 0:
+            rows = [row for row in rows if os.path.isdir(row[2])]
+        if rows:
+            newest = rows[-1][2]
+            remaining = len(rows)
+            for _dt, e, p, _sz in rows:
+                if remaining <= max_events:
+                    break
+                if p == newest:                 # 最新事件同样保留
+                    continue
+                if cat + '/' + e in locks or not _tombstone(cat, e):
+                    continue
+                shutil.rmtree(p, ignore_errors=True)
+                if not os.path.isdir(p):
+                    remaining -= 1
+                    n += 1
     return n
 
 
