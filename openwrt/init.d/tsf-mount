@@ -11,6 +11,16 @@ set -a
 set +a
 UUID=${TSF_CARD_UUID:-}
 MNT=${TSF_CARD_MNT:-/mnt/sdcard}
+# 挂载点防呆: 旧配置若指向系统目录, 覆盖挂载会让设备不可用
+case "$MNT" in
+    /|/mnt|/bin|/bin/*|/boot|/boot/*|/dev|/dev/*|/etc|/etc/*|/home|/home/*|\
+    /lib|/lib/*|/lib64|/lib64/*|/opt|/opt/*|/overlay|/overlay/*|/proc|/proc/*|\
+    /rom|/rom/*|/root|/root/*|/sbin|/sbin/*|/sys|/sys/*|/tmp|/tmp/*|\
+    /usr|/usr/*|/var|/var/*|/www|/www/*)
+        logger -t tsf-mount "挂载点 $MNT 不合法, 回退到 /mnt/sdcard"
+        MNT=/mnt/sdcard
+        ;;
+esac
 TSF_DIR=${TSF_DIR:-/opt/tesla-sentry}
 . "$TSF_DIR/tsf-storage.sh" || exit 1
 

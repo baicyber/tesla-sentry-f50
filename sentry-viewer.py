@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.026"
+APP_VERSION = "2026.11.27.027"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -8709,7 +8709,7 @@ function extCardMountBtnSync() {
   button.textContent = mounted ? '卸载' : '挂载';
   // 卸载是强制操作, 与普通按钮区分; 未检测到卡时不可点
   button.classList.toggle('tool-danger', mounted);
-  button.disabled = !EXT_CARD;
+  button.disabled = !EXT_CARD || STORAGE_LOCKED;
   button.title = mounted ? '强制卸载并刷盘，确保拔卡安全' : '挂载到默认位置 /mnt/sdcard';
 }
 function extCardRender() {
@@ -14185,10 +14185,16 @@ def storage_start_resize(body):
                                                cache_gib=load_settings().get('cache_max_gb', 5))
         if not os.path.isfile(IMG):
             # 全新安装还没有镜像: 首次设置时直接创建, 不走「清空旧镜像」流程
-            return _storage_create_image(int(size))
+            with _CARD_LIFECYCLE_LOCK:
+                if _card_job_running():
+                    raise ValueError('正在挂载/卸载/格式化外置卡，请稍后再试')
+                return _storage_create_image(int(size))
         if size * storage_allocation.GIB == current['disk']['usb_bytes']:
             raise ValueError('U 盘容量未改变')
-        return _storage_run_rewrite(size, '调整容量')
+        with _CARD_LIFECYCLE_LOCK:
+            if _card_job_running():
+                raise ValueError('正在挂载/卸载/格式化外置卡，请稍后再试')
+            return _storage_run_rewrite(size, '调整容量')
 
 
 def storage_start_format(body):
@@ -14214,11 +14220,17 @@ def storage_start_format(body):
             raise ValueError('未找到车机 U 盘镜像，请先在「调整车机 U 盘容量」中创建')
         # 保持当前容量重建; 镜像容量本身就是整数 GiB, round 只是兜底
         size = max(1, int(round(current['usb_gib'])))
-        return _storage_run_rewrite(size, '格式化 U 盘')
+        with _CARD_LIFECYCLE_LOCK:
+            if _card_job_running():
+                raise ValueError('正在挂载/卸载/格式化外置卡，请稍后再试')
+            return _storage_run_rewrite(size, '格式化 U 盘')
 
 
 # ---------------- 外置卡管理 / 归档区同步 ----------------
 _CARD_JOB_LOCK = threading.Lock()
+# 串行化「挂载/卸载/格式化/测速」与「容量重建/归档同步」的启动: 两者都会动同一张卡,
+# 只靠各自状态位检查存在竞态 (都通过检查后同时开始)。
+_CARD_LIFECYCLE_LOCK = threading.Lock()
 _CARD_JOB = {"state": "idle", "kind": "", "message": "", "write": 0.0, "read": 0.0, "pct": 0, "speed": 0.0}
 _ARCH_SYNC_LOCK = threading.Lock()
 _ARCH_SYNC = {"state": "idle", "message": "", "total": 0, "done": 0, "pct": 0, "bps": 0,
@@ -14270,6 +14282,28 @@ def card_data_ready():
         if parent == probe:
             return False
         probe = parent
+
+
+# 外置卡挂载点禁止落在这些系统目录或其子目录: 覆盖挂载会隐藏系统文件, 甚至让设备不可用
+CARD_SYSTEM_MOUNT_DIRS = ("/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64",
+                          "/opt", "/overlay", "/proc", "/rom", "/root", "/sbin",
+                          "/sys", "/tmp", "/usr", "/var", "/www")
+
+
+def _card_mount_target_ok(target):
+    """挂载点必须是普通目录路径, 不能是根目录/系统目录, 也不能覆盖当前视频存储目录。"""
+    if not target or not target.startswith("/") or ".." in target.split("/"):
+        return False
+    target = os.path.normpath(target)
+    if target in ("/", "/mnt"):
+        return False
+    for base in CARD_SYSTEM_MOUNT_DIRS:
+        if target == base or target.startswith(base + "/"):
+            return False
+    root = os.path.abspath(VIDEO_ROOT) if VIDEO_ROOT else ""
+    if root and (target == root or target.startswith(root.rstrip("/") + "/")):
+        return False
+    return True
 
 
 def _blkid(path, field="TYPE"):
@@ -14352,10 +14386,13 @@ def card_boot_config():
         delay = int(os.environ.get("TSF_CARD_MOUNT_DELAY", "5") or 5)
     except ValueError:
         delay = 5
+    mountpoint = os.environ.get("TSF_CARD_MOUNTPOINT") or os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard"
+    if not _card_mount_target_ok(mountpoint):
+        mountpoint = "/mnt/sdcard"
     return {"automount": os.path.exists(CARD_RC_LINK),
             "delay": max(0, min(300, delay)),
             "device": os.environ.get("TSF_CARD_DEVICE", ""),
-            "mountpoint": os.environ.get("TSF_CARD_MOUNTPOINT") or os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard",
+            "mountpoint": mountpoint,
             "script": CARD_INIT}
 
 
@@ -14411,12 +14448,15 @@ def external_card_config(body):
     device = str(body.get("device") or "")
     if device and not re.match(r"^/dev/(mmcblk\d+(p\d+)?|sd[a-z]+\d*)$", device):
         raise ValueError("设备路径不合法")
+    if device and _card_is_system(device):
+        raise ValueError("这是系统盘，不能设为自动挂载的外置卡")
     if enabled and not device:
         raise ValueError("请先在上方列表里选中要自动挂载的外置卡")
     # 挂载点统一 /mnt/sdcard: 与 tsf-mount / tsf_storage_ready 使用同一个挂载点,
     # 否则会出现"网页显示已挂载, 服务却判定数据卡未就绪"
     mountpoint = str(body.get("mountpoint") or os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard").strip() or "/mnt/sdcard"
-    if not mountpoint.startswith("/") or ".." in mountpoint:
+    mountpoint = os.path.normpath(mountpoint)
+    if not _card_mount_target_ok(mountpoint):
         raise ValueError("挂载点不合法")
     sync_conf({"TSF_CARD_AUTOMOUNT": str(enabled), "TSF_CARD_MOUNT_DELAY": str(delay),
                "TSF_CARD_DEVICE": device, "TSF_CARD_MOUNTPOINT": mountpoint})
@@ -14444,6 +14484,11 @@ def _card_job_claim(kind, message):
                          write=0.0, read=0.0, pct=0, speed=0.0)
 
 
+def _card_job_running():
+    with _CARD_JOB_LOCK:
+        return _CARD_JOB["state"] == "running"
+
+
 def _resolve_mount(target):
     best = "/"
     for mp in ("/mnt/sdcard", VIDEO_ROOT, target, "/"):
@@ -14463,7 +14508,16 @@ def external_card_speed(body):
     # 未挂载时会退化到根目录 "/", 那样测的是系统盘且会把根分区写满, 直接拒绝
     if not mp or mp == "/" or not os.path.isdir(mp):
         raise ValueError("请先挂载外置卡后再测速")
-    _card_job_claim("speed", "正在写入测试文件（已暂停同步写入）")
+    # 只允许在检测到的外置卡挂载点上测速, 防止指定 /tmp 等系统目录写入测试文件
+    card_mounts = {c.get("mount") for c in external_card_info().get("cards", []) if c.get("mount")}
+    if mp not in card_mounts:
+        raise ValueError("请先挂载外置卡后再测速")
+    with _CARD_LIFECYCLE_LOCK:
+        if storage_busy():
+            raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再测速")
+        if _ARCH_SYNC["state"] == "running":
+            raise ValueError("正在同步归档区，请稍后再测速")
+        _card_job_claim("speed", "正在写入测试文件（已暂停同步写入）")
 
     def work():
         fp = os.path.join(mp, ".tsf-speedtest.bin")
@@ -14593,12 +14647,32 @@ def _deploy_init_scripts():
         pass
 
 
+def _dev_parent(path):
+    """设备节点所属的整盘名: mmcblk1p2 -> mmcblk1, sda1 -> sda, mmcblk1 -> mmcblk1。
+
+    旧写法用 re.sub(r"p?[0-9]+$") 会把 mmcblk1 误裁成 mmcblk, 进而匹配到 mmcblk0/2 等其它卡。"""
+    name = os.path.basename(path)
+    match = re.match(r"^(mmcblk\d+)p\d+$", name)
+    if match:
+        return match.group(1)
+    match = re.match(r"^(nvme\d+n\d+)p\d+$", name)
+    if match:
+        return match.group(1)
+    match = re.match(r"^(sd[a-z]+)\d*$", name)
+    if match:
+        return match.group(1)
+    return name
+
+
 def _dev_match(src, dev):
     """src 是否为 dev 本身或同一张卡上的其它分区。"""
     rp = os.path.realpath(dev)
-    base = re.sub(r"p?[0-9]+$", "", rp)
     srp = os.path.realpath(src) if src.startswith("/dev/") else src
-    return bool(srp == rp or (base and srp.startswith(base)))
+    if srp == rp:
+        return True
+    if not (srp.startswith("/dev/") and rp.startswith("/dev/")):
+        return False
+    return _dev_parent(srp) == _dev_parent(rp)
 
 
 def _device_mounts(dev):
@@ -14613,10 +14687,10 @@ def _device_mounts(dev):
 def _card_device_nodes(dev):
     """该卡主设备与全部分区节点的真实路径 (含 /dev 软链接解析)。"""
     rp = os.path.realpath(dev)
-    base = re.sub(r"p?[0-9]+$", "", rp)
-    nodes = {rp, base}
+    parent = "/dev/" + _dev_parent(rp)
+    nodes = {rp, parent}
     try:
-        for path in glob.glob(base + "*"):
+        for path in glob.glob(parent + "*"):
             nodes.add(os.path.realpath(path))
     except OSError:
         pass
@@ -14753,7 +14827,7 @@ def _drop_caches():
 def _card_readonly(dev):
     """卡被写保护 (侧面开关或内核标记 ro) 时提前给出明确提示, 不空转重试。"""
     try:
-        base = os.path.basename(re.sub(r"p?[0-9]+$", "", os.path.realpath(dev)))
+        base = _dev_parent(os.path.realpath(dev))
         with open("/sys/block/%s/ro" % base, encoding="utf-8") as f:
             return f.read().strip() == "1"
     except OSError:
@@ -14761,7 +14835,13 @@ def _card_readonly(dev):
 
 
 def _card_is_system(dev):
-    """拒绝格式化根文件系统所在的系统盘。"""
+    """拒绝格式化/卸载根文件系统所在的系统盘。"""
+    try:
+        # F50 的 mmcblk0 是系统 eMMC (外置 TF 卡是 mmcblk1), 无论根文件系统怎么挂载都不允许操作
+        if _dev_parent(os.path.realpath(dev)) == "mmcblk0":
+            return True
+    except (OSError, ValueError):
+        pass
     try:
         with open("/proc/mounts", encoding="utf-8", errors="ignore") as f:
             for line in f:
@@ -14993,17 +15073,21 @@ def external_card_format(body):
         raise ValueError("设备路径不合法")
     if _card_is_system(dev):
         raise ValueError("这是系统盘，不能格式化")
-    if storage_busy():
-        raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
-    if _ARCH_SYNC["state"] == "running":
-        raise ValueError("正在同步归档区，请稍后再试")
-    if usb_attached or os.path.ismount(MNT):
-        raise ValueError("请先恢复车机导出再格式化外置卡")
-    _card_job_claim("format", "正在准备格式化…")
+    with _CARD_LIFECYCLE_LOCK:
+        if storage_busy():
+            raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
+        if _ARCH_SYNC["state"] == "running":
+            raise ValueError("正在同步归档区，请稍后再试")
+        if usb_attached or os.path.ismount(MNT):
+            raise ValueError("请先恢复车机导出再格式化外置卡")
+        _card_job_claim("format", "正在准备格式化…")
 
     def work():
         # 格式化后统一挂到默认位置 (/mnt/sdcard): 与 tsf-mount/开机自动挂载一致
         target = str(os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard").strip() or "/mnt/sdcard"
+        target = os.path.normpath(target)
+        if not _card_mount_target_ok(target):
+            raise ValueError("外置卡挂载点不合法（%s），请先修正 TSF_CARD_MNT" % target)
         root = os.path.abspath(VIDEO_ROOT) if VIDEO_ROOT else ""
         was_data = bool(root and (root == os.path.abspath(target) or
                                   root.startswith(os.path.abspath(target).rstrip("/") + "/")))
@@ -15082,10 +15166,6 @@ def _pick_card_device(body, need_mounted):
 def external_card_mount(body):
     """把外置卡挂载到默认位置 (/mnt/sdcard), 挂载前清空默认目录内的残留文件。"""
     body = body if isinstance(body, dict) else {}
-    if storage_busy():
-        raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
-    if _ARCH_SYNC["state"] == "running":
-        raise ValueError("正在同步归档区，请稍后再试")
     dev = _pick_card_device(body, need_mounted=False)
     if not dev:
         raise ValueError("未检测到可挂载的外置卡")
@@ -15094,18 +15174,35 @@ def external_card_mount(body):
     if _card_is_system(dev):
         raise ValueError("这是系统盘，不能作为外置卡挂载")
     target = str(body.get("mountpoint") or os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard").strip() or "/mnt/sdcard"
-    if not target.startswith("/") or ".." in target:
-        raise ValueError("挂载点不合法")
-    if _device_mounts(dev):
-        return {"ok": True, "msg": "%s 已挂载在 %s" % (dev, "、".join(_device_mounts(dev))),
-                "ready": card_data_ready()}
-    _card_job_claim("mount", "正在挂载到 %s…" % target)
+    target = os.path.normpath(target)
+    if not _card_mount_target_ok(target):
+        raise ValueError("挂载点不合法（不能是根目录、系统目录或当前视频目录）")
+    with _CARD_LIFECYCLE_LOCK:
+        if storage_busy():
+            raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
+        if _ARCH_SYNC["state"] == "running":
+            raise ValueError("正在同步归档区，请稍后再试")
+        mounted = _device_mounts(dev)
+        if mounted:
+            return {"ok": True, "msg": "%s 已挂载在 %s" % (dev, "、".join(mounted)),
+                    "ready": card_data_ready()}
+        _card_job_claim("mount", "正在挂载到 %s…" % target)
+    # 挂载点可能是系统盘上的旧数据目录: 清空前先停实时同步, 避免边删边写
+    if not card_data_ready():
+        try:
+            _run_cmd(["/etc/init.d/tesla-live", "stop"], timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        PREWARM["paused"] = True
+        PREWARM["idle_since"] = time.time()
+        PREWARM["manual"] = False
     try:
         ok, err = _card_mount_default(dev, target)
         if not ok:
             raise ValueError(err or "挂载失败")
         _card_job_set(state="done", message="已挂载到 %s" % target)
         _restore_card_services()
+        CARD_WATCH["last"] = True
         return {"ok": True, "msg": "已挂载到 %s" % target, "ready": card_data_ready()}
     except Exception as ex:
         _card_job_set(state="error", message="挂载失败：%s" % str(ex)[:160])
@@ -15115,17 +15212,20 @@ def external_card_mount(body):
 def external_card_unmount(body):
     """强制卸载外置卡: 先停实时同步并 sync 刷盘, 再强制卸载, 保证拔卡不丢数据。"""
     body = body if isinstance(body, dict) else {}
-    if storage_busy():
-        raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
-    if _ARCH_SYNC["state"] == "running":
-        raise ValueError("正在同步归档区，请先等待同步结束或稍后再卸载")
     dev = _pick_card_device(body, need_mounted=True)
     if not dev:
         return {"ok": True, "msg": "没有已挂载的外置卡", "ready": card_data_ready()}
+    if _card_is_system(dev):
+        raise ValueError("这是系统盘，不能卸载")
     mps = _device_mounts(dev)
     if not mps:
         return {"ok": True, "msg": "%s 未挂载" % dev, "ready": card_data_ready()}
-    _card_job_claim("unmount", "正在刷盘并强制卸载 %s…" % dev)
+    with _CARD_LIFECYCLE_LOCK:
+        if storage_busy():
+            raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
+        if _ARCH_SYNC["state"] == "running":
+            raise ValueError("正在同步归档区，请先等待同步结束或稍后再卸载")
+        _card_job_claim("unmount", "正在刷盘并强制卸载 %s…" % dev)
     try:
         root = os.path.abspath(VIDEO_ROOT)
         data_mounted = any(root == os.path.abspath(mp) or
@@ -15146,6 +15246,7 @@ def external_card_unmount(body):
         if killed:
             msg += "（已结束占用进程：%s）" % "、".join(killed[:3])
         _card_job_set(state="done", message=msg)
+        CARD_WATCH["last"] = False
         return {"ok": True, "msg": msg, "ready": card_data_ready()}
     except Exception as ex:
         _card_job_set(state="error", message="卸载失败：%s" % str(ex)[:160])
@@ -15363,13 +15464,17 @@ def archive_sync_start():
         raise ValueError("归档区空间不足：待复制约 %s，需连同保护线共 %s，当前空闲仅 %s。"
                          "请先清理归档或调低保留时间后再同步。"
                          % (_fmt_size(total), _fmt_size(need), _fmt_size(free)))
-    with _ARCH_SYNC_LOCK:
-        # 扫描可能耗时几秒, 期间另一个请求可能已启动同步; 加锁复查避免两个线程写同一批文件
-        if _ARCH_SYNC["state"] == "running":
+    with _CARD_LIFECYCLE_LOCK:
+        if _card_job_running():
             _close_exfat(ex)
-            raise ValueError("归档区同步正在进行")
-        _ARCH_SYNC.update(state="running", message="正在同步…", total=total, done=0, pct=0,
-                          bps=0, eta=0, copied=0, failed=[], files=len(tasks))
+            raise ValueError("正在挂载/卸载/格式化外置卡，请稍后再试")
+        with _ARCH_SYNC_LOCK:
+            # 扫描可能耗时几秒, 期间另一个请求可能已启动同步; 加锁复查避免两个线程写同一批文件
+            if _ARCH_SYNC["state"] == "running":
+                _close_exfat(ex)
+                raise ValueError("归档区同步正在进行")
+            _ARCH_SYNC.update(state="running", message="正在同步…", total=total, done=0, pct=0,
+                              bps=0, eta=0, copied=0, failed=[], files=len(tasks))
     if not tasks:
         _close_exfat(ex)
         _ARCH_SYNC.update(state="done", pct=100, done=0, message="归档区已是最新，无需复制")
@@ -15600,6 +15705,8 @@ def archive_migrate(body):
         raise ValueError("已有同步任务在进行")
     if storage_busy():
         raise ValueError("正在调整容量或格式化 U 盘，请稍后再试")
+    if _card_job_running():
+        raise ValueError("正在挂载/卸载/格式化外置卡，请稍后再试")
     if sync_write_paused():
         raise ValueError("正在进行外置卡测速，已暂停所有同步写入，请测速结束后再试")
     img_items = [i for i in items if i["type"] == "img"]
@@ -15882,6 +15989,8 @@ def archive_node_delete(body):
         raise ValueError("只能删除本次扫描到的归档目录内的内容")
     if storage_busy():
         raise ValueError("正在调整存储容量，请稍后再试")
+    if _card_job_running():
+        raise ValueError("正在挂载/卸载/格式化外置卡，请稍后再试")
     # 与上传/文件管理/归档同步串行, 并遵守"已解锁才能删"的录像锁规则
     with _storage_edit_lock:
         check_recording_write([path])
@@ -15899,6 +16008,8 @@ def archive_migrate_delete(body):
     """迁移并校验完成后, 按用户确认删除非默认位置的源镜像/归档目录。"""
     if _ARCH_SYNC["state"] == "running":
         raise ValueError("正在同步/迁移，请任务结束后再删除源文件")
+    if _card_job_running():
+        raise ValueError("正在挂载/卸载/格式化外置卡，请稍后再试")
     items = _migrate_items(body)
     if (body or {}).get("confirm") is not True:
         raise ValueError("请确认删除源文件后再继续")
