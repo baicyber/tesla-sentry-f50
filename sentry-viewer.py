@@ -538,7 +538,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.052"
+APP_VERSION = "2026.11.27.053"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -9309,20 +9309,26 @@ async function archiveDeleteNode(path, name) {
     archiveScan(true);
   } catch (e) { toast('❌ ' + e.message); }
 }
+// 本页面主动发起过一次性同步/迁移时才显示进度盒; 空闲或卡自动挂载时不出现「同步中」
+let ARCH_SYNC_ACTIVE = false;
 function archiveSyncPaint(job) {
   const box = document.getElementById('arch-sync-progress');
   if (!box) return;
-  box.hidden = false;
+  const state = (job && job.state) || 'idle';
+  const show = state === 'running' ||
+    (ARCH_SYNC_ACTIVE && (state === 'done' || state === 'stopped' || state === 'error'));
+  box.hidden = !show;
+  if (!show) return;
   const done = job.done || job.copied || 0, total = job.total || 0;
-  const state = document.getElementById('arch-sync-state');
-  if (state) {
-    const label = job.state === 'done' ? '已完成'
-      : (job.state === 'error' ? '已中断' : (job.state === 'stopped' ? '已停止' : '同步中'));
-    state.innerHTML = (job.state === 'running' ? '<span class="spin"></span>' : '') + label;
+  const stateEl = document.getElementById('arch-sync-state');
+  if (stateEl) {
+    const label = state === 'done' ? '已完成'
+      : (state === 'error' ? '已中断' : (state === 'stopped' ? '已停止' : '同步中'));
+    stateEl.innerHTML = (state === 'running' ? '<span class="spin"></span>' : '') + label;
   }
   // 一次性同步/迁移任务的进度; 开关状态由 paintLiveToggle 按 /api/live 单独维护
   const stopWrap = document.getElementById('arch-sync-stop-wrap');
-  const canStop = job.state === 'running' && (job.kind || 'sync') === 'sync';
+  const canStop = state === 'running' && (job.kind || 'sync') === 'sync';
   if (stopWrap) stopWrap.hidden = !canStop;
   const stopBtn = document.getElementById('arch-sync-stop');
   if (stopBtn) { stopBtn.disabled = false; stopBtn.textContent = '停止同步'; }
@@ -9331,7 +9337,7 @@ function archiveSyncPaint(job) {
   document.getElementById('arch-sync-fill').style.width = Math.min(100, job.pct || 0) + '%';
   document.getElementById('arch-sync-rate').textContent = ((job.bps || 0) / 1048576).toFixed(1) + ' MB/s';
   const eta = document.getElementById('arch-sync-eta');
-  if (eta) eta.textContent = job.state === 'running' && job.eta > 0 ? '约 ' + fmtEta(job.eta) : '—';
+  if (eta) eta.textContent = state === 'running' && job.eta > 0 ? '约 ' + fmtEta(job.eta) : '—';
   const msg = document.getElementById('arch-sync-msg');
   if (msg) msg.textContent = job.message || '';
 }
@@ -9380,6 +9386,7 @@ async function archiveSyncStart() {
     await archiveScan(false);
     const j = await (await fetch('/api/archive/sync', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TSF-Storage': '1' }, body: '{}' })).json();
     if (!j.ok) throw Error(j.msg || '启动失败');
+    ARCH_SYNC_ACTIVE = true;
     archiveSyncPaint(j.job || {});
     archiveSyncPoll();
   } catch (e) {
@@ -9438,6 +9445,8 @@ async function archiveSyncStop() {
 }
 /* 进入存储页时同步一次真实状态: 开关和一次性任务都不依赖刷新页面 */
 async function archiveSyncResume() {
+  // 进入/刷新存储页时先收起进度盒; 只有真的在跑或本页刚发起过任务才显示
+  ARCH_SYNC_ACTIVE = false;
   try {
     const live = await (await fetch('/api/live', { cache: 'no-store' })).json();
     paintLiveToggle(live.enabled !== false, !!live.running);
@@ -9447,6 +9456,12 @@ async function archiveSyncResume() {
     const job = j.job || {};
     archiveSyncPaint(job);
     if (job.state === 'running') { archiveSyncPoll(); return; }
+    // 没有在跑的任务: 按钮文字恢复常态, 避免外置卡自动挂载后残留「正在同步…」
+    const syncBtn = document.getElementById('arch-sync-btn');
+    if (syncBtn) {
+      syncBtn.textContent = job.state === 'done' ? '再同步一次' : '立即同步到归档区';
+      try { applyCardGate(); } catch (e) {}
+    }
   } catch (e) {}
   archiveSyncIdlePoll();
 }
@@ -9467,6 +9482,7 @@ async function archiveMigrate(policy) {
     if (j.need_img || j.no_space) { alert(j.msg || '暂时无法迁移'); return; }
     if (!j.ok) { toast('❌ ' + (j.msg || '迁移失败')); return; }
     if (btn) { btn.disabled = true; btn.textContent = '正在迁移…'; }
+    ARCH_SYNC_ACTIVE = true;
     archiveSyncPaint(j.job || {});
     clearInterval(ARCH_POLL);
     ARCH_POLL = setInterval(async () => {
