@@ -539,7 +539,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.056"
+APP_VERSION = "2026.11.27.057"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -4917,7 +4917,7 @@ async function refreshLive() {
     txt.textContent = t('实时同步未开启');
   }
   // 存储页开关与首页状态同源, 不用切标签也会实时更新
-  paintLiveToggle(live.enabled !== false, !!live.running);
+  paintLiveToggle(live.enabled !== false, !!live.running, live.ready);
   // 同步状态常驻；容量尚未读到时只隐藏容量摘要。
   const sw = document.getElementById('storwrap');  const dk = live.disk;
   // 外置卡未挂载: 不要拿 /mnt 所在 eMMC 的容量冒充, 三行直接显示 -
@@ -8999,6 +8999,7 @@ let ARCH_TREE_KNOWN = new Set();       // 已见过的归档目录, 用于只对
 let EXT_BOOT = {};        // 外置卡开机自动挂载配置
 /* 外置卡未挂载时, 车机 U 盘容量设定、格式化、归档区设定、同步管理与一键迁移全部变灰不可用 */
 let CARD_READY = false;     // 外置卡已检测到并挂载 (来自 /api/card/info 的 ready, 未确认前先禁用)
+let LIVE_SYNC_READY = false; // 外置卡已挂载且车机镜像存在 (来自 /api/live 的 ready)
 let STORAGE_LOCKED = false; // 存储任务运行/读取中, 暂时锁定
 function applyCardGate() {
   const off = !CARD_READY || STORAGE_LOCKED;
@@ -9008,9 +9009,13 @@ function applyCardGate() {
     const element = document.getElementById(id);
     if (element) element.disabled = off;
   });
-  // 实时同步开关只受存储任务锁定, 卡没挂载也能关闭, 便于随时停止从镜像读文件
+  // 实时同步开关: 卡未挂载或镜像不存在时不能“开启”; 已开启时仍可随时关闭
   const liveTgl = document.getElementById('arch-sync-toggle');
-  if (liveTgl) liveTgl.disabled = STORAGE_LOCKED;
+  if (liveTgl) {
+    const blocked = !LIVE_SYNC_READY;
+    liveTgl.classList.toggle('card-gate-off', blocked);
+    liveTgl.disabled = STORAGE_LOCKED || (blocked && !LIVE_SYNC_ENABLED);
+  }
   const migrate = document.getElementById('arch-migrate');
   if (migrate) migrate.classList.toggle('card-gate-off', !CARD_READY);
   const acts = document.getElementById('arch-migrate-actions');
@@ -9414,7 +9419,7 @@ function archiveSyncIdlePoll() {
     // 实时同步开关: 与首页同源, 4 秒内跟上服务真实状态
     try {
       const live = await (await fetch('/api/live', { cache: 'no-store' })).json();
-      paintLiveToggle(live.enabled !== false, !!live.running);
+      paintLiveToggle(live.enabled !== false, !!live.running, live.ready);
     } catch (e) {}
     try {
       const j = await (await fetch('/api/archive/sync/status', { cache: 'no-store' })).json();
@@ -9443,16 +9448,19 @@ async function archiveSyncStart() {
 }
 /* 实时同步开关: 控制 tesla-live 只读同步服务是否从 img 镜像读取文件。
    状态来自 /api/live 的 enabled, 与首页顶栏同源, 不用刷新页面即可实时更新。 */
-function paintLiveToggle(enabled, running) {
+function paintLiveToggle(enabled, running, ready) {
   LIVE_SYNC_ENABLED = enabled !== false;
+  if (ready !== undefined) LIVE_SYNC_READY = !!ready;
   const tgl = document.getElementById('arch-sync-toggle');
   if (!tgl) return;
   tgl.textContent = LIVE_SYNC_ENABLED ? '关闭实时同步' : '开启实时同步';
   tgl.classList.toggle('primary', !LIVE_SYNC_ENABLED);
-  tgl.disabled = STORAGE_LOCKED;
+  tgl.classList.toggle('card-gate-off', !LIVE_SYNC_READY);
+  tgl.disabled = STORAGE_LOCKED || (!LIVE_SYNC_READY && !LIVE_SYNC_ENABLED);
   tgl.title = LIVE_SYNC_ENABLED
     ? (running ? '实时同步运行中，点击停止从镜像读取文件' : '已开启，等待外置卡就绪')
-    : '已关闭，不再从镜像读取文件';
+    : (LIVE_SYNC_READY ? '已关闭，不再从镜像读取文件'
+                       : '外置卡未挂载或车机U盘镜像不存在，暂不能开启实时同步');
 }
 async function archiveSyncToggle() {
   const tgl = document.getElementById('arch-sync-toggle');
@@ -9496,7 +9504,7 @@ async function archiveSyncResume() {
   ARCH_SYNC_ACTIVE = false;
   try {
     const live = await (await fetch('/api/live', { cache: 'no-store' })).json();
-    paintLiveToggle(live.enabled !== false, !!live.running);
+    paintLiveToggle(live.enabled !== false, !!live.running, live.ready);
   } catch (e) {}
   try {
     const j = await (await fetch('/api/archive/sync/status', { cache: 'no-store' })).json();
@@ -12200,19 +12208,43 @@ def _detach_loops_under(paths):
 _CARD_EXPORT_RELEASED = False
 
 
+def _lun_image_path():
+    """当前车机 U 盘 LUN 绑定的镜像路径 (空=未绑定)。"""
+    try:
+        with open(os.path.join(GADGET_DIR, "functions", "mass_storage.0", "lun.0", "file")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def _release_card_export():
-    """停掉车机 U 盘导出 (清空 LUN 文件 + 解绑 UDC), 释放内核对镜像文件的占用。"""
+    """停掉车机 U 盘导出, 释放内核对镜像文件的占用。
+
+    顺序很关键: LUN 还绑定 UDC 时内核持有 backing file, 直接清空会写失败或
+    只清一半, 卡的 ext4 因此一直 EBUSY (表现为卸载后仍无法格式化)。
+    先解绑控制器, 再清空 LUN 文件, 并回读确认为空, 失败时重试。"""
     global _CARD_EXPORT_RELEASED
     lun = os.path.join(GADGET_DIR, "functions", "mass_storage.0", "lun.0", "file")
-    try:
-        if os.path.exists(lun):
+    if _gadget_rebind(False):
+        _CARD_EXPORT_RELEASED = True
+        time.sleep(0.8)   # 等内核释放 backing file
+    if not os.path.exists(lun):
+        return
+    for _ in range(4):
+        try:
             with open(lun, "w") as f:
                 f.write("")
             _CARD_EXPORT_RELEASED = True
-    except OSError:
-        pass
-    if _gadget_rebind(False):
-        _CARD_EXPORT_RELEASED = True
+        except OSError:
+            pass
+        try:
+            with open(lun) as f:
+                left = f.read().strip()
+        except OSError:
+            return
+        if not left:
+            return
+        time.sleep(0.5)
 
 
 def _restore_card_export():
@@ -13433,6 +13465,8 @@ def live_status():
     if _ARCH_SYNC.get("state") == "running" and _ARCH_SYNC.get("bps"):
         copy_bps = max(copy_bps, int(_ARCH_SYNC["bps"]))
     return {"running": running, "enabled": live_sync_enabled(), "pending": pending, "ago": ago, "last": last,
+            # 只有外置卡已挂载且镜像存在时才允许开启实时同步
+            "ready": bool(card_data_ready() and os.path.isfile(IMG)),
             "copy_bps": copy_bps, "sync": live_sync_state(copy_bps),
             "disk": disk_usage(), "sys": sys_status(),
             # 全新安装尚未创建车机镜像: 前端据此引导到「存储分配」完成首次设置。
@@ -16090,7 +16124,18 @@ def external_card_format(body):
                                   root.startswith(os.path.abspath(target).rstrip("/") + "/")))
         live_stopped = False
         try:
-            if was_data:
+            # 格式化全程持有 U 盘互斥锁: usb-selfheal / tesla-sync 的 cron 会
+            # 抢着重绑 LUN 或挂 loop, 只要它们插进来, 卡上的 ext4 就再次忙,
+            # mkfs 必然报 Resource busy。注意 _force_image_offline 会释放锁,
+            # 所以必须先收起网页 U 盘管理, 再拿锁。
+            if usb_attached or os.path.ismount(MNT):
+                _force_image_offline()
+            if not _acquire_usb_flock():
+                raise ValueError("车机 U 盘任务占用中，请稍后再试")
+            lun_path = _lun_image_path()
+            card_prefix = os.path.abspath(target).rstrip("/") + "/"
+            under_card = bool(lun_path) and os.path.abspath(lun_path).startswith(card_prefix)
+            if was_data or under_card:
                 # 归档同步服务还在持续写这张卡: 先停下, 避免旧文件系统的脏页
                 # 回写到刚格式化好的新文件系统里
                 try:
@@ -16100,9 +16145,16 @@ def external_card_format(body):
                     live_stopped = False
                 # 镜像被 mass_storage 导出 / loop 指向卡内文件时 mkfs 必然 EBUSY:
                 # 格式化前先解导出、解 loop, 否则只能提示「设备忙」
-                _force_image_offline()
+                if os.path.ismount(MNT):
+                    for flag in ("-l", "-f"):
+                        _run_cmd(["umount", flag, MNT], timeout=20)
+                        if not os.path.ismount(MNT):
+                            break
                 _release_card_export()
-                _detach_loops_under(list(_device_mounts(dev)) + [target])
+                _detach_loops_under(list(_device_mounts(dev)) +
+                                    [target, os.environ.get("TSF_CARD_MNT") or "",
+                                     MNT, VIDEO_ROOT, ARCHIVE])
+                time.sleep(0.6)   # 等内核真正释放镜像/挂载引用, 再 mkfs
             _format_card_ext4(dev)
             # 卡已被清空, 旧的镜像文件随之消失, 不再需要恢复导出
             _CARD_EXPORT_RELEASED = False
@@ -16132,6 +16184,7 @@ def external_card_format(body):
         except Exception as ex:
             _card_job_set(state="error", message=str(ex)[:200])
         finally:
+            _release_usb_flock()
             if live_stopped:
                 try:
                     subprocess.Popen(["/etc/init.d/tesla-live", "start"],
@@ -16489,6 +16542,9 @@ def live_sync_toggle(on):
     关闭时同时请求停止正在进行的只读同步任务; 状态写入 conf, 重启后保持。
     """
     on = bool(on)
+    if on and not (card_data_ready() and os.path.isfile(IMG)):
+        return {"ok": False, "enabled": False,
+                "msg": "外置卡未挂载或车机U盘镜像不存在，无法开启实时同步"}
     os.environ["TSF_LIVE_SYNC"] = "1" if on else "0"
     try:
         sync_conf({"TSF_LIVE_SYNC": "1" if on else "0"})
