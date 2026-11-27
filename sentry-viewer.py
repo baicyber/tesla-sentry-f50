@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.011"
+APP_VERSION = "2026.11.27.018"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -520,6 +520,9 @@ OTA_TARGET = os.path.join(os.path.dirname(OTA_STATE) or ".", "ota-target.json")
 OTA_SRC_PREF = os.path.join(os.path.dirname(OTA_STATE) or ".", "ota-src.json")  # 记住上次最快的源
 _OTA_CACHE = {"t": 0.0, "data": None, "key": ""}
 _OTA_TGT = {}
+_OTA_LOCK = threading.Lock()
+_OTA_RECHECK = {"seq": 0, "running": False, "key": "", "current": 0, "total": 0,
+                "source": "", "message": "", "found": False}
 
 
 def ota_target():
@@ -561,7 +564,12 @@ def ota_set_target(repo, branch=""):
         return False, "写入失败: %s" % str(ex)[:80]
     _OTA_TGT.clear()
     _OTA_TGT.update({"repo": repo, "branch": branch})
-    _OTA_CACHE.update({"t": 0.0, "data": None, "key": ""})
+    with _OTA_LOCK:
+        _OTA_CACHE.update({"t": 0.0, "data": None, "key": ""})
+        # 让旧目标的复核线程退出, 防止旧仓库结果写入新仓库缓存
+        _OTA_RECHECK.update({"running": False, "key": "", "current": 0, "total": 0,
+                             "source": "", "message": "", "found": False})
+        _OTA_RECHECK["seq"] += 1
     # 切换仓库/分支后先暂停后台自动更新 (选项保持勾选), 点「立即升级」后恢复
     if load_settings().get("auto_update", True):
         save_settings({"auto_paused": True})
@@ -786,15 +794,89 @@ def _api_file(path, timeout=12):
     return None
 
 
+def _ota_recheck_worker(key, seq):
+    """快速并发检查无更新后, 按优先级逐渠道复核, 发现新版本立即写入缓存"""
+    channels = _src_order() + ["https://api.github.com"]
+    total = len(channels)
+    for index, base in enumerate(channels, 1):
+        source = urllib.parse.urlsplit(base).netloc
+        with _OTA_LOCK:
+            if not _OTA_RECHECK["running"] or _OTA_RECHECK["seq"] != seq or _OTA_RECHECK["key"] != key:
+                return
+            tgt = ota_target()
+            if key != "%s@%s" % (tgt["repo"], tgt["branch"]):
+                _OTA_RECHECK["running"] = False
+                return
+            _OTA_RECHECK.update({"current": index, "total": total, "source": source,
+                                 "message": "正在复核 %d/%d: %s" % (index, total, source)})
+        j = None
+        try:
+            if base == "https://api.github.com":
+                j = _api_manifest(timeout=6)
+            else:
+                raw = _http_get(base + "/version.json?ts=%d" % int(time.time()), timeout=6, limit=256 << 10)
+                j = json.loads(raw.decode("utf-8", "replace"))
+            if not isinstance(j, dict) or not str(j.get("version") or "").strip():
+                j = None
+        except Exception:
+            # 单个渠道失败不影响后续渠道
+            j = None
+        if not j or _vtuple(j.get("version")) <= _vtuple(APP_VERSION):
+            continue
+        with _OTA_LOCK:
+            if not _OTA_RECHECK["running"] or _OTA_RECHECK["seq"] != seq or _OTA_RECHECK["key"] != key:
+                return
+            tgt = ota_target()
+            if key != "%s@%s" % (tgt["repo"], tgt["branch"]):
+                _OTA_RECHECK["running"] = False
+                return
+            cached = _OTA_CACHE.get("data")
+            if cached and _OTA_CACHE.get("key") == key and _vtuple(cached.get("version")) > _vtuple(j.get("version")):
+                j = cached
+            else:
+                j = dict(j)
+                j["_base"] = base
+                _OTA_CACHE.update({"t": time.time(), "data": j, "key": key})
+            _OTA_RECHECK.update({"running": False, "current": index, "total": total,
+                                 "source": urllib.parse.urlsplit(j.get("_base", base)).netloc,
+                                 "message": "后台复核发现新版本 v%s" % j.get("version"), "found": True})
+        return
+    with _OTA_LOCK:
+        if _OTA_RECHECK["running"] and _OTA_RECHECK["seq"] == seq and _OTA_RECHECK["key"] == key:
+            _OTA_RECHECK.update({"running": False, "current": total, "total": total, "source": "",
+                                 "message": "全部 %d 个渠道复核结束，未发现更新" % total, "found": False})
+
+
+def _ota_recheck_start(key):
+    """同一目标只运行一个复核线程; 缓存命中不会调用本函数"""
+    with _OTA_LOCK:
+        tgt = ota_target()
+        if key != "%s@%s" % (tgt["repo"], tgt["branch"]):
+            return
+        if _OTA_RECHECK["running"] and _OTA_RECHECK["key"] == key:
+            return
+        _OTA_RECHECK["seq"] += 1
+        seq = _OTA_RECHECK["seq"]
+        _OTA_RECHECK.update({"running": True, "key": key, "current": 0, "total": 0,
+                             "source": "", "message": "快速检查无更新，等待逐渠道复核", "found": False})
+    threading.Thread(target=_ota_recheck_worker, args=(key, seq), daemon=True).start()
+
+
+def _ota_recheck_info():
+    with _OTA_LOCK:
+        return {k: _OTA_RECHECK[k] for k in ("running", "current", "total", "source", "message", "found")}
+
+
 def ota_latest(force=False):
-    """读仓库 version.json (含版本号/日期/更新说明), 并发竞速多个源, 结果缓存 10 分钟"""
+    """读仓库 version.json (含版本号/日期/更新说明), 并发竞速多个源, 结果缓存 60 秒"""
     now = time.time()
     tgt = ota_target()
     key = "%s@%s" % (tgt["repo"], tgt["branch"])
     # 本地缓存只用于短时间去重: 之前缓存 10 分钟, 刚发布的版本会被旧缓存盖住,
     # 页面显示成「已是最新」或旧版本号。现在 60 秒内复用, 超过就重新拉实时清单。
-    if not force and _OTA_CACHE["data"] and _OTA_CACHE.get("key") == key and now - _OTA_CACHE["t"] < 60:
-        return _OTA_CACHE["data"]
+    with _OTA_LOCK:
+        if not force and _OTA_CACHE["data"] and _OTA_CACHE.get("key") == key and now - _OTA_CACHE["t"] < 60:
+            return dict(_OTA_CACHE["data"])
 
     def ok(raw):
         try:
@@ -863,8 +945,17 @@ def ota_latest(force=False):
             j = raced
     else:
         j = raced
+    j = dict(j)
     j["_base"] = base
-    _OTA_CACHE.update({"t": now, "data": j, "key": key})
+    with _OTA_LOCK:
+        cached = _OTA_CACHE.get("data")
+        # 后台复核可能已找到更高版本, 并发快检的过期清单不能把它盖掉
+        if cached and _OTA_CACHE.get("key") == key and _vtuple(cached.get("version")) > _vtuple(j.get("version")):
+            j = cached
+        else:
+            _OTA_CACHE.update({"t": time.time(), "data": j, "key": key})
+    if _vtuple(j.get("version")) <= _vtuple(APP_VERSION):
+        _ota_recheck_start(key)
     return j
 
 
@@ -881,11 +972,13 @@ def ota_check(force=False):
         j = ota_latest(force)
     except Exception as ex:
         out["error"] = str(ex)
+        out["recheck"] = _ota_recheck_info()
         return out
     latest = str(j.get("version"))
     out.update({"latest": latest, "date": j.get("date") or "", "notes": j.get("notes") or [],
                 "has_update": _vtuple(latest) > _vtuple(cur),
                 "source": urllib.parse.urlsplit(j["_base"]).netloc})
+    out["recheck"] = _ota_recheck_info()
     return out
 
 
@@ -1373,7 +1466,7 @@ def ensure_dependencies():
     if not missing:
         return True, "运行库完整"
     detail = []
-    kind, manager, version = _pkg_manager()
+    kind, manager, _ = _pkg_manager()
     if manager:
         problem = _install_dep_packages(kind, manager)
         ffmpeg = _pick_bin("TSF_FFMPEG", DEP_FFMPEG_CANDIDATES)
@@ -2959,8 +3052,9 @@ body.watching { overflow:hidden; }
 .viewtools .bpop { display:none; position:absolute; bottom:calc(100% + 8px); right:0; z-index:12; flex-direction:column; align-items:center; gap:6px; padding:8px 4px 6px; border:1px solid var(--line2); border-radius:8px; background:var(--panel); box-shadow:0 6px 18px rgba(0,0,0,.28); }
 .qsel.open .bpop { display:flex; }
 .viewtools .bpop output { font-size:11px; font-variant-numeric:tabular-nums; color:var(--text); }
-.bslider { width:30px; height:120px; display:flex; align-items:center; justify-content:center; }
-.bslider input[type=range] { width:118px; margin:0; transform:rotate(-90deg); accent-color:var(--accent); touch-action:none; }
+.bslider { width:30px; height:160px; display:flex; align-items:center; justify-content:center; }
+.bslider input[type=range] { width:158px; margin:0; transform:rotate(-90deg); accent-color:var(--accent); touch-action:none; }
+@media (orientation:landscape) and (max-height:550px) { .bslider { height:132px; } .bslider input[type=range] { width:130px; } }
 .viewtools .bpop .breset { min-height:26px; font-size:11px; padding:0 8px; border:1px solid var(--line2); background:var(--panel2); color:var(--muted); border-radius:5px; }
 /* 速度下拉 */
 .viewtools #spdsel { height:36px; min-height:36px; padding:0 4px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--text); font-size:12px; cursor:pointer; }
@@ -3660,7 +3754,7 @@ body.settings-open { overflow:hidden; }
       <div class="playtools">
         <div class="playback-help"><div class="ph-line"><span class="ph-kb-t">画面</span><span class="ph-key">单击播放/暂停</span><span class="ph-key">右半屏长按<span class="ph-hold-rate">3</span>×快进</span><span class="ph-key">左半屏长按<span class="ph-hold-rate">3</span>×快退</span></div><div class="ph-line"><span class="ph-kb-t">键盘</span><span class="ph-key">空格播放/暂停</span><span class="ph-key">长按<span class="ph-hold-rate">3</span>×快进</span><span class="ph-key">←→1s</span><span class="ph-key">↑↓10s</span></div></div>
         <div class="shuttle"><button id="skip-back" aria-label="回退十秒">−10s</button><button id="skip-back-one" aria-label="回退一秒">−1s</button><button id="ppbtn" aria-label="播放"><svg class="ic" aria-hidden="true" focusable="false"><use id="ppicon" href="#i-play"/></svg></button><button id="skip-next-one" aria-label="前进一秒">+1s</button><button id="skip-next" aria-label="前进十秒">+10s</button></div>
-        <div class="viewtools"><button id="record-lock" disabled onclick="manageRecording('lock')" aria-pressed="false" title="锁定"><svg class="ic"><use href="#i-lock"/></svg><span>锁定</span></button><button id="record-delete" class="delbtn" disabled onclick="manageRecording('delete')" title="删除"><svg class="ic"><use href="#i-trash"/></svg><span>删除</span></button><button class="pdl" onclick="openExport()" title="导出"><svg class="ic"><use href="#i-download"/></svg></button><div class="qsel" id="bsel"><button class="qbtn" id="bbtn" title="画面亮度" aria-label="画面亮度" aria-expanded="false" onclick="toggleBright(event)"><svg class="ic"><use href="#i-sun"/></svg></button><div class="bpop" id="bpop" onclick="event.stopPropagation()"><output id="bval">1.0×</output><div class="bslider"><input type="range" id="brange" min="1" max="4" step="0.1" value="1" aria-label="画面亮度" oninput="onBrightInput(this.value)" onchange="flashBright()"></div><button type="button" class="breset" onclick="setBright(1)">复位</button></div></div><button id="shotbtn" title="截屏下载" aria-label="截屏下载" onclick="captureFrame()"><svg class="ic"><use href="#i-camera"/></svg></button><div class="qsel" id="qsel"></div><select id="spdsel" aria-label="播放速度" title="播放速度" onchange="setSpeed(Number(this.value))"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
+        <div class="viewtools"><button id="record-lock" disabled onclick="manageRecording('lock')" aria-pressed="false" title="锁定"><svg class="ic"><use href="#i-lock"/></svg><span>锁定</span></button><button id="record-delete" class="delbtn" disabled onclick="manageRecording('delete')" title="删除"><svg class="ic"><use href="#i-trash"/></svg><span>删除</span></button><button class="pdl" onclick="openExport()" title="导出"><svg class="ic"><use href="#i-download"/></svg></button><div class="qsel" id="bsel"><button class="qbtn" id="bbtn" title="画面亮度 1–10×" aria-label="画面亮度" aria-expanded="false" onclick="toggleBright(event)"><svg class="ic"><use href="#i-sun"/></svg></button><div class="bpop" id="bpop" onclick="event.stopPropagation()"><output id="bval">1.0×</output><div class="bslider"><input type="range" id="brange" min="1" max="10" step="0.1" value="1" aria-label="画面亮度" oninput="onBrightInput(this.value)" onchange="flashBright()"></div><button type="button" class="breset" onclick="setBright(1)">复位</button></div></div><button id="shotbtn" title="截屏下载" aria-label="截屏下载" onclick="captureFrame()"><svg class="ic"><use href="#i-camera"/></svg></button><div class="qsel" id="qsel"></div><select id="spdsel" aria-label="播放速度" title="播放速度" onchange="setSpeed(Number(this.value))"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select><button id="screenbtn" aria-label="全屏" title="全屏"><svg class="ic" viewBox="0 0 24 24"><path d="M9 4H4v5m11-5h5v5M4 15v5h5m6 0h5v-5"/></svg></button></div>
       </div>
       <div id="livep" class="watch-live" hidden>
         <div class="live-row"><span id="lv-status"></span><button type="button" class="live-info" aria-label="间隔说明" onclick="this.classList.toggle('open')" data-tip="「间隔」是自动检查新片段的频率：间隔越短，新片段出现得越快，也更耗流量；选「仅手动」后只有点「立即更新」才会刷新。">i</button><button id="lv-back" onclick="backToLatest()">回到最新</button>
@@ -4373,15 +4467,16 @@ function setQuality(q) {
   renderQSel();
   if (curClips.length) showClip(curClipIx, playbackOffset());
 }
-/* ---------- 画面亮度 1×~4× (竖向滑块, 只影响本机显示, 不改变源文件) ---------- */
+/* ---------- 画面亮度 1×~10× (竖向滑块, 只影响本机显示, 不改变源文件) ---------- */
 let vbright = 1;
 try {
-  vbright = parseFloat(localStorage.getItem('tsf-bright') || '1') || 1;
-  if (vbright > 10) vbright = vbright / 100;   // 兼容旧版百分比 (100/110/…)
-} catch (e) {}
+  let v = parseFloat(localStorage.getItem('tsf-bright') || '1') || 1;
+  if (v >= 100) v = v / 100;                    // 兼容旧版百分比 (100/110/…/200)
+  vbright = clampBright(v);                     // 越界值 (含损坏的本地存储) 一律夹到 1~10
+} catch (e) { vbright = 1; }
 function clampBright(v) {
   v = Math.round((parseFloat(v) || 1) * 10) / 10;
-  return Math.min(4, Math.max(1, v));
+  return Math.min(10, Math.max(1, v));
 }
 function renderBright() {
   const range = document.getElementById('brange');
@@ -9219,6 +9314,7 @@ async function userSave() {
 
 /* ---------- 系统更新 (OTA) ---------- */
 let otaInfo = null;
+let otaRecheckTimer = 0, otaCheckSeq = 0;
 function esc(s) { return String(s == null ? '' : s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
 const OTA_REPO_LABELS = {
   'baicyber/tesla-sentry-f50': '上游仓库 · baicyber/tesla-sentry-f50',
@@ -9313,18 +9409,24 @@ async function otaSaveTarget() {
     if (j.ok) { await markAutoPaused(); await otaCheck(true); }
   } catch (e) { msg.textContent = t('切换失败') + ': ' + e; }
 }
-async function otaCheck(force) {
-  otaLoadTarget();
+async function otaCheck(force, silent) {
+  const seq = ++otaCheckSeq;
+  clearTimeout(otaRecheckTimer);
+  if (!silent) otaLoadTarget();
   const tag = document.getElementById('upd-tag'), msg = document.getElementById('upd-msg');
-  tag.className = 'updtag'; tag.textContent = t('检查中…');
-  msg.textContent = t('正在连接 GitHub…');
+  if (!silent) {
+    tag.className = 'updtag'; tag.textContent = t('检查中…');
+    msg.textContent = t('正在连接 GitHub…');
+  }
   try {
     const j = await (await fetch('/api/ota/check' + (force ? '?force=1' : ''), { cache: 'no-store' })).json();
+    if (seq !== otaCheckSeq) return;
     otaInfo = j;
+    const recheck = j.recheck || {};
     document.getElementById('upd-cur').textContent = 'v' + j.current;
     document.getElementById('upd-new').textContent = j.latest ? 'v' + j.latest : '—';
     tag.className = 'updtag' + (j.has_update ? ' new' : '');
-    tag.textContent = j.error ? t('检查失败') : (j.has_update ? t('有新版本') : t('已是最新'));
+    tag.textContent = j.error ? t('检查失败') : (j.has_update ? t('有新版本') : (recheck.running ? t('后台复核中…') : t('已是最新')));
     const n = document.getElementById('upd-notes');
     const wrap = document.getElementById('upd-notes-wrap');
     if (j.notes && j.notes.length) {
@@ -9353,8 +9455,28 @@ async function otaCheck(force) {
     msg.textContent = j.error
       ? t('连不上 GitHub') + ': ' + j.error + ' ' + t('(可稍后重试)')
       : (t('来源') + ': ' + (j.source || '-') + (j.date ? ' · ' + j.date : '') + (j.has_update ? '' : ' · ' + t('已是最新')));
-    document.getElementById('gear').classList.toggle('hasupd', !!j.has_update);
+    const gear = document.getElementById('gear');
+    gear.classList.toggle('hasupd', !!j.has_update);
+    gear.title = j.has_update ? '有新版本 v' + j.latest + ' · 点开设置可升级' : (recheck.running ? '正在后台逐渠道复核更新' : '');
+    if (!j.error && !j.has_update && (recheck.running || recheck.found)) {
+      msg.textContent = recheck.found && !recheck.running
+        ? t('后台复核发现新版本，正在刷新…')
+        : t('快速检查无更新，后台逐渠道复核') +
+          (recheck.total ? ' · ' + recheck.current + '/' + recheck.total : '') +
+          (recheck.source ? ' · ' + recheck.source : '');
+      otaRecheckTimer = setTimeout(() => otaCheck(false, true), recheck.found && !recheck.running ? 100 : 2000);
+    } else if (!j.error && !recheck.running && recheck.message &&
+        ((!j.has_update && recheck.current) ||
+         (j.has_update && recheck.found && recheck.message.includes('v' + j.latest)))) {
+      msg.textContent += ' · ' + recheck.message;
+    }
   } catch (e) {
+    if (seq !== otaCheckSeq) return;
+    if (silent) {
+      const old = otaInfo && otaInfo.recheck;
+      if (old && old.running) otaRecheckTimer = setTimeout(() => otaCheck(false, true), 3000);
+      return;
+    }
     tag.className = 'updtag'; tag.textContent = t('检查失败');
     msg.textContent = t('检查失败') + ': ' + e;
   }
@@ -9502,16 +9624,8 @@ async function otaRollback() {
     if (j.ok) otaWaitBack();
   } catch (e) { msg.textContent = '回滚失败: ' + e; }
 }
-/* 打开首页后静默检查一次 (结果缓存 10 分钟), 有新版本时齿轮上亮红点 */
-setTimeout(() => {
-  fetch('/api/ota/check', { cache: 'no-store' }).then(r => r.json()).then(j => {
-    if (j && j.has_update) {
-      const g = document.getElementById('gear');
-      g.classList.add('hasupd');
-      g.title = '有新版本 v' + j.latest + ' · 点开设置可升级';
-    }
-  }).catch(() => {});
-}, 5000);
+/* 打开首页后静默检查一次 (结果缓存 60 秒), 后台复核发现新版本也会点亮齿轮 */
+setTimeout(() => otaCheck(false, true), 5000);
 function openPanel(which) {
   closePlayer();
   document.getElementById('mask').classList.add('open');
@@ -10445,7 +10559,14 @@ def _geo_load_locked():
 
 
 def _geo_save_locked():
+    global _GEO_CACHE
     try:
+        # 只保留最近 2000 条: 坐标缓存按地点累积, 长期使用会无限增长
+        if isinstance(_GEO_CACHE, dict) and len(_GEO_CACHE) > 2000:
+            def _at(item):
+                value = item[1]
+                return (value.get("at") or 0) if isinstance(value, dict) else 0
+            _GEO_CACHE = dict(sorted(_GEO_CACHE.items(), key=_at, reverse=True)[:2000])
         os.makedirs(os.path.dirname(GEOCODE_CACHE_FILE) or ".", exist_ok=True)
         tmp = GEOCODE_CACHE_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -12027,6 +12148,16 @@ def fm_action(area, op, items, dest, name):
                     shutil.copy2(s, d)
                 done += 1
             except (OSError, shutil.Error) as ex:
+                # 复制失败留下的半截文件/目录直接清掉, 免得白占空间;
+                # 移动不清理: 跨设备移动可能在"目标已完整、删源失败"时抛错, 删目标会丢数据
+                if op == "copy":
+                    try:
+                        if os.path.isdir(d) and not os.path.islink(d):
+                            shutil.rmtree(d, ignore_errors=True)
+                        elif os.path.lexists(d):
+                            os.unlink(d)
+                    except OSError:
+                        pass
                 fail(s, str(ex)[-80:])
         return finish("已%s %d 项" % (verb, done))
 
@@ -12833,7 +12964,7 @@ def ffmpeg_fix():
             missing.append("HEVC 解码")
         if not (caps.get("x264") or caps.get("v4l2")):
             missing.append("H.264 编码")
-    kind, pm, ver = _pkg_manager()
+    kind, pm, _ = _pkg_manager()
     if not pm:
         return False, "未找到 apk/opkg 包管理器，无法自动安装。缺少：%s。请手动安装完整 ffmpeg 后刷新页面。" % "、".join(missing)
     # 装 ffmpeg 本体和完整库; 是否带 libx264 会在安装后重新探测, 缺了就提示用安装器补静态版
@@ -13162,7 +13293,7 @@ def _valid_transcode_keys():
         base = os.path.join(ARCHIVE, cat)
         if not os.path.isdir(base):
             continue
-        for root, dirs, files in os.walk(base):
+        for root, _dirs, files in os.walk(base):
             for name in files:
                 fp = os.path.join(root, name)
                 for qv in PLAYBACK_QUALITIES:
@@ -13454,7 +13585,6 @@ def save_paths(body):
     root = (body.get('video_root') or body.get('root') or '').strip()
     if not root and body.get('img') and body.get('archive'):
         # 旧前端发送 img+archive → 反推 root
-        img_p = os.path.normpath(body['img'].strip())
         arc_p = os.path.normpath(body['archive'].strip())
         root = os.path.normpath(os.path.join(arc_p, os.pardir))
     if not isinstance(root, str) or not root:
@@ -14274,7 +14404,7 @@ def _ensure_mkfs_ext4(progress):
     mkfs = _find_tool("mkfs.ext4", "mke2fs")
     if mkfs:
         return mkfs
-    kind, pm, ver = _pkg_manager()
+    kind, pm, _ = _pkg_manager()
     if not pm:
         raise ValueError("系统缺少 mkfs.ext4，且未找到 apk/opkg 包管理器；请手动安装 e2fsprogs")
     hint = "apk add e2fsprogs" if kind == "apk" else "opkg install e2fsprogs"
@@ -14498,11 +14628,20 @@ def _close_self_card_fds(dev, mounts):
     return closed
 
 
+CARD_PROTECTED_COMM = ("procd", "blockd", "ubusd", "netifd", "dnsmasq", "odhcpd", "crond")
+
+
 def _release_card_holders(dev, mounts):
-    """结束仍占用该卡的其它进程并关闭自身卡内句柄, 返回被结束的进程名列表。"""
+    """结束仍占用该卡的其它进程并关闭自身卡内句柄。
+
+    系统守护进程只跳过不杀: 为了格式化把 blockd(自动挂载)或网络服务停掉,
+    代价远大于收益。返回真正被结束的进程名。"""
     holders = _card_holders(dev, mounts)
-    names = sorted({v[0] for v in holders.values()})
-    for pid in holders:
+    names = []
+    for pid, (comm, _hit) in holders.items():
+        if comm in CARD_PROTECTED_COMM:
+            continue
+        names.append(comm or str(pid))
         for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
                 os.kill(pid, sig)
@@ -14510,64 +14649,62 @@ def _release_card_holders(dev, mounts):
                 break
             time.sleep(0.05)
     _close_self_card_fds(dev, mounts)
-    return names
+    return sorted(set(names))
 
 
-def _force_unmount_device(dev, progress=None):
-    """格式化前强制卸载: 先结束占用该卡的进程, 再普通 umount / -f / -l, 直到完全卸载。"""
+def _card_umount_all(dev):
+    """尽力卸载这张卡上的全部挂载点 (普通 -> 懒卸载 -> 强制), 返回仍挂载的列表。
+
+    不因卸载失败中断格式化: 后面用双 -F 强制写入, 卸载只是让结果更干净。"""
+    for mp in _device_mounts(dev):
+        for flag in ([], ["-l"], ["-f"]):
+            try:
+                if _run_cmd(["umount"] + flag + [mp], timeout=20).returncode == 0:
+                    break
+            except (OSError, subprocess.SubprocessError):
+                pass
+    return _device_mounts(dev)
+
+
+def _card_swapoff(dev):
+    """关掉卡上的 swap: 交换分区不在挂载表里, 但同样会让 mkfs 报 Resource busy。"""
+    for sw in _device_swaps(dev):
+        try:
+            _run_cmd(["swapoff", sw], timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def _drop_caches():
+    """丢掉旧的块设备缓存, 避免格式化后仍读到旧超级块。"""
     try:
-        os.sync()
+        with open("/proc/sys/vm/drop_caches", "w") as f:
+            f.write("3")
     except OSError:
         pass
-    mounts = _device_mounts(dev)
-    if mounts:
-        if progress:
-            progress("正在结束占用外置卡的进程…")
-        names = _release_card_holders(dev, mounts)
-        if names and progress:
-            progress("已结束占用: %s" % "、".join(names[:4]))
-    for _ in range(4):
-        mps = _device_mounts(dev)
-        if not mps:
-            break
-        for mp in mps:
-            for flag in ([], ["-f"], ["-l"]):
-                try:
-                    _run_cmd(["umount"] + flag + [mp], timeout=30)
-                except (OSError, subprocess.SubprocessError):
-                    pass
-        time.sleep(0.4)
-    left = _device_mounts(dev)
-    if left:
-        raise ValueError("无法卸载 %s（仍挂载在 %s），请先关闭正在读写该卡的程序后重试"
-                         % (dev, "、".join(left)))
-    # 懒卸载后还可能残留句柄, 再清一次并给内核一点时间释放块设备
-    _release_card_holders(dev, mounts)
-    time.sleep(0.3)
 
 
-def _device_exclusive_ok(dev):
-    """用 O_EXCL 打开块设备: 仍被内核挂载/占用时会 EBUSY, 能直接反映 mkfs 会不会报 busy。"""
+def _card_readonly(dev):
+    """卡被写保护 (侧面开关或内核标记 ro) 时提前给出明确提示, 不空转重试。"""
     try:
-        fd = os.open(dev, os.O_RDONLY | os.O_EXCL)
-        os.close(fd)
-        return True
+        base = os.path.basename(re.sub(r"p?[0-9]+$", "", os.path.realpath(dev)))
+        with open("/sys/block/%s/ro" % base, encoding="utf-8") as f:
+            return f.read().strip() == "1"
     except OSError:
         return False
 
 
-def _wait_device_free(dev, timeout=8.0):
-    """等设备真正被内核释放 (挂载表消失且可独占打开), 避免 mkfs 写 superblock 时 EBUSY。"""
-    deadline = time.time() + timeout
-    while True:
-        if not _device_mounts(dev) and _device_exclusive_ok(dev):
-            return True
-        if time.time() >= deadline:
-            return False
-        time.sleep(0.4)
-
-
-WATCHDOG_PAUSE_FLAG = "/tmp/tsf-watchdog.pause"
+def _card_is_system(dev):
+    """拒绝格式化根文件系统所在的系统盘。"""
+    try:
+        with open("/proc/mounts", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == "/":
+                    return _dev_match(parts[0], dev)
+    except OSError:
+        pass
+    return False
 
 
 def _device_swaps(dev):
@@ -14585,26 +14722,6 @@ def _device_swaps(dev):
     return out
 
 
-def _stop_format_services():
-    """格式化期间停掉会自动挂载或持续读写卡的服务, 返回待恢复列表。
-
-    blockd(fstools) 检测到卸载会自动重新挂载; tesla-live 持续写归档,
-    直接 kill 还会被 procd respawn 立刻拉起, 必须走 init.d 正常 stop。"""
-    stopped = []
-    for name in ("tesla-live", "blockd"):
-        script = "/etc/init.d/" + name
-        if not os.path.exists(script):
-            continue
-        try:
-            r = subprocess.run([script, "stop"], stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=30)
-            if r.returncode == 0:
-                stopped.append(name)
-        except (OSError, subprocess.SubprocessError):
-            pass
-    return stopped
-
-
 def _device_busy_report(dev):
     """mkfs 仍报 busy 时给出真正的占用者, 便于定位自动挂载/swap/残留句柄。"""
     info = []
@@ -14614,14 +14731,10 @@ def _device_busy_report(dev):
     swaps = _device_swaps(dev)
     if swaps:
         info.append("swap: " + "、".join(swaps))
-    holders = _device_holders(dev, mps)
+    holders = _card_holders(dev, mps)
     names = []
-    for pid, _ in holders:
-        try:
-            with open("/proc/%d/comm" % pid, encoding="utf-8", errors="replace") as f:
-                names.append("%s(%d)" % (f.read().strip(), pid))
-        except OSError:
-            names.append(str(pid))
+    for pid, (comm, _hit) in holders.items():
+        names.append("%s(%d)" % (comm, pid) if comm else str(pid))
     if names:
         info.append("占用进程: " + "、".join(sorted(set(names))[:5]))
     if not mps and os.path.isdir("/proc"):
@@ -14647,114 +14760,175 @@ def _device_busy_report(dev):
     return "；".join(info)
 
 
-def _watchdog_pause(on):
-    """格式化等需要独占数据卡的操作期间暂停看门狗。
+CARD_EXT4_LABEL = "TESLA_DATA"
 
-    看门狗发现 /mnt/sdcard 未挂载时会主动 tsf-mount 重新挂载, 若不在卸载前暂停它,
-    mkfs 会被这次"自动挂回"反复打出 Resource busy。"""
+
+def _ext4_mkfs_cmd(mkfs, dev, nodiscard=True):
+    """双 -F 是关键: 只写一次 -F 只放行"参数不合理", 写两次才会在设备仍被内核
+    认为已挂载/正在使用时继续格式化; -E nodiscard 跳过 TRIM, 避免已挂载设备上的
+    discard 被内核直接拒绝成 Resource busy。"""
+    opts = ["-F", "-F"]
+    if nodiscard:
+        opts += ["-E", "nodiscard"]
+    opts += ["-L", CARD_EXT4_LABEL]
+    if os.path.basename(mkfs) == "mke2fs":
+        return [mkfs, "-t", "ext4"] + opts + [dev]
+    return [mkfs] + opts + [dev]
+
+
+def _format_card_ext4(dev):
+    """把外置卡格式化成 ext4, 遇到"设备占用"也坚持到成功。
+
+    不做"必须先彻底卸载才能格式化"的前置判断, 每轮只做最轻的释放动作并按需升级:
+      1. sync + 卸载挂载点 (普通 -> 懒卸载 -> 强制)
+      2. swapoff 卡上的交换分区
+      3. 仍 busy 时结束残留占用进程 / 关闭自身句柄 / 丢页缓存
+    双 -F 让 mke2fs 即使仍认为设备已挂载也直接覆盖写入, 因此内核报占用不再是死路。
+    """
+    if _card_readonly(dev):
+        raise ValueError("外置卡处于写保护状态，请关闭卡上的写保护开关后重试")
+    if not os.path.exists(dev):
+        raise ValueError("找不到设备 %s，外置卡可能已拔出" % dev)
+    mkfs = _ensure_mkfs_ext4(lambda message: _card_job_set(message=message))
+    nodiscard = True
+    errors = []
+    for attempt in range(1, 7):
+        _card_job_set(message=("正在创建 ext4 文件系统…" if attempt == 1
+                               else "设备仍被占用，正在释放并重试（第 %d 次）…" % attempt))
+        try:
+            os.sync()
+        except OSError:
+            pass
+        _card_umount_all(dev)
+        _card_swapoff(dev)
+        if attempt >= 3:
+            names = _release_card_holders(dev, _device_mounts(dev))
+            _drop_caches()
+            if names:
+                _card_job_set(message="已结束占用该卡的进程：%s，正在格式化…" % "、".join(names[:3]))
+        r = _run_cmd(_ext4_mkfs_cmd(mkfs, dev, nodiscard), timeout=900)
+        out = ((r.stderr or "") + "\n" + (r.stdout or "")).strip()
+        if r.returncode == 0:
+            _drop_caches()
+            fs = _blkid(dev)
+            if fs and fs != "ext4":
+                # mkfs 退出了但读到的还是旧文件系统 (块设备缓存/写回问题), 再来一轮
+                errors.append("格式化后仍识别为 %s" % fs)
+                time.sleep(0.5)
+                continue
+            return True
+        errors.append(out or ("mkfs 返回 %d" % r.returncode))
+        if nodiscard and re.search(r"invalid|unsupported|unknown option|不支持|非法", out, re.I):
+            # 极老的 e2fsprogs 不认识 -E nodiscard, 去掉后立刻再试一次
+            nodiscard = False
+            continue
+        if not re.search(r"busy|mounted|in use|占用|正在使用", out, re.I):
+            break
+        time.sleep(0.5 * attempt)
+    detail = (errors[-1] if errors else "未知错误")[:200]
+    raise ValueError("格式化失败：%s（%s）" % (detail, _device_busy_report(dev)))
+
+
+def _card_mount_fresh(dev, target):
+    """格式化后重新挂载到 target。
+
+    格式化期间卡可能被 blockd/看门狗自动挂回旧文件系统, 先彻底摘掉旧挂载
+    (卸载失败时再结束残留占用进程), 确认没有挂载后才挂新格式化的 ext4。"""
     try:
-        if on:
-            with open(WATCHDOG_PAUSE_FLAG, "w", encoding="utf-8") as f:
-                f.write("card-format\n")
-        else:
-            os.unlink(WATCHDOG_PAUSE_FLAG)
+        os.makedirs(target, exist_ok=True)
     except OSError:
-        pass
+        return False, "无法创建挂载点 %s" % target
+    err = ""
+    for _ in range(4):
+        if _device_mounts(dev):
+            _card_umount_all(dev)
+            if _device_mounts(dev):
+                _release_card_holders(dev, _device_mounts(dev))
+                time.sleep(0.5)
+                _card_umount_all(dev)
+        if _device_mounts(dev):
+            time.sleep(0.5)
+            continue
+        r = _run_cmd(["mount", "-t", "ext4", dev, target], timeout=60)
+        if r.returncode == 0:
+            return True, ""
+        err = (r.stderr or r.stdout or "").strip()[:120]
+        time.sleep(0.5)
+    return False, err
 
 
 def external_card_format(body):
     """初始格式化外置卡为 ext4。会清空该卡全部内容, 需前端二次确认。"""
-    dev = str((body or {}).get("device") or "").strip()
-    if str((body or {}).get("confirm") or "") != dev:
+    body = body if isinstance(body, dict) else {}
+    dev = str(body.get("device") or "").strip()
+    if str(body.get("confirm") or "") != dev:
         raise ValueError("请确认要格式化该卡后再继续")
     if not re.match(r"^/dev/(mmcblk\d+(p\d+)?|sd[a-z]+\d*)$", dev):
         raise ValueError("设备路径不合法")
+    if _card_is_system(dev):
+        raise ValueError("这是系统盘，不能格式化")
     if storage_busy():
         raise ValueError("正在调整车机 U 盘容量或格式化，请稍后再试")
     if _ARCH_SYNC["state"] == "running":
         raise ValueError("正在同步归档区，请稍后再试")
+    if usb_attached or os.path.ismount(MNT):
+        raise ValueError("请先恢复车机导出再格式化外置卡")
     _card_job_claim("format", "正在准备格式化…")
 
     def work():
-        mounts = _device_mounts(dev)
-        was_data = any(os.path.abspath(mp) == os.path.abspath(VIDEO_ROOT) or
-                       os.path.abspath(VIDEO_ROOT).startswith(os.path.abspath(mp).rstrip("/") + "/")
-                       for mp in mounts)
-        watchdog_paused = False
-        stopped_services = []
+        # 优先挂回这张分区自己的挂载点, 其次同卡其它分区, 最后 /mnt/sdcard
+        table = _mount_table()
+        own = [mp for mp, _ in (table.get(dev) or table.get(os.path.realpath(dev)) or [])]
+        target = (own or _device_mounts(dev) or [""])[0] or "/mnt/sdcard"
+        root = os.path.abspath(VIDEO_ROOT) if VIDEO_ROOT else ""
+        was_data = bool(root and (root == os.path.abspath(target) or
+                                  root.startswith(os.path.abspath(target).rstrip("/") + "/")))
+        live_stopped = False
+        format_flag = "/tmp/tsf-card-format"
         try:
-            if usb_attached or os.path.ismount(MNT):
-                raise ValueError("请先恢复车机导出再格式化外置卡")
-            # 卸载后立刻暂停看门狗, 防止它把刚卸载的卡自动挂回导致 mkfs Resource busy
-            _watchdog_pause(True)
-            watchdog_paused = True
-            # 再停掉会自动挂载的 blockd 与持续写卡的 tesla-live, 避免卸载后被立刻拉回
-            stopped_services = _stop_format_services()
-            for sw in _device_swaps(dev):
+            # 格式化期间告诉看门狗别去 tsf-mount: 否则它可能把卡重新挂上, 与 mkfs 抢设备。
+            # 只用一个窄标记, 不影响看门狗对网页服务的监控与重启。
+            with open(format_flag, "w") as ff:
+                ff.write(dev)
+        except OSError:
+            format_flag = ""
+        try:
+            if was_data:
+                # 归档同步服务还在持续写这张卡: 先停下, 避免旧文件系统的脏页
+                # 回写到刚格式化好的新文件系统里
                 try:
-                    _run_cmd(["swapoff", sw], timeout=30)
+                    live_stopped = _run_cmd(["/etc/init.d/tesla-live", "stop"],
+                                             timeout=30).returncode == 0
                 except (OSError, subprocess.SubprocessError):
-                    pass
-            mkfs = _ensure_mkfs_ext4(lambda message: _card_job_set(message=message))
-            _card_job_set(message="正在卸载外置卡…")
-            _force_unmount_device(dev, lambda message: _card_job_set(message=message))
-            _card_job_set(message="正在等待外置卡释放…")
-            _wait_device_free(dev, timeout=8.0)
-            _card_job_set(message="正在创建 ext4 文件系统…")
-            # -F 重复两次: 常规的 -F 只放行非块设备/异常参数, 双 -F 才会在设备仍被
-            # 内核标记占用时继续格式化 —— 卸载已完成, 这里的占用只会是残留句柄
-            if os.path.basename(mkfs).startswith("mke2fs"):
-                cmd = [mkfs, "-t", "ext4", "-F", "-F", "-L", "TESLA_DATA", dev]
-            else:
-                cmd = [mkfs, "-F", "-F", "-L", "TESLA_DATA", dev]
-            r = _run_cmd(cmd, timeout=600)
-            for attempt in range(4):
-                if r.returncode == 0:
-                    break
-                err = (r.stderr or r.stdout or "未知错误").strip()
-                # mke2fs 提示 "is mounted / in use / Resource busy" 都是内核仍占用:
-                # 结束占用进程、卸载并等待块设备可独占打开后再重试
-                if attempt == 3 or not re.search(r"mounted|in use|busy", err, re.I):
-                    break
-                _card_job_set(message="设备仍被占用，正在释放后重试…")
-                _force_unmount_device(dev, lambda message: _card_job_set(message=message))
-                _wait_device_free(dev, timeout=8.0)
-                r = _run_cmd(cmd, timeout=600)
-            if r.returncode != 0:
-                err = (r.stderr or r.stdout or "未知错误").strip()
-                if re.search(r"mounted|in use|busy", err, re.I):
-                    # 把真正的占用者(挂载点/swap/进程名)直接报出来, 便于对症处理
-                    raise ValueError("格式化失败: " + _device_busy_report(dev)
-                                     + "。原始错误: " + err[:80])
-                raise ValueError("格式化失败: " + err[:160])
-            target = mounts[0] if mounts else "/mnt/sdcard"
-            os.makedirs(target, exist_ok=True)
-            _card_job_set(message="正在挂载 " + target)
-            r = _run_cmd(["mount", "-t", "ext4", dev, target], timeout=60)
-            if r.returncode != 0:
-                raise ValueError("格式化成功但挂载失败: " + (r.stderr or "").strip()[:120])
-            if was_data:
+                    live_stopped = False
+            _format_card_ext4(dev)
+            _card_job_set(message="格式化完成，正在挂载 %s" % target)
+            mounted, mount_err = _card_mount_fresh(dev, target)
+            if was_data and mounted:
                 for sub in ("img", "archive", "logs"):
-                    os.makedirs(os.path.join(VIDEO_ROOT, sub), exist_ok=True)
-            _card_job_set(state="done", message="格式化完成" + ("，请重启服务" if was_data else ""))
-            if was_data:
-                try:
-                    subprocess.Popen(["/etc/init.d/tesla-viewer", "restart"],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except OSError:
-                    pass
+                    try:
+                        os.makedirs(os.path.join(VIDEO_ROOT, sub), exist_ok=True)
+                    except OSError:
+                        pass
+            if mounted:
+                _card_job_set(state="done", message="格式化完成（ext4），已挂载到 %s" % target)
+            else:
+                _card_job_set(state="done", message="格式化完成（ext4），但自动挂载失败：%s"
+                              % (mount_err or "可稍后刷新后手动挂载"))
         except Exception as ex:
             _card_job_set(state="error", message=str(ex)[:200])
         finally:
-            # 先恢复格式化前停掉的服务, 再解除看门狗暂停, 避免重复拉起
-            for name in reversed(stopped_services):
+            if format_flag:
                 try:
-                    subprocess.run(["/etc/init.d/" + name, "start"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
-                except (OSError, subprocess.SubprocessError):
+                    os.unlink(format_flag)
+                except OSError:
                     pass
-            if watchdog_paused:
-                _watchdog_pause(False)
+            if live_stopped:
+                try:
+                    subprocess.Popen(["/etc/init.d/tesla-live", "start"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except OSError:
+                    pass
 
     threading.Thread(target=work, daemon=True, name="card-format").start()
     return {"ok": True, "job": dict(_CARD_JOB)}
@@ -14810,7 +14984,7 @@ def _scan_archive_locations(force=False):
     roots, seen = [], set()
     allowed = ("ext4", "exfat", "vfat", "ntfs", "ntfs3", "btrfs", "xfs", "fuseblk", "fuse")
     skip = ("/proc", "/sys", "/dev", "/run", "/tmp", "/var", "/opt", "/mnt/mu300-disk")
-    for src, lst in _mount_table().items():
+    for _src, lst in _mount_table().items():
         for mp, fs in lst:
             if mp in seen or fs not in allowed and not fs.startswith("fuse"):
                 continue
@@ -14988,7 +15162,7 @@ def archive_sync_start():
         t0 = time.time()
         copied_recent = set()
         try:
-            for cat, ev, name, e, dest in tasks:
+            for cat, ev, _name, e, dest in tasks:
                 if sync_write_paused():
                     raise ValueError("外置卡测速开始，已暂停同步写入，测速结束后请重新同步")
                 if storage_busy():
@@ -15390,7 +15564,7 @@ def _migrate_work(items, plans, policy, total):
                 except Exception as ex:
                     failed.append("%s: %s" % (fp, str(ex)[:60]))
             # 只清理空目录, 未勾选的分类原样保留
-            for dp, dns, fns in os.walk(it["path"], topdown=False):
+            for dp, _dns, _fns in os.walk(it["path"], topdown=False):
                 try:
                     os.rmdir(dp)
                 except OSError:
@@ -15482,12 +15656,17 @@ def archive_node_delete(body):
     roots = [os.path.abspath(i["path"]) for i in _ARCH_SCAN["items"] if i["type"] == "archive"]
     if not path or not any(path == r or path.startswith(r + os.sep) for r in roots):
         raise ValueError("只能删除本次扫描到的归档目录内的内容")
-    if os.path.isdir(path):
-        shutil.rmtree(path)
-    elif os.path.isfile(path):
-        os.unlink(path)
-    else:
-        raise ValueError("路径不存在")
+    if storage_busy():
+        raise ValueError("正在调整存储容量，请稍后再试")
+    # 与上传/文件管理/归档同步串行, 并遵守"已解锁才能删"的录像锁规则
+    with _storage_edit_lock:
+        check_recording_write([path])
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        elif os.path.isfile(path):
+            os.unlink(path)
+        else:
+            raise ValueError("路径不存在")
     _ARCH_SCAN.update(t=0.0)
     return {"ok": True, "msg": "已删除"}
 
@@ -15507,12 +15686,12 @@ def archive_migrate_delete(body):
                 removed.append(it["path"])
             elif it.get("dirs") is not None:
                 # 只删除勾选的分类内容, 其余分类保留
-                for fp, rel, size in _archive_selected_files(it):
+                for fp, _rel, _size in _archive_selected_files(it):
                     try:
                         os.unlink(fp)
                     except OSError:
                         pass
-                for dp, dns, fns in os.walk(it["path"], topdown=False):
+                for dp, _dns, _fns in os.walk(it["path"], topdown=False):
                     try:
                         os.rmdir(dp)
                     except OSError:
@@ -18607,12 +18786,6 @@ def _prewarm_plan(q):
     return jobs
 
 
-def _prewarm_pick(q):
-    """挑一个还有 q 档位没转的事件 (新的优先), 返回 (mtime, cat, name, [待转文件])"""
-    jobs = _prewarm_plan(q)
-    return jobs[0] if jobs else None
-
-
 # 预热白名单: 只有哨兵 + 手动保存。实时滚动记录 (RecentClips) 每分钟新增一段、很快滚动删除,
 # 预转出来的缓存几乎立刻作废, 只会让设备一直满载转码、SoC 长期高温, 所以不预热。
 # 用户真的点开实时滚动记录/实时预览时, /media 仍会按需后台转码 (不挡首帧)。
@@ -19003,7 +19176,7 @@ def _ffrun(cmd, timeout=900, job_id=None):
         except OSError:
             pass
         try:
-            out, err = p.communicate(timeout=timeout)
+            _out, err = p.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
                 p.kill()
@@ -19358,7 +19531,6 @@ def _strip_emulation(b):
 def _mp4_video_samples(fp, max_samples=4000, with_duration=False, with_timing=False):
     """解析 moov, 返回 [(offset, size), ...] 与 lenSize; 失败返回 None"""
     with open(fp, "rb") as f:
-        d = f.read(4096)
         f.seek(0, 2)
         fsize = f.tell()
 
@@ -19460,7 +19632,6 @@ def _mp4_video_samples(fp, max_samples=4000, with_duration=False, with_timing=Fa
     n = struct.unpack(">I", moov[a + 8:a + 12])[0]
     if uniform:
         sizes = [uniform] * n
-        buf = b""
     else:
         take = min(n, max_samples * 2)
         sizes = list(struct.unpack(">%dI" % take, moov[a + 12:a + 12 + 4 * take]))
@@ -20086,7 +20257,12 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, html.encode())
 
     def _do_login(self):
-        n = min(int(self.headers.get("Content-Length") or 0), 4096)
+        # 负数/非法 Content-Length 不能让 read(n) 退化成"读到连接结束", 否则未登录即可打满内存
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        n = max(0, min(n, 4096))
         try:
             f = urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "ignore"))
         except Exception:
@@ -20137,6 +20313,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # 基础防护头: 禁止 MIME 嗅探/被第三方页面套 iframe, 且不外带来源地址
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "no-referrer")
         # 页面/接口一律禁止缓存: 之前 HTML 没有任何缓存头, iOS Safari 会把旧页面留在内存里,
         # 升级后手机上仍然显示旧界面 (典型症状: 已经改了样式, 手机上还是老样子)
         if "text/html" in ctype or "application/json" in ctype:
@@ -20172,9 +20352,14 @@ class Handler(BaseHTTPRequestHandler):
         if "multipart/form-data" not in ctype or not mm:
             return None, None, {}
         boundary = mm.group(1).strip('"').encode()
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            return None, None, {}
         if length > MAX_UPLOAD:
             return "TOOBIG", None, {}
+        if length <= 0:
+            return None, None, {}
         body = self.rfile.read(length)
         fields = {}
         file_fn = None
@@ -20352,6 +20537,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
             self.end_headers()
             self.wfile.write(body)
@@ -20651,6 +20837,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Content-Type-Options", "nosniff")
             # 图标不大 (默认 10KB), 允许缓存省流量; 换图后前端会带 ?v= 破缓存
             self.send_header("Cache-Control", "public, max-age=86400")
             self.end_headers()
@@ -20842,7 +21029,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.connection.settimeout(5)
                 except OSError:
                     pass
-                peer_dead = False
                 with open(fp, "rb") as f:
                     f.seek(start)
                     remain = length
@@ -20852,10 +21038,8 @@ class Handler(BaseHTTPRequestHandler):
                             r, _, _ = select.select([self.connection], [], [], 0)
                             if r:
                                 if not self.connection.recv(1, socket.MSG_PEEK):
-                                    peer_dead = True     # 对端 FIN
-                                    break
+                                    break            # 对端 FIN
                         except (ConnectionResetError, OSError):
-                            peer_dead = True
                             break
                         chunk = f.read(min(65536, remain))
                         if not chunk:
@@ -20863,7 +21047,6 @@ class Handler(BaseHTTPRequestHandler):
                         try:
                             self.wfile.write(chunk)
                         except (BrokenPipeError, ConnectionResetError, socket.timeout, TimeoutError, OSError):
-                            peer_dead = True
                             break
                         remain -= len(chunk)
                         if time.time() > deadline:
@@ -20927,7 +21110,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found")
             return
         try:
-            st = os.stat(fp)
+            os.stat(fp)
         except OSError:
             self._send(404, b"not found")
             return
@@ -21217,7 +21400,10 @@ class Handler(BaseHTTPRequestHandler):
             quality = q.get("q", ["480p"])[0]
             if quality not in ("360p", "480p", "720p", "orig"):
                 quality = "480p"
-            length = int(self.headers.get("Content-Length", 0) or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                length = 0
             if not name or not re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$", name):
                 self._json({"ok": False, "msg": "参数错误"}, 400)
                 return

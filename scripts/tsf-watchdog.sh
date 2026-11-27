@@ -77,9 +77,18 @@ while true; do
         fails=0
         echo 0 > "$FAIL_FILE"
         storage_miss=$((storage_miss + 1))
-        if [ $((storage_miss % 6)) -eq 1 ]; then
+        if [ $((storage_miss % 6)) -eq 1 ] && [ ! -f /tmp/tsf-card-format ]; then
             log "数据卡未挂载($DATA_ROOT), 尝试 tsf-mount 挂载; 自动恢复与重启策略暂停"
             /etc/init.d/tsf-mount start >/tmp/tsf-watchdog-mount.log 2>&1
+        fi
+        # 网页本身不依赖数据卡: 卡缺失时仍要保证 tesla-viewer 在跑,
+        # 否则用户连"格式化/换卡/排查"的入口都没有, 只能 SSH。
+        # tesla-live 依赖数据卡, 卡没挂时不拉起、也不计失败。
+        if [ -x /etc/init.d/tesla-viewer ] &&
+           [ ! -f "$STOPPED_PREFIXtesla-viewer" ] && [ ! -f "$STATE_DIR/disabled-tesla-viewer" ] &&
+           ! /etc/init.d/tesla-viewer running >/dev/null 2>&1; then
+            log "数据卡未挂载, 但网页服务未运行, 尝试 start tesla-viewer"
+            /etc/init.d/tesla-viewer start >/tmp/tsf-watchdog-restart.log 2>&1
         fi
         continue
     fi

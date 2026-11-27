@@ -27,10 +27,12 @@ start_apps() {
         sh "$TSF_DIR/tesla-gadget.sh" on ||
             logger -t tsf-mount "USB 导出失败(见 tesla-gadget.log), 继续启动应用服务"
     else
-        /etc/init.d/tesla-gadget start || return 1
+        /etc/init.d/tesla-gadget start ||
+            logger -t tsf-mount "USB gadget 启动失败, 继续启动应用服务"
     fi
     # 被手动 disable 的服务开机也不再拉起 (与看门狗共用同一份禁用标记)
-    [ -f /root/tsf-watchdog/disabled-tesla-live ] || /etc/init.d/tesla-live start || return 1
+    [ -f /root/tsf-watchdog/disabled-tesla-live ] || /etc/init.d/tesla-live start ||
+        logger -t tsf-mount "tesla-live 启动失败, 继续启动网页服务"
     [ -f /root/tsf-watchdog/disabled-tesla-viewer ] || /etc/init.d/tesla-viewer start
 }
 
@@ -64,7 +66,8 @@ mount_card() {
 wait_and_start_services() {
     i=0
     while [ "$i" -lt 60 ]; do
-        if mount_card && [ -d "$TSF_GADGET/configs/$TSF_GADGET_CONFIG" ] && [ -d "/sys/class/udc/$TSF_UDC" ]; then
+        # 只等数据卡本身: gadget 目录 / UDC 缺失只影响车机 U 盘导出, 不该拦掉网页服务
+        if mount_card; then
             logger -t tsf-mount "data card ready after ${i}s"
             start_apps
             return $?
@@ -72,7 +75,9 @@ wait_and_start_services() {
         sleep 1
         i=$((i + 1))
     done
-    logger -t tsf-mount "FAILED: card UUID $UUID not mountable after 60s"
+    # 卡挂不上也要把网页拉起来: 否则没有格式化/换卡/排查的入口, 只能 SSH
+    logger -t tsf-mount "FAILED: card UUID $UUID not mountable after 60s; 仅启动网页以便排查"
+    [ -f /root/tsf-watchdog/disabled-tesla-viewer ] || /etc/init.d/tesla-viewer start
     return 1
 }
 
