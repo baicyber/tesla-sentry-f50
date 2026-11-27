@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.040"
+APP_VERSION = "2026.11.27.041"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -4787,8 +4787,10 @@ async function refreshLive() {
   }
   // 同步状态常驻；容量尚未读到时只隐藏容量摘要。
   const sw = document.getElementById('storwrap');  const dk = live.disk;
-  sw.classList.toggle('status-only', !(dk && dk.disk_total > 0));
-  if (dk && dk.disk_total > 0) {
+  // 外置卡未挂载: 不要拿 /mnt 所在 eMMC 的容量冒充, 三行直接显示 -
+  const noCard = !!dk && dk.disk_ready === false;
+  sw.classList.toggle('status-only', !dk || (!noCard && !(dk.disk_total > 0)));
+  if (dk && (dk.disk_total > 0 || noCard)) {
     const GB = 1073741824;
     const gb = n => {
       if (!n || n < 0) return '0MB';
@@ -4801,27 +4803,38 @@ async function refreshLive() {
       el.style.width = pct.toFixed(1) + '%';
       el.style.background = storColor(pct);
     };
-    // 虚拟U盘: 卷内实际写入 / 镜像标称容量
-    // (img_real 是镜像在宿主盘上的预分配占用, 几乎等于标称容量, 永远 100% 不直观)
-    if (dk.img_ready === false) {
-      // 车机格式化 U 盘期间镜像暂时不是 exFAT, 显示未就绪而不是满盘
-      document.getElementById('storvusb').textContent = t('镜像未就绪（车机格式化中）');
-      const ub = document.getElementById('storvusbbar');
-      ub.style.width = '0%';
-      ub.style.background = storColor(0);
+    if (noCard) {
+      for (const v of ['storvusb', 'storarc', 'stortot']) {
+        const el = document.getElementById(v);
+        if (el) { el.textContent = '-'; el.title = t('外置卡未挂载'); }
+      }
+      for (const b of ['storvusbbar', 'storarcbar', 'stortotbar']) {
+        const el = document.getElementById(b);
+        if (el) { el.style.width = '0%'; el.style.background = storColor(0); }
+      }
     } else {
-      tset('storvusb', dk.img_used != null ? dk.img_used : dk.img_real, dk.img_nominal,
-           'storvusbbar');
+      // 虚拟U盘: 卷内实际写入 / 镜像标称容量
+      // (img_real 是镜像在宿主盘上的预分配占用, 几乎等于标称容量, 永远 100% 不直观)
+      if (dk.img_ready === false) {
+        // 车机格式化 U 盘期间镜像暂时不是 exFAT, 显示未就绪而不是满盘
+        document.getElementById('storvusb').textContent = t('镜像未就绪（车机格式化中）');
+        const ub = document.getElementById('storvusbbar');
+        ub.style.width = '0%';
+        ub.style.background = storColor(0);
+      } else {
+        tset('storvusb', dk.img_used != null ? dk.img_used : dk.img_real, dk.img_nominal,
+             'storvusbbar');
+      }
+      const vu = document.getElementById('storvusb');
+      if (vu) vu.title = t('车机 U 盘里已写入的数据 / 车机看到的容量');
+      // 归档区: 已归档 / 配置的归档总量上限
+      const arcTot = dk.arc_limit > 0 ? dk.arc_limit : (dk.arc_used || 0) + (dk.arc_free || 0);
+      tset('storarc', dk.arc_used, arcTot, 'storarcbar');
+      const ia = document.getElementById('storarc');
+      if (ia) ia.title = t('盒子上保存的历史副本 (车机 U 盘里只保留滚动缓冲)');
+      // 总占用: 整盘已用 / 整盘容量 (三行统一按 storColor 的占用比例取色)
+      tset('stortot', dk.disk_used, dk.disk_total, 'stortotbar');
     }
-    const vu = document.getElementById('storvusb');
-    if (vu) vu.title = t('车机 U 盘里已写入的数据 / 车机看到的容量');
-    // 归档区: 已归档 / 配置的归档总量上限
-    const arcTot = dk.arc_limit > 0 ? dk.arc_limit : (dk.arc_used || 0) + (dk.arc_free || 0);
-    tset('storarc', dk.arc_used, arcTot, 'storarcbar');
-    const ia = document.getElementById('storarc');
-    if (ia) ia.title = t('盒子上保存的历史副本 (车机 U 盘里只保留滚动缓冲)');
-    // 总占用: 整盘已用 / 整盘容量 (三行统一按 storColor 的占用比例取色)
-    tset('stortot', dk.disk_used, dk.disk_total, 'stortotbar');
   }
   // 实时预览单独检查 RecentClips，避免全量归档请求与视频争用连接。
   if (liveMode) return;
@@ -8250,6 +8263,12 @@ function storageRenderAllocation() {
   budgetText.hidden = true;
   budgetText.dataset.error = 'false';
   if (!storageData) return;
+  // 外置卡未挂载时不能用 eMMC 容量做预算, 仅提示并保持数字为 -
+  if (!storageData.disk || storageData.disk.disk_ready === false) {
+    budgetText.textContent = '外置卡未挂载，容量暂不显示';
+    budgetText.hidden = false;
+    return;
+  }
   const values = {};
   for (const name of ['usb', 'archive', 'drive', 'reserve', 'minimum']) {
     const input = document.getElementById('storage-' + name);
@@ -8289,9 +8308,28 @@ function storageRenderAllocation() {
   budgetText.hidden = !budgetText.textContent;
 }
 function storageRenderUsage() {
+  if (!storageData || !storageData.disk) return;
   const {disk, values, usb_gib} = storageData;
   const G = 1073741824;
   const gb = (bytes) => (bytes || 0) / G;
+  // 外置卡未挂载: 所有容量数字直接显示 -, 不要拿 /mnt 所在 eMMC 的容量冒充
+  if (disk.disk_ready === false) {
+    for (const name of ['usb', 'archive', 'drive', 'recent', 'sentry', 'saved', 'cache']) {
+      const el = document.getElementById('storage-used-' + name);
+      if (el) el.textContent = '—';
+      const meter = document.getElementById('storage-meter-' + name);
+      if (meter) { meter.hidden = true; meter.value = 0; }
+    }
+    const free = document.getElementById('storage-used-free');
+    if (free) free.textContent = '—';
+    const other = document.getElementById('storage-used-other');
+    if (other) other.textContent = '—';
+    const bar = document.getElementById('usage-chart');
+    if (bar) bar.innerHTML = '';
+    const legend = document.getElementById('usage-legend');
+    if (legend) legend.innerHTML = '';
+    return;
+  }
   const inputNum = (id, fallback) => {
     const el = document.getElementById(id);
     if (!el || el.value === '') return fallback;
@@ -12849,19 +12887,23 @@ def disk_usage():
     d["img_ready"] = d["img_used"] is not None
     d["arc_used"] = archive_size()
     # 整盘 = 镜像文件所在分区 (镜像和归档同一块盘)
+    # 外置卡未挂载时 /mnt/sdcard 只是 rootfs 上的空目录, statvfs 会读到 eMMC 的容量,
+    # 这种「假容量」不能显示; 标记未就绪并清零, 前端直接显示 -
+    d["disk_ready"] = card_data_ready()
     d["disk_total"] = d["disk_used"] = d["disk_free"] = 0
-    for p in (os.path.dirname(IMG) or "/", ARCHIVE):
-        try:
-            hf = os.statvfs(p)
-        except OSError:
-            continue
-        if hf.f_blocks <= 0:
-            continue
-        fr = hf.f_frsize
-        d["disk_total"] = hf.f_blocks * fr
-        d["disk_free"] = hf.f_bavail * fr
-        d["disk_used"] = (hf.f_blocks - hf.f_bavail) * fr
-        break
+    if d["disk_ready"]:
+        for p in (os.path.dirname(IMG) or "/", ARCHIVE):
+            try:
+                hf = os.statvfs(p)
+            except OSError:
+                continue
+            if hf.f_blocks <= 0:
+                continue
+            fr = hf.f_frsize
+            d["disk_total"] = hf.f_blocks * fr
+            d["disk_free"] = hf.f_bavail * fr
+            d["disk_used"] = (hf.f_blocks - hf.f_bavail) * fr
+            break
     # 归档区剩余空间 = 整盘剩余 (同分区)
     d["arc_free"] = d["disk_free"]
     # 页面展示和清理策略使用同一个归档总量上限: 有限时按分配容量; 设为无限 (0) 时
@@ -12872,24 +12914,25 @@ def disk_usage():
         d["arc_limit"] = max(0, d["disk_total"] - (d["img_nominal"] or 0) - FREE_TARGET_MB * 1048576)
     # 兼容旧字段: 挂载时 = 车载U盘 (exFAT) 内部用量, 否则 = 整盘
     d["src"], d["used"], d["total"] = "loop", d["disk_used"], d["disk_total"]
-    for p, usb in ((MNT, True), (ARCHIVE, False)):
-        if usb and not os.path.ismount(MNT):
-            # MNT 目录本身常驻 (tmpfs), 未挂载镜像时 statvfs 会读到 tmpfs 的
-            # 小容量 (如 0.7G), 必须跳过
-            continue
-        try:
-            st = os.statvfs(p)
-        except OSError:
-            continue
-        if st.f_blocks <= 0:
-            continue
-        fr = st.f_frsize
-        d["src"] = "usb" if usb else "loop"
-        d["used"] = (st.f_blocks - st.f_bavail) * fr
-        d["total"] = st.f_blocks * fr
-        break
-    if d["disk_total"] <= 0 and d["arc_used"] <= 0:
-        return None
+    if d["disk_ready"]:
+        for p, usb in ((MNT, True), (ARCHIVE, False)):
+            if usb and not os.path.ismount(MNT):
+                # MNT 目录本身常驻 (tmpfs), 未挂载镜像时 statvfs 会读到 tmpfs 的
+                # 小容量 (如 0.7G), 必须跳过
+                continue
+            try:
+                st = os.statvfs(p)
+            except OSError:
+                continue
+            if st.f_blocks <= 0:
+                continue
+            fr = st.f_frsize
+            d["src"] = "usb" if usb else "loop"
+            d["used"] = (st.f_blocks - st.f_bavail) * fr
+            d["total"] = st.f_blocks * fr
+            break
+        if d["disk_total"] <= 0 and d["arc_used"] <= 0:
+            return None
     return d
 
 
@@ -13832,6 +13875,13 @@ def storage_status():
                     _storage_job.update(state="idle", message=note)
     values = storage_allocation.load()
     disk = storage_allocation.snapshot(IMG, ARCHIVE, TRANSCODE_DIR)
+    # 外置卡未挂载时 snapshot 会把 /mnt 所在 eMMC 当成数据盘; 这里标记并清零,
+    # 前端容量数字显示 - , 不再出现 7.2G/29G 之类的假容量
+    disk['disk_ready'] = card_data_ready()
+    if not disk['disk_ready']:
+        for k in ('total_bytes', 'used_bytes', 'free_bytes', 'budget_bytes'):
+            if k in disk:
+                disk[k] = 0
     disk['usb_used_bytes'] = _exfat_used(IMG)
     disk['usb_ready'] = disk['usb_used_bytes'] is not None
     # 实际用量分项。四类录像之间用硬链接共享同一段视频, 必须共用 seen 集合,
