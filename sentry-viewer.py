@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.042"
+APP_VERSION = "2026.11.27.043"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1949,16 +1949,13 @@ def auto_update_loop():
     time.sleep(90)                       # 开机先让同步与服务稳定
     while True:
         try:
-            if not load_settings().get("auto_update", True):
-                time.sleep(300)
-                continue
-            if load_settings().get("auto_paused", False):
-                # 切换仓库/分支后暂停; 用户点「立即升级」后由 ota_apply 清除
-                time.sleep(30)
-                continue
+            conf = load_settings()
+            auto = bool(conf.get("auto_update", True))
+            paused = bool(conf.get("auto_paused", False))
             if time.time() < AUTO_UPD["next_try"]:
                 time.sleep(60)
                 continue
+            # 默认就定期检查更新 (与是否自动安装无关), 这样页面能及时看到新版本
             j = ota_check(False)
             AUTO_UPD["last_check"] = int(time.time())
             if j.get("error"):
@@ -1969,6 +1966,17 @@ def auto_update_loop():
             if not j.get("has_update"):
                 AUTO_UPD["last_result"] = "已是最新 (%s)" % APP_VERSION
                 AUTO_UPD["next_try"] = time.time() + 1800
+                time.sleep(60)
+                continue
+            if not auto:
+                # 只检查不安装: 在「更新」页提示, 用户可手动升级
+                AUTO_UPD["last_result"] = "发现 v%s, 已勾选自动更新后可自动安装" % j.get("latest")
+                AUTO_UPD["next_try"] = time.time() + 1800
+                time.sleep(60)
+                continue
+            if paused:
+                AUTO_UPD["last_result"] = "发现 v%s, 自动安装已暂停, 点「立即升级」安装" % j.get("latest")
+                AUTO_UPD["next_try"] = time.time() + 600
                 time.sleep(60)
                 continue
             AUTO_UPD["last_result"] = "发现 v%s, 等待空闲后自动升级" % j.get("latest")
@@ -3298,6 +3306,10 @@ body.settings-open { overflow:hidden; }
 #tab-storage .storage-row.cap .storage-help { align-self:center; }
 /* 设置说明跟在文字描述右边, 宽度不够时自动换到描述下方, 不会被输入框/按钮遮挡 */
 .cap-label { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 8px; min-width:0; }
+/* 归档区总上限的标题和其他条目同样大小; 说明统一放到该行下方, 不再挤在标题右侧 */
+.cap-label > label { font-size:14px; }
+.cap-notes { margin:-2px 0 8px; }
+.cap-notes .hint { margin:2px 0; }
 .cap-note { color:var(--muted); font-size:11.5px; line-height:1.4; font-weight:400; }
 @media (pointer:coarse) {
   #tab-storage .storage-row.cap { grid-template-columns:minmax(0,1fr) 76px minmax(0,auto) 44px; gap:4px; }
@@ -3834,15 +3846,20 @@ body.settings-open { overflow:hidden; }
     </details>
     </div>
     <div class="hint card-gate-note" id="card-gate-note" role="status" hidden>外置卡未检测到或未挂载：车机 U 盘容量设定、格式化、归档区设定、同步管理与一键迁移已暂停。请先在上方「外置卡管理」中挂载外置卡。</div>
-    <div class="hint" id="storage-budget" role="status"></div>
     <div class="storage-columns"><section class="storage-quota"><h3>容量设置</h3>
-    <div class="storage-row cap"><div class="cap-label"><label for="storage-archive">归档区总上限</label><span class="cap-note" id="archive-limit-note" hidden></span></div><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
+    <div class="storage-row cap"><div class="cap-label"><label for="storage-archive">归档区总上限</label></div><input class="ninput" id="storage-archive" type="number" min="0" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="归档总上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="archive">?</button></div>
+    <div class="cap-notes">
+      <div class="hint" id="archive-limit-note" hidden></div>
+      <div class="hint" id="storage-budget" role="status"></div>
+    </div>
     <div class="storage-nested"><div class="storage-row cap"><label for="storage-drive">其中：驾驶记录上限</label><input class="ninput" id="storage-drive" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="驾驶记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="drive">?</button></div><div class="storage-row cap"><label for="retention-recentmax">其中：实时滚动记录上限</label><input class="ninput" id="retention-recentmax" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="实时滚动记录上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="recentmax">?</button></div>
     <div class="storage-row cap"><label for="storage-sentry">其中：哨兵上限</label><input class="ninput" id="storage-sentry" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="哨兵录像上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="sentrymax">?</button></div>
     <div class="storage-row cap"><label for="storage-saved">其中：手动保存上限</label><input class="ninput" id="storage-saved" type="number" min="0" max="4096" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="手动保存上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="savedmax">?</button></div>
     <div class="storage-row cap"><label for="storage-cache">其中：转码缓存上限</label><input class="ninput" id="storage-cache" type="number" min="1" max="64" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="转码缓存上限说明" aria-expanded="false" aria-controls="storage-tip" data-help="cachemax">?</button></div></div>
     <div class="storage-row cap"><label for="storage-reserve">安全预留（清理目标）</label><input class="ninput" id="storage-reserve" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="安全预留空间说明" aria-expanded="false" aria-controls="storage-tip" data-help="reserve">?</button></div>
-    <div class="storage-nested"><div class="storage-row cap"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div></div>
+    <div class="hint" id="storage-reserve-hint">建议预留整卡的 10%（动态按卡容量计算）：用于垃圾回收与磨损均衡，避免外置卡写入放大导致使用寿命缩短。</div>
+    <div class="storage-nested"><div class="storage-row cap"><label for="storage-minimum">暂停同步保护线</label><input class="ninput" id="storage-minimum" type="number" min="1" step="1" inputmode="numeric"><span class="retention-unit">G</span><button class="storage-help" type="button" aria-label="暂停同步保护线说明" aria-expanded="false" aria-controls="storage-tip" data-help="minimum">?</button></div>
+    <div class="hint">建议 4 G：存储卡空闲低于该值时暂停新增同步，等待清理释放空间。</div></div>
     <div class="updbtns"><button class="mini primary" id="storage-save" onclick="storageSave()" disabled>保存归档设置</button><button class="mini" onclick="storageLoad()">重新加载</button></div>
     <div id="storage-quota-status"><div class="hint" id="storage-msg" role="status" aria-live="polite"></div></div>
     <div class="storage-split"></div>
@@ -4205,7 +4222,7 @@ body.settings-open { overflow:hidden; }
       <div class="updbtns">
         <button class="mini" id="upd-check" onclick="otaCheck(true)">检查更新</button>
         <span class="updsplit"><button class="mini primary" id="upd-go" onclick="otaApply()" disabled>立即升级</button><button class="mini primary updcaret" id="upd-force-toggle" type="button" title="更多升级方式" aria-haspopup="menu" aria-expanded="false" onclick="otaForceMenu(event)">▾</button><div class="updmenu" id="upd-force-menu" role="menu" hidden><button type="button" role="menuitem" onclick="otaApply(true)">强制更新（同版本重装）</button></div></span>
-        <label class="updauto" title="检测到新版本时, 在没人看视频的空闲时刻自动升级 (只重启本服务, 约 5 秒)">
+        <label class="updauto" title="默认定期检查更新；勾选后检测到新版本时，在没人看视频的空闲时刻自动安装（只重启本服务，约 5 秒）；不勾选则只提示新版本，由你手动升级">
           <span>自动更新</span>
           <input type="checkbox" id="upd-auto" checked onchange="setAutoUpdate(this.checked)">
         </label>
@@ -8177,8 +8194,8 @@ const STORAGE_HELP = {
   sentrymax: '哨兵录像单独的容量上限，已包含在归档总容量内。超限从最旧事件开始删除，始终保留最新事件；填 0 表示不限制，只按保留天数清理。',
   savedmax: '手动保存录像单独的容量上限，已包含在归档总容量内。超限从最旧事件开始删除，始终保留最新事件；填 0 表示不限制，只按保留天数清理。',
   cachemax: '转码缓存（缩略图、清晰度转码、推送导出）的容量上限，默认 5 G，超出后从最旧的缓存文件开始删除。缓存位于归档目录内，计算总空间时会单独预留。',
-  reserve: '空间不足时，希望清理后恢复的空闲容量，不创建独立分区。增大此值可能使旧归档更早被清理。',
-  minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间。这条保护线不另占容量，不能高于安全预留空间。'
+  reserve: '空间不足时，希望清理后恢复的空闲容量，不创建独立分区。建议填整卡容量的 10%（页面会按卡容量动态显示对应 G 数）：用于垃圾回收与磨损均衡，避免外置卡写入放大导致使用寿命缩短。增大此值可能使旧归档更早被清理。',
+  minimum: '存储卡空闲低于此值时暂停新增同步，等待清理释放空间，建议 4 G。这条保护线不另占容量，不能高于安全预留空间。'
 };
 let storageData = null, storageTimer = null, storageHelpButton = null, storageRequest = 0;
 function storageHelpClose() {
@@ -8234,6 +8251,8 @@ async function storageFetch(path, body) {
 }
 function storageSyncArchiveLimit() {
   if (!storageData) return;
+  // 外置卡未挂载: 整卡容量为 0, 不能拿它去限制/改写归档输入框
+  if (!storageData.disk || storageData.disk.disk_ready === false) return;
   const archive = document.getElementById('storage-archive');
   const usb = document.getElementById('storage-usb');
   const card = Number(storageData.disk.total_bytes) / 1073741824;
@@ -8312,6 +8331,14 @@ function storageRenderUsage() {
   const {disk, values, usb_gib} = storageData;
   const G = 1073741824;
   const gb = (bytes) => (bytes || 0) / G;
+  // 安全预留建议: 按整卡容量动态显示 10% 对应多少 G
+  const reserveHint = document.getElementById('storage-reserve-hint');
+  if (reserveHint) {
+    const totalGb = Math.max(0, (disk.total_bytes || 0) / G);
+    const rec = totalGb > 0 ? Math.max(4, Math.round(totalGb * 0.10)) : 0;
+    reserveHint.textContent = '建议预留整卡的 10%' + (rec ? '（约 ' + rec + ' G）' : '')
+      + '：用于垃圾回收与磨损均衡，避免外置卡写入放大导致使用寿命缩短。';
+  }
   // 外置卡未挂载: 所有容量数字直接显示 -, 不要拿 /mnt 所在 eMMC 的容量冒充
   if (disk.disk_ready === false) {
     for (const name of ['usb', 'archive', 'drive', 'recent', 'sentry', 'saved', 'cache']) {
@@ -8403,25 +8430,13 @@ document.querySelectorAll('#tab-storage input').forEach(input => input.addEventL
   storageRenderAllocation();
   if (storageData) storageRenderUsage();
 }));
-/* 实际用量卡片跟随左侧容量设置的高度: 右侧内容多时内部滚动, 不再把左侧撑高 */
+/* 实际用量卡片跟随左侧容量设置的高度: 等高由 grid 拉伸实现, 条目均分高度, 不出现内部滚动条 */
 function syncStorageCards() {
   const usage = document.getElementById('storage-usage');
   if (!usage) return;
-  const left = usage.parentElement && [...usage.parentElement.children].find(el => el !== usage && el.classList.contains('storage-quota'));
-  if (!left) return;
-  if (matchMedia('(max-width: 999px)').matches) {
-    usage.style.height = ''; usage.style.maxHeight = ''; usage.style.overflowY = '';
-    return;
-  }
-  usage.style.height = 'auto'; usage.style.maxHeight = 'none'; usage.style.overflowY = '';
-  left.style.alignSelf = 'start';
-  const height = Math.round(left.getBoundingClientRect().height);
-  left.style.alignSelf = '';
-  if (height > 0) {
-    usage.style.height = height + 'px';
-    usage.style.maxHeight = height + 'px';
-    usage.style.overflowY = 'auto';
-  }
+  usage.style.height = '';
+  usage.style.maxHeight = '';
+  usage.style.overflowY = '';
 }
 window.addEventListener('resize', syncStorageCards);
 const storageUsbBox = document.getElementById('storage-usb-box');
@@ -8436,11 +8451,14 @@ async function storageLoad() {
     if (request !== storageRequest) return;
     storageData = data;
     const usbInput = document.getElementById('storage-usb');
-    usbInput.max = String(Math.max(1, Math.floor(data.disk.total_bytes / 1073741824 / 2)));
+    const diskReady = !!(data.disk && data.disk.disk_ready !== false);
+    const totalBytes = (data.disk && data.disk.total_bytes) || 0;
+    usbInput.max = String(diskReady
+      ? Math.max(1, Math.floor(totalBytes / 1073741824 / 2)) : 128);
     // 首次设置还没有镜像: 给一个不超过整卡一半的默认容量, 方便直接点「调整 U 盘容量」创建
-    usbInput.value = data.usb_gib > 0
-      ? data.usb_gib
-      : Math.max(1, Math.min(64, Math.floor(data.disk.total_bytes / 1073741824 / 2)));
+    // 外置卡未挂载时整卡容量为 0, 保留输入框原值, 不要写成 1 G
+    if (data.usb_gib > 0) usbInput.value = data.usb_gib;
+    else if (diskReady) usbInput.value = Math.max(1, Math.min(64, Math.floor(totalBytes / 1073741824 / 2)));
     if (data.prewarm) for (const [id, key] of [['prewarm-sentry','prewarm_sentry'],['prewarm-saved','prewarm_saved']]) document.getElementById(id).value = data.prewarm[key];
     for (const [id, key] of [['archive','archive_gib'],['drive','drive_gib'],['reserve','free_target_gib'],['minimum','free_min_gib']]) document.getElementById('storage-' + id).value = data.values[key];
     if (data.retention) for (const [id, key] of [['roll','recent_roll_min'],['recentmax','recent_max_gb'],['keep','recent_keep_min'],['sentrydays','sentry_keep_days'],['saveddays','saved_keep_days']]) document.getElementById('retention-' + id).value = data.retention[key];
@@ -9787,8 +9805,8 @@ function renderAutoUpdate(j) {
   if (!cb || !el) return;
   cb.checked = !!j.auto;
   let s = j.auto
-    ? '已开启: 每 5 分钟检查一次, 发现新版本且没人看视频时自动升级'
-    : '已关闭: 只用下方按钮手动升级';
+    ? '已开启：定期自动检查更新，发现新版本且没人看视频时自动安装'
+    : '已关闭自动安装：仍会定期检查并提示新版本，可点「检查更新」后手动升级';
   if (j.auto && j.auto_paused) s = '已暂停自动更新：切换仓库或分支后不再后台升级，点击「立即升级」后自动恢复';
   if (j.auto) {
     const when = j.auto_checked ? new Date(j.auto_checked * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
@@ -9804,8 +9822,8 @@ async function autoLoad() {
     if (!cb || !el) return;
     cb.checked = !!s.auto_update;
     let txt = s.auto_update
-      ? '已开启: 每 5 分钟检查一次, 发现新版本且没人看视频时自动升级'
-      : '已关闭: 只用下方按钮手动升级';
+      ? '已开启：定期自动检查更新，发现新版本且没人看视频时自动安装'
+      : '已关闭自动安装：仍会定期检查并提示新版本，可点「检查更新」后手动升级';
     if (s.auto_update && s.auto_paused) txt = '已暂停自动更新：切换仓库或分支后不再后台升级，点击「立即升级」后自动恢复';
     const when = s.auto_checked ? new Date(s.auto_checked * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
     if (s.auto_update && (when || s.auto_msg)) txt += '<br>上次 ' + (when ? when + ' · ' : '') + (s.auto_msg || '');
@@ -9822,8 +9840,8 @@ async function setAutoUpdate(on) {
     if (!j.ok) throw new Error(j.msg || '保存失败');
     cb.checked = on;
     el.innerHTML = on
-      ? '已开启: 每 5 分钟检查一次, 发现新版本且没人看视频时自动升级'
-      : '已关闭: 只用下方按钮手动升级';
+      ? '已开启：定期自动检查更新，发现新版本且没人看视频时自动安装'
+      : '已关闭自动安装：仍会定期检查并提示新版本，可点「检查更新」后手动升级';
     if (on) setTimeout(() => otaCheck(false), 800);
   } catch (e) {
     cb.checked = !on;
@@ -13888,6 +13906,13 @@ def storage_status():
         for k in ('total_bytes', 'used_bytes', 'free_bytes', 'budget_bytes'):
             if k in disk:
                 disk[k] = 0
+    # 首次使用还没有 storage.json: 安全预留默认取整卡的 10%（至少 4G）,
+    # 用于垃圾回收和磨损均衡, 比固定 10G 更适配 32G/64G/128G 不同容量。
+    if (disk['disk_ready'] and not os.path.isfile(storage_allocation.settings_path())
+            and disk['total_bytes'] > 0):
+        total_gib = int(disk['total_bytes'] // storage_allocation.GIB)
+        if total_gib > 0:
+            values['free_target_gib'] = max(4, int(round(total_gib * 0.10)))
     disk['usb_used_bytes'] = _exfat_used(IMG)
     disk['usb_ready'] = disk['usb_used_bytes'] is not None
     # 实际用量分项。四类录像之间用硬链接共享同一段视频, 必须共用 seen 集合,
