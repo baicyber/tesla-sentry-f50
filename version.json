@@ -1,5 +1,5 @@
 {
-  "version": "2026.11.27.022",
+  "version": "2026.11.27.023",
   "date": "2026-11-27",
   "files": [
     "storage_allocation.py",
@@ -7,6 +7,9 @@
     "tesla-live-sync.py"
   ],
   "notes": [
+    "清理看门狗残留：tesla-live 去掉 WATCHDOG_DIR/STOP_FLAG/DISABLE_FLAG/stop_service/disable/enable 并补 TSF_DIR 默认值；tsf-mount 不再读写 /tmp/tsf-watchdog.pause 与 /root/tsf-watchdog 禁用标记，启动时直接拉起 tesla-live/tesla-viewer",
+    "外置卡格式化不再写 /tmp/tsf-card-format 标记（原供看门狗跳过 tsf-mount），相关注释同步更新",
+    "—— 以下为 2026.11.27.022 更新 ——",
     "彻底移除服务看门狗：删除 tsf-watchdog.sh / openwrt/init.d/tsf-watchdog；清理 _OTA_WATCH_SRC 150 秒探活守护、_ota_boot_guard 自动回滚、WATCHDOG_INIT / WATCHDOG_INIT_SCRIPT 常量；_ensure_watchdog 简化为只做 init.d 脚本部署并改名为 _deploy_init_scripts；tesla-viewer init.d 去掉 WATCHDOG_DIR / STOP_FLAG / DISABLE_FLAG / stop_service；install.py 去掉看门狗脚本/init/rc.d 链接/restart",
     "净减 352 行，保留 OTA sidecar 更新 init.d 脚本 + procd respawn 天然安全网",
     "—— 以下为 2026.11.27.021 更新 ——",

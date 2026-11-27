@@ -505,7 +505,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.022"
+APP_VERSION = "2026.11.27.023"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -1225,7 +1225,7 @@ def _ota_sidecars(base):
     updated, failed = [], 0
     for rel, name, sig, minsz in OTA_SIDECARS:
         dest = os.path.join(d, name)
-        # 看门狗与 init.d 脚本是后加的组件: 老设备上没有也要装, 其它脚本仍只覆盖已存在的
+        # init.d 脚本是后加组件: 老设备上没有也要装, 其它脚本仍只覆盖已存在的
         if not os.path.isfile(dest) and name not in OTA_SIDECAR_ALWAYS:
             failed += 1
             continue
@@ -1273,7 +1273,6 @@ def _ota_restart():
     - Timer 线程里调 init.d restart 再 SIGTERM/os._exit 自己: 时序太复杂,
       procd 的 respawn 和我们的自杀可能打架, 新版本起来前旧进程已死但 procd
       可能延迟拉起
-    - 看门狗 boot guard 和 150 秒探活守护也是多余的, 反而增加启动复杂度
 
     execv 的好处:
     - 操作系统层直接替换进程代码段, pid 不变, 不涉及退出/重生的 race condition
@@ -14206,7 +14205,7 @@ def external_card_config(body):
         raise ValueError("设备路径不合法")
     if enabled and not device:
         raise ValueError("请先在上方列表里选中要自动挂载的外置卡")
-    # 挂载点统一 /mnt/sdcard: 与 tsf-mount / tsf_storage_ready / 看门狗使用同一个挂载点,
+    # 挂载点统一 /mnt/sdcard: 与 tsf-mount / tsf_storage_ready 使用同一个挂载点,
     # 否则会出现"网页显示已挂载, 服务却判定数据卡未就绪"
     mountpoint = str(body.get("mountpoint") or os.environ.get("TSF_CARD_MNT") or "/mnt/sdcard").strip() or "/mnt/sdcard"
     if not mountpoint.startswith("/") or ".." in mountpoint:
@@ -14690,7 +14689,7 @@ def _format_card_ext4(dev):
 def _card_mount_fresh(dev, target):
     """格式化后重新挂载到 target。
 
-    格式化期间卡可能被 blockd/看门狗自动挂回旧文件系统, 先彻底摘掉旧挂载
+    格式化期间卡可能被 blockd 自动挂回旧文件系统, 先彻底摘掉旧挂载
     (卸载失败时再结束残留占用进程), 确认没有挂载后才挂新格式化的 ext4。"""
     try:
         os.makedirs(target, exist_ok=True)
@@ -14742,14 +14741,6 @@ def external_card_format(body):
         was_data = bool(root and (root == os.path.abspath(target) or
                                   root.startswith(os.path.abspath(target).rstrip("/") + "/")))
         live_stopped = False
-        format_flag = "/tmp/tsf-card-format"
-        try:
-            # 格式化期间告诉看门狗别去 tsf-mount: 否则它可能把卡重新挂上, 与 mkfs 抢设备。
-            # 只用一个窄标记, 不影响看门狗对网页服务的监控与重启。
-            with open(format_flag, "w") as ff:
-                ff.write(dev)
-        except OSError:
-            format_flag = ""
         try:
             if was_data:
                 # 归档同步服务还在持续写这张卡: 先停下, 避免旧文件系统的脏页
@@ -14776,11 +14767,6 @@ def external_card_format(body):
         except Exception as ex:
             _card_job_set(state="error", message=str(ex)[:200])
         finally:
-            if format_flag:
-                try:
-                    os.unlink(format_flag)
-                except OSError:
-                    pass
             if live_stopped:
                 try:
                     subprocess.Popen(["/etc/init.d/tesla-live", "start"],

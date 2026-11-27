@@ -15,8 +15,6 @@ TSF_DIR=${TSF_DIR:-/opt/tesla-sentry}
 . "$TSF_DIR/tsf-storage.sh" || exit 1
 
 start_apps() {
-    # 服务开始由本脚本拉起, 看门狗可以恢复监控
-    rm -f /tmp/tsf-watchdog.pause
     if [ -f /etc/mu300/usb-storage-boot ] && [ -x "$TSF_DIR/tesla-usb-start.sh" ]; then
         # 协调器失败(ADB 等不到 / 抢不到锁 / 角色是 host)只该影响 U 盘导出。这里不能 return,
         # 否则 tesla-live 和 tesla-viewer 一起被拦掉: 车里没有 U 盘, 也进不了网页, 只能 SSH。
@@ -30,15 +28,12 @@ start_apps() {
         /etc/init.d/tesla-gadget start ||
             logger -t tsf-mount "USB gadget 启动失败, 继续启动应用服务"
     fi
-    # 被手动 disable 的服务开机也不再拉起 (与看门狗共用同一份禁用标记)
-    [ -f /root/tsf-watchdog/disabled-tesla-live ] || /etc/init.d/tesla-live start ||
+    /etc/init.d/tesla-live start ||
         logger -t tsf-mount "tesla-live 启动失败, 继续启动网页服务"
-    [ -f /root/tsf-watchdog/disabled-tesla-viewer ] || /etc/init.d/tesla-viewer start
+    /etc/init.d/tesla-viewer start
 }
 
 stop_apps() {
-    # 服务是被有意停掉的(卸载数据卡/关机), 告诉看门狗不要自动 restart
-    : > /tmp/tsf-watchdog.pause
     /etc/init.d/tesla-live stop 2>/dev/null
     /etc/init.d/tesla-viewer stop 2>/dev/null
     if [ -x "$TSF_DIR/tesla-gadget.sh" ]; then
@@ -77,13 +72,11 @@ wait_and_start_services() {
     done
     # 卡挂不上也要把网页拉起来: 否则没有格式化/换卡/排查的入口, 只能 SSH
     logger -t tsf-mount "FAILED: card UUID $UUID not mountable after 60s; 仅启动网页以便排查"
-    [ -f /root/tsf-watchdog/disabled-tesla-viewer ] || /etc/init.d/tesla-viewer start
+    /etc/init.d/tesla-viewer start
     return 1
 }
 
 start() {
-    # 进入启动流程就解除看门狗暂停: 即使挂载失败, 也不能让看门狗一直停在暂停状态
-    rm -f /tmp/tsf-watchdog.pause
     [ -n "$UUID" ] || { logger -t tsf-mount "TSF_CARD_UUID is required"; return 1; }
     wait_and_start_services
 }
