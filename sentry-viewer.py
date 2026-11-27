@@ -538,7 +538,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.053"
+APP_VERSION = "2026.11.27.054"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -3336,8 +3336,10 @@ body.settings-open { overflow:hidden; }
 #storage-paths { margin-top:20px; }
 #storage-retention { margin-top:0; }
 #storage-retention .storage-row { max-width:420px; }
-/* 保留时间与保留事件数量两卡等高, 保存按钮统一贴底, 始终处在同一水平线 */
-#storage-retention .updbtns, #storage-event-count .updbtns { margin-top:auto; padding-top:10px; }
+/* 保留时间与保留事件数量两卡等高, 保存按钮统一贴底, 始终处在同一水平线
+   (用双 id 提高优先级, 覆盖 #tab-storage .storage-quota .updbtns 的 margin-top:8px) */
+#tab-storage #storage-retention .updbtns,
+#tab-storage #storage-event-count .updbtns { margin-top:auto; padding-top:10px; }
 /* 保留时间: 取消嵌套缩进, 所有输入框在同一列对齐 */
 #storage-retention .storage-nested { margin-left:0; padding-left:0; border-left:0; }
 #storage-retention .storage-nested .storage-row { max-width:420px; }
@@ -3363,12 +3365,12 @@ body.settings-open { overflow:hidden; }
 #tab-storage .storage-row.cap .retention-unit { display:inline-flex; align-items:center; height:36px; line-height:1; }
 #tab-storage .storage-row.cap .storage-help { align-self:center; }
 /* 保留时间 / 保留事件数量: 两类行都固定为「标签 | 输入 96px | 单位 40px | ? 28px」,
-   单位文字(分钟/天/个)长度不同也严格同列; 没有 ? 的行保留空列, 输入框依旧对齐 */
+   标签占满剩余宽度, 输入框自然落在卡片右侧; 单位文字(分钟/天/个)长度不同也严格同列 */
 #tab-storage #storage-retention .storage-row,
 #tab-storage #storage-event-count .storage-row {
   grid-template-columns:minmax(0,1fr) 96px 40px 28px;
   gap:10px;
-  max-width:460px;
+  max-width:none;
 }
 #tab-storage #storage-retention .retention-unit { text-align:left; }
 /* 设置说明跟在文字描述右边, 宽度不够时自动换到描述下方, 不会被输入框/按钮遮挡 */
