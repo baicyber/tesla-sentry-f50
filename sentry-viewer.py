@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.033"
+APP_VERSION = "2026.11.27.034"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -8623,8 +8623,26 @@ async function storageRestartService() {
     const response = await fetch('/api/admin/restart', {method:'POST'});
     const result = await response.json();
     if (!result.ok) throw Error(result.msg || '重启失败');
-    if (status) status.textContent = '服务正在重启，请稍候刷新页面…';
-    setTimeout(() => { location.reload(); }, 6000);
+    if (status) status.textContent = '服务正在重启，恢复后会自动刷新…';
+    // 不写死 6 秒: 设备慢时可能还没起来, 固定刷新会直接显示连接失败。
+    // 先等 execv 完成, 再每秒探测一次, 服务真正可用后才刷新页面。
+    setTimeout(() => {
+      let tries = 0;
+      const probe = setInterval(async () => {
+        tries += 1;
+        try {
+          await fetch('/?t=' + Date.now(), {method: 'HEAD', cache: 'no-store'});
+          clearInterval(probe);
+          location.reload();
+        } catch (e) {
+          if (tries >= 30) {
+            clearInterval(probe);
+            if (status) status.textContent = '服务仍在启动，请手动刷新页面重试。';
+            if (button) button.disabled = false;
+          }
+        }
+      }, 1000);
+    }, 2500);
   } catch (error) {
     if (status) status.textContent = '重启失败：' + error.message;
     if (button) button.disabled = false;
@@ -13764,22 +13782,40 @@ def reboot_system():
 def restart_service():
     """重启本服务进程, 让存储路径/容量分配等启动期设置生效。
 
-    使用 F50 OpenWrt procd 的 init 脚本。
-    调用方先返回 HTTP 响应, 再延迟执行, 避免网页在重启时拿不到结果。
-    """
-    commands = []
-    for name in ('tesla-viewer', 'tesla-sentry', 'sentry-viewer'):
-        path = '/etc/init.d/' + name
-        if os.path.isfile(path):
-            commands.append('%s restart' % path)
-    if not commands:
-        return False
+    用 os.execv 原地替换进程 (与 OTA 升级后一致): 进程号不变, 监听端口随 exec 关闭后
+    立即释放, 不依赖 init.d。
+
+    旧实现执行 `/etc/init.d/tesla-viewer restart`: procd 停止实例时会连带结束它的子进程,
+    负责接着执行 start 的辅助进程可能一起被杀, 服务停掉后再也没有起来 —— 表现就是
+    「点了重启服务, 网页一直打不开, 只能给设备断电」。"""
+    def _do_restart():
+        print("restart: execv...", flush=True)
+        try:
+            os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
+        except Exception as ex:
+            print("restart: execv failed (%s), fallback to init.d" % ex, flush=True)
+            fallback = None
+            for name in ('tesla-viewer', 'tesla-sentry', 'sentry-viewer'):
+                path = '/etc/init.d/' + name
+                if os.path.isfile(path):
+                    fallback = path
+                    break
+            if fallback:
+                try:
+                    subprocess.Popen([fallback, 'restart'], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     start_new_session=True)
+                    return
+                except OSError:
+                    pass
+            # 连兜底都没有: 主动退出, 交给 procd respawn
+            os._exit(1)
+
     try:
-        subprocess.Popen(['sh', '-c', 'sleep 1; ' + ' || '.join(commands)],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+        # 先让调用方把 HTTP 响应发完, 再原地重启
+        threading.Timer(1.0, _do_restart).start()
         return True
-    except OSError:
+    except Exception:
         return False
 
 
@@ -21972,7 +22008,7 @@ class Handler(BaseHTTPRequestHandler):
             if ok:
                 self._json({"ok": True, "msg": "服务正在重启"})
                 return
-            self._json({"ok": False, "msg": "未找到 tesla-viewer 服务，无法自动重启"}, 500)
+            self._json({"ok": False, "msg": "重启失败，请手动重启服务"}, 500)
             return
         if path == "/api/playback/quality":
             body = self._read_json()
@@ -22399,14 +22435,14 @@ if __name__ == "__main__":
     # 升级重启时旧进程可能还占着端口几秒, 这里重试而不是立刻退出 ——
     # 否则网页会长时间打不开, 需要等 procd 下次重新拉起。
     srv = None
-    for attempt in range(12):
+    for attempt in range(20):
         try:
             srv = BoundedServer(("0.0.0.0", PORT), Handler)
             break
         except OSError:
             if attempt == 0:
                 print("port %d in use, retrying for a few seconds..." % PORT, flush=True)
-            if attempt == 3:
+            if attempt in (3, 10):
                 # 重试几秒仍被占用: 多半是旧实例没被 init.d 停掉, 直接清理残留再绑定
                 _kill_stale_viewers()
             time.sleep(1.0)
