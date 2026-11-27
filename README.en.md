@@ -29,7 +29,7 @@ This project supports only the ZTE F50. Other travel routers, development boards
 | 📂 File management | One page for both the car USB drive and the archive: browse, upload, download; the action bar is ordered upload / move / copy / rename / delete, with multi-select batch operations (realpath-guarded). One click clears every recording under `TeslaCam/` while keeping the directory structure and leaving Boombox / Wraps alone. Drive management mode reverts to export automatically after 5 minutes idle. |
 | 🚗 Driving recordings | A separate `DriveClips` store keeps **full-quality originals** for every camera, grouped into trips (detected from gear position and parking duration) and shown as continuous runs. When the quota fills, the oldest trips are pruned in order so recording can continue; protected clips are never pruned. |
 | 🔒 Protection & storage budget | The archive player can lock / unlock / delete, and driving recordings are handled per whole trip. Lock state is honoured by sync, automatic pruning and file management alike, and a deleted recording is not re-synced. Settings shows the relationship between the USB drive, archive, driving-recording quota and free-space reserve (the transcode cache counts at actual usage, with no fixed budget); changing the USB capacity requires confirming that the drive will be cleared, then rebuilds the exFAT image (recovery files are kept on failure). The image may use at most half of the card's real capacity, because the archive mirrors the drive content and also holds transcode cache, lock chimes and wraps. |
-| 🔔 Push | Pick Feishu or WeChat reminders from a dropdown. Feishu supports direct messages (self only) or a group bot webhook; WeChat supports iyuu.cn and Server酱. Sends the trigger-frame cover card or a short clip starting 5 seconds before the trigger, optionally with the driving watermark burned in. Deduplicated, 20-second delay, 3 retries on failure. The export sheet can push too. |
+| 🔔 Push | Pick Feishu, WeChat or Bark reminders from a dropdown. Feishu supports direct messages (self only) or a group bot webhook; WeChat supports iyuu.cn and Server酱; Bark supports iOS notifications with group / sound / icon and the trigger screenshot, plus title/body templates and a live style preview. Sends the trigger-frame cover card or a short clip starting 5 seconds before the trigger, optionally with the driving watermark burned in. Deduplicated, 20-second delay, 3 retries on failure. The export sheet can push too. |
 | 🔐 Login protection | `install.sh` generates a random 10-character password (user `admin`) by default. HMAC-signed cookie valid for 30 days plus HTTP Basic. 8 wrong attempts from one IP within 10 minutes returns 429. Settings → Account lets you change the password or sign out. |
 | 🔄 Online update | Multiple sources raced in parallel with a GitHub API fallback; the main file and its local modules are downloaded, self-checked and installed together → backup → atomic swap → restart → 150-second health probe that automatically reverts to the previous version if the new one does not come up, plus one-click rollback. Settings → Update has an **auto-update** toggle (on by default: upgrades when a new version appears and nobody is watching). |
 | 🎨 Personalization | Custom title icon and name (defaults to 「哨兵一剪梅」), dark / light / auto theme, 4 UI styles (Default / Apple / Claude / Pixel), 10 UI languages, background skins, lock chime (`LockChime.wav`), wraps `Wraps/`. |
@@ -60,12 +60,39 @@ See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for details.
 **1. Deploy** (over SSH on the device)
 
 ```sh
-git clone https://github.com/baicyber/tesla-sentry-f50.git
+git clone https://github.com/jiaoting/tesla-sentry-f50.git
 cd tesla-sentry-f50
+
 sudo ./install.sh check                                                # read-only check
 sudo ./install.sh install --port 8080 --data-mount /mnt/sdcard         # check + install + start
 sudo ./install.sh apply   --port 8080 --data-mount /mnt/sdcard         # check + install, do not start
+sudo ./install.sh install --init-card                                  # allow formatting an uninitialized TF card (wipes it)
 sudo ./install.sh rollback                                             # restore the previous release if the web UI is down
+sudo ./install.sh install --install-deps                               # install/repair ffmpeg & ffprobe and write the paths to config
+sudo ./install.sh --help                                               # show all options
+```
+
+| Command / flag | Purpose |
+|---|---|
+| `./install.sh check` | Read-only self-check (kernel gadget / exFAT / loop / Python / FFmpeg / permissions), changes nothing |
+| `./install.sh install` | Check + install into `/opt/tesla-sentry/`, write `/etc/tesla-sentry.conf`, register procd services and cron, start |
+| `./install.sh apply` | Same as `install` but does not start the services |
+| `./install.sh rollback` | Restore the program and config from before the last upgrade |
+| `--port 8080` | Web UI port (default 8080) |
+| `--data-mount /mnt/sdcard` | Mount point of the data disk holding image + archive (TF card recommended) |
+| `--init-card` | Allow formatting the data card as ext4 when it is not initialized (wipes the card) |
+| `--start` | With `apply`: start the services right after installing |
+| `--install-deps` / `--ffmpeg` / `--ffprobe` | Install missing ffmpeg/ffprobe (or point to explicit paths) and write them to config |
+| `--size-gb` / `--archive-gb` / `--drive-gb` | Kept for compatibility only; configure capacity in the web UI |
+| `sudo ./uninstall.sh` | Stop services, remove program and cache, keep image and archived footage |
+| `sudo ./uninstall.sh --purge` | Also delete the image and archive (irreversible) |
+
+Upgrade an existing install (keeps config and recordings):
+
+```sh
+cd /root/tesla-sentry-f50
+git pull
+sudo ./install.sh
 ```
 
 The TF card does not need to be mounted in advance: `install` detects an unmounted/uninitialized card, asks for confirmation and formats it as ext4 then mounts it (the card will be wiped); in non-interactive shells pass `--init-card` to allow formatting. If the web UI does not come back after an upgrade, run `sudo ./install.sh rollback` over SSH to restore the previous program and config.
@@ -80,12 +107,24 @@ The old `--size-gb` / `--archive-gb` / `--drive-gb` flags are still accepted for
 
 **3. Open the web UI**: `http://<device-ip>:8080` (join the box's hotspot, connect through a USB network interface, or add Tailscale / frp yourself). The first login is `admin` with the password printed by the installer or stored in `/opt/tesla-sentry/auth.conf`. Video comes from the 15-second live sync, so you don't wait for scheduled archiving.
 
-**Uninstall**
+---
 
-```sh
-sudo ./uninstall.sh              # stop services, remove program and cache, keep image and archived footage
-sudo ./uninstall.sh --purge      # also delete image and archive (irreversible)
-```
+## Backend optimizations (performance · loading · disk)
+
+Tuned for the F50's 1.4G RAM, fanless chassis and 4G uplink:
+
+- **Instant playback**: if the requested quality is not transcoded yet, `/media` serves the first frame or an existing lower variant immediately and transcodes in the background. Playback prefers `faststart` outputs, cutting first-frame time from 3–6s to ~0.3s.
+- **Chunked transcode + cache**: previews are generated per second and cached; the cache version is embedded in filenames so a parameter change invalidates old files automatically.
+- **10s start buffer + 20–25s read-ahead**: smooths 4G playback; long-press 3× fast-forward uses a global rate override that the playback loop no longer resets every frame.
+- **Thumbnail concurrency limit**: thumbnails and push covers share a disk cache and a bounded ffmpeg pool, so opening dozens of events cannot starve the device.
+- **Transcode profiles**: 720p/480p/360p at 1500/900/520 kbps with relaxed peak/buffer, much less blocking in motion; pre-transcode only the newest N events and only while nobody is watching.
+- **Sparse exFAT image**: the virtual USB drive is a sparse image charged by real writes, exported via USB Gadget `mass_storage`; the archive lives on a separate ext4 filesystem so car writes and archive reads do not fight for I/O.
+- **Disk lifecycle**: capacity / event-count / retention-days cleanup (whichever hits first), hard-link dedup, `.pruned` tombstones, a safety reserve (10G default), and automatic sync stop + LUN/loop release before card unmount/format/resize.
+- **Network & resilience**: multi-source OTA race with GitHub API fallback and atomic upgrade/rollback; TLS 1.2 compatibility for Feishu with retries while Bark/WeChat use the default TLS; procd respawn, boot self-check, LUN auto-remount and power-loss self-heal.
+
+---
+
+---
 
 ---
 
@@ -110,7 +149,7 @@ The web **⚙ Personalization** panel has 10 sub-tabs: Storage, Files, Lock chim
 
 - **Brand**: Settings → Brand. Replace the title-bar icon (png/jpg/webp, ≤3MB) and the name (≤24 characters). Changes apply instantly and propagate to the login page; the built-in 「哨兵一剪梅」 icon and name are the defaults and can be restored with one click.
 - **Online update**: Settings → Update compares against the repository's `version.json` and offers one-click upgrade / rollback. The update source can be a built-in repository or a custom source (`owner/repo` or a GitHub URL). Configuration and recordings are never part of an update.
-- **Push**: Settings → Push. Choose Feishu or WeChat reminders first; Feishu supports self-built-app direct messages (self only) or a group bot webhook, while WeChat can use iyuu.cn or Server酱. Cover cards and short clips from the triggering camera are supported. Hit "Send test" first.
+- **Push**: Settings → Push. Choose Feishu, WeChat or Bark first; Feishu supports self-built-app direct messages (self only) or a group bot webhook, while WeChat can use iyuu.cn or Server酱, and Bark only needs a Device Key (optional group / sound / icon, title & body templates and a live style preview). Screenshots require a public "view link prefix". Hit "Send test" first.
 - **Authentication**: credentials live in `/opt/tesla-sentry/auth.conf` (mode 600). Deleting that file and restarting disables auth (only advisable on a trusted LAN).
 - **Drive management mode**: "Connect car USB drive" temporarily stops exporting and mounts the image; it reverts after 5 minutes idle. Avoid leaving it mounted while the car is driving or Sentry is active.
 - **Lock chime**: WAV, 44.1kHz, 16-bit, <1MB, 1–5 seconds, named `LockChime.wav` in the root of the drive.
@@ -146,15 +185,15 @@ On mainland networks `raw.githubusercontent.com` and the jsDelivr endpoints are 
 To add your own source, put a working mirror in the config (comma-separated, in the form `https://domain/<repo-path>/main`):
 
 ```bash
-echo 'TSF_OTA_SOURCES=https://ghfast.top/https://raw.githubusercontent.com/baicyber/tesla-sentry-f50/main,https://gcore.jsdelivr.net/gh/baicyber/tesla-sentry-f50@main' >> /etc/tesla-sentry.conf
+echo 'TSF_OTA_SOURCES=https://ghfast.top/https://raw.githubusercontent.com/jiaoting/tesla-sentry-f50/main,https://gcore.jsdelivr.net/gh/jiaoting/tesla-sentry-f50@main' >> /etc/tesla-sentry.conf
 /etc/init.d/tesla-viewer restart
 ```
 
 **On old versions (2.8.12 and earlier) where even the check fails and the update page is unreachable**, overwrite the program manually once on the device; automatic updates resume afterwards:
 
 ```bash
-wget -O /tmp/sv.py https://ghfast.top/https://raw.githubusercontent.com/baicyber/tesla-sentry-f50/main/sentry-viewer.py \
-  || wget -O /tmp/sv.py https://gcore.jsdelivr.net/gh/baicyber/tesla-sentry-f50@main/sentry-viewer.py
+wget -O /tmp/sv.py https://ghfast.top/https://raw.githubusercontent.com/jiaoting/tesla-sentry-f50/main/sentry-viewer.py \
+  || wget -O /tmp/sv.py https://gcore.jsdelivr.net/gh/jiaoting/tesla-sentry-f50@main/sentry-viewer.py
 python3 -m py_compile /tmp/sv.py && cp /tmp/sv.py /opt/tesla-sentry/sentry-viewer.py \
   && chmod 755 /opt/tesla-sentry/sentry-viewer.py && /etc/init.d/tesla-viewer restart
 ```

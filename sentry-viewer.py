@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.039"
+APP_VERSION = "2026.11.27.040"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2487,6 +2487,20 @@ body.watching { overscroll-behavior:none; }
 .nrow > span:first-child { flex:0 0 auto; }
 .nrow input[type=checkbox] { width:18px; height:18px; accent-color:var(--accent); margin-left:auto; }
 .ninput.num { width:76px; margin:0; text-align:center; }
+/* Bark 通知样式实时预览 */
+.bk-preview { margin:10px 0 4px; padding:10px 12px; border-radius:14px; background:var(--panel2); border:1px solid var(--line2); }
+.bk-head { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); margin-bottom:7px; }
+.bk-app { font-weight:700; letter-spacing:.02em; }
+.bk-now { margin-left:auto; }
+.bk-main { display:flex; gap:10px; align-items:flex-start; }
+.bk-txt { flex:1; min-width:0; font-size:12.5px; line-height:1.5; }
+.bk-txt b { display:block; font-size:13px; margin-bottom:2px; }
+.bk-txt p { margin:0; color:var(--muted); white-space:pre-line; word-break:break-word; }
+.bk-thumb { flex:0 0 64px; width:64px; height:64px; border-radius:8px; display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(135deg,#2f3a45,#151a1f); color:#8e99a5; }
+.bk-thumb svg { width:26px; height:26px; }
+.bk-thumb.off { display:none; }
+.bk-foot { margin-top:7px; font-size:10.5px; color:var(--muted2); }
 .storage-row { display:grid; grid-template-columns:minmax(0,1fr) 84px 24px; gap:8px; align-items:center; margin:8px 0; min-height:40px; font-size:13px; }
 .storage-row .ninput { margin:0; width:100%; text-align:right; }
 .storage-row output { text-align:right; font-variant-numeric:tabular-nums; }
@@ -4084,12 +4098,13 @@ body.settings-open { overflow:hidden; }
     </section>
   </div>
   <div id="tab-notify" style="display:none">
-    <div class="hint">哨兵触发时把时间/位置/触发原因和触发画面推送给你。先选择推送方式：飞书提醒支持封面卡片与视频；微信提醒支持爱语飞飞、Server酱等接口，只发文字提醒。</div>
+    <div class="hint">哨兵触发时把时间/位置/触发原因和触发画面推送给你。先选择推送方式：飞书提醒支持封面卡片与视频；微信提醒支持爱语飞飞、Server酱等接口，只发文字提醒；Bark 支持 iOS 通知、分组/铃声/图标与触发截图。</div>
     <label class="nrow"><span>启用推送</span><input type="checkbox" id="nt-en"></label>
     <label class="nrow"><span>也推手动保存</span><input type="checkbox" id="nt-saved"></label>
     <select class="ninput" id="nt-channel" onchange="ntChannelUI()">
       <option value="feishu">推送方式：飞书提醒（卡片 / 视频）</option>
       <option value="wechat">推送方式：微信提醒（文字）</option>
+      <option value="bark">推送方式：Bark（iOS 通知 / 截图）</option>
     </select>
     <div id="nt-fs">
       <select class="ninput" id="nt-mode">
@@ -4130,6 +4145,28 @@ body.settings-open { overflow:hidden; }
       <div class="hint" style="margin-top:8px">提醒格式（第一行作为推送标题，可换行；变量：{类型} {时间} {位置} {原因}，留空使用默认格式）</div>
       <textarea class="ninput" id="nt-wx-format" rows="5" style="min-height:96px;resize:vertical;line-height:1.6" placeholder="留空使用默认格式"></textarea>
       <div class="updbtns" style="margin-top:6px"><button class="mini" onclick="ntResetFormat()">填入默认格式</button></div>
+    </div>
+    <div id="nt-bark" style="display:none">
+      <input class="ninput" id="nt-bark-server" placeholder="Bark 服务器：默认 https://api.day.app（自建可改）">
+      <input class="ninput" id="nt-bark-key" type="password" placeholder="Bark Device Key（在 Bark App 首页复制，已保存则留空表示不修改）">
+      <div class="nrow"><span>通知分组</span><input class="ninput" id="nt-bark-group" style="margin:0" placeholder="Tesla 哨兵" oninput="barkPreview()"></div>
+      <div class="nrow"><span>铃声</span><input class="ninput" id="nt-bark-sound" style="margin:0" placeholder="留空为默认铃声"></div>
+      <input class="ninput" id="nt-bark-icon" placeholder="通知图标 URL（可选）: https://…/icon.png">
+      <div class="nrow"><span>附带触发截图</span><input type="checkbox" id="nt-bark-img" checked onchange="barkPreview()"></div>
+      <div class="hint">截图由 Bark 按「查看链接前缀」自动拉取（需设备可被 Bark 服务器访问）；未填前缀时只发文字。</div>
+      <input class="ninput" id="nt-bark-title" placeholder="标题模板，留空默认：🚨 {类型}" oninput="barkPreview()">
+      <textarea class="ninput" id="nt-bark-body" rows="4" style="min-height:80px;resize:vertical;line-height:1.6" placeholder="正文模板，留空默认：时间/位置/原因" oninput="barkPreview()"></textarea>
+      <div class="hint">变量：{类型} {时间} {位置} {原因} {分类} {摄像头}；修改模板时下方预览实时更新。</div>
+      <div class="bk-preview" id="bk-preview">
+        <div class="bk-head"><span class="bk-app">哨兵一剪梅</span><span class="bk-now">现在</span></div>
+        <div class="bk-main">
+          <div class="bk-txt"><b id="bk-pv-title">🚨 哨兵提醒 · 哨兵警觉 · 前视</b><p id="bk-pv-body">时间：11月27日 21:30:05
+位置：广东省深圳市南山区科技园
+原因：侦测到物体移动</p></div>
+          <div class="bk-thumb" id="bk-pv-img"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7.5h3.2l1.6-2h8.4l1.6 2H21v11H3z"/><circle cx="12" cy="13" r="3.6"/></svg></div>
+        </div>
+        <div class="bk-foot">Bark · 分组 <span id="bk-pv-group">Tesla 哨兵</span></div>
+      </div>
     </div>
     <div class="updbtns">
       <button class="mini primary" onclick="ntSave()">保存设置</button>
@@ -9327,6 +9364,30 @@ function ntChannelUI() {
   const ch = document.getElementById('nt-channel').value;
   document.getElementById('nt-fs').style.display = ch === 'feishu' ? '' : 'none';
   document.getElementById('nt-wx').style.display = ch === 'wechat' ? '' : 'none';
+  document.getElementById('nt-bark').style.display = ch === 'bark' ? '' : 'none';
+  if (ch === 'bark') barkPreview();
+}
+/* Bark 样式预览: 用示例数据实时渲染标题/正文/截图/分组 */
+function barkPreview() {
+  const el = id => document.getElementById(id);
+  if (!el('bk-pv-title')) return;
+  const vars = {
+    '{类型}': '哨兵提醒 · 哨兵警觉 · 前视',
+    '{时间}': '11月27日 21:30:05',
+    '{位置}': '广东省深圳市南山区科技园',
+    '{原因}': '侦测到物体移动',
+    '{分类}': '哨兵警觉',
+    '{摄像头}': '前视',
+  };
+  const fill = (tpl, def) => {
+    let s = (tpl || '').trim() || def;
+    Object.keys(vars).forEach(k => { s = s.split(k).join(vars[k]); });
+    return s;
+  };
+  el('bk-pv-title').textContent = fill(el('nt-bark-title').value, '🚨 {类型}');
+  el('bk-pv-body').textContent = fill(el('nt-bark-body').value, '时间：{时间}\n位置：{位置}\n原因：{原因}');
+  el('bk-pv-group').textContent = (el('nt-bark-group').value || '').trim() || 'Tesla 哨兵';
+  el('bk-pv-img').classList.toggle('off', !el('nt-bark-img').checked);
 }
 function ntWxApiUI() {
   const api = document.getElementById('nt-wx-api').value;
@@ -9362,15 +9423,26 @@ async function ntLoad() {
     document.getElementById('nt-wx-token').value = '';
     document.getElementById('nt-wx-token').dataset.has = j.has_wx_token ? '1' : '0';
     document.getElementById('nt-wx-format').value = j.wx_format || '';
-    ntChannelUI(); ntWxApiUI();
+    document.getElementById('nt-bark-server').value = j.bark_server || 'https://api.day.app';
+    document.getElementById('nt-bark-key').value = '';
+    document.getElementById('nt-bark-key').dataset.has = j.has_bark_key ? '1' : '0';
+    document.getElementById('nt-bark-key').placeholder = j.has_bark_key
+      ? 'Bark Device Key 已保存, 留空表示不修改' : 'Bark Device Key（在 Bark App 首页复制）';
+    document.getElementById('nt-bark-group').value = j.bark_group || '';
+    document.getElementById('nt-bark-sound').value = j.bark_sound || '';
+    document.getElementById('nt-bark-icon').value = j.bark_icon || '';
+    document.getElementById('nt-bark-img').checked = j.bark_img !== false;
+    document.getElementById('nt-bark-title').value = j.bark_title || '';
+    document.getElementById('nt-bark-body').value = j.bark_body || '';
+    ntChannelUI(); ntWxApiUI(); barkPreview();
     ntSetEye(ntHidden);
     const m = document.getElementById('nt-msg');
     if (j.last && j.last.msg) {
       m.textContent = t('最近一次') + ': ' + (j.last.ok ? '✅ ' : '❌ ') + j.last.msg + ' (' + new Date(j.last.at * 1000).toLocaleString() + ')';
       m.style.color = j.last.ok ? '#4cc38a' : 'var(--accent)';
     } else if (!j.enabled) { m.textContent = t('未启用'); m.style.color = ''; }
-    else if (j.dm_ready || j.wx_ready) { m.textContent = t('已启用推送, 等下一个哨兵事件'); m.style.color = ''; }
-    else { m.textContent = t('已启用, 但接收人/应用凭据/微信 Token 未配全'); m.style.color = 'var(--accent)'; }
+    else if (j.dm_ready || j.wx_ready || j.bark_ready) { m.textContent = t('已启用推送, 等下一个哨兵事件'); m.style.color = ''; }
+    else { m.textContent = t('已启用, 但接收人/应用凭据/微信 Token/Bark Key 未配全'); m.style.color = 'var(--accent)'; }
   } catch (e) { document.getElementById('nt-msg').textContent = t('读取设置失败') + ': ' + e; }
 }
 async function ntSave() {
@@ -9391,14 +9463,25 @@ async function ntSave() {
     wx_api: document.getElementById('nt-wx-api').value,
     wx_token: document.getElementById('nt-wx-token').value.trim(),
     wx_format: document.getElementById('nt-wx-format').value,
+    bark_server: document.getElementById('nt-bark-server').value.trim(),
+    bark_key: document.getElementById('nt-bark-key').value.trim(),
+    bark_group: document.getElementById('nt-bark-group').value.trim(),
+    bark_sound: document.getElementById('nt-bark-sound').value.trim(),
+    bark_icon: document.getElementById('nt-bark-icon').value.trim(),
+    bark_img: document.getElementById('nt-bark-img').checked,
+    bark_title: document.getElementById('nt-bark-title').value.trim(),
+    bark_body: document.getElementById('nt-bark-body').value,
   };
   if (body.enabled) {
     const secSaved = document.getElementById('nt-secret').dataset.has === '1';
     const wxSaved = document.getElementById('nt-wx-token').dataset.has === '1';
+    const barkSaved = document.getElementById('nt-bark-key').dataset.has === '1';
     const hasApp = body.app_id && (body.app_secret || secSaved);
     const hasWx = body.wx_token || wxSaved;
     if (body.channel === 'wechat') {
       if (!hasWx) { toast('请先填写微信接口 Token'); return; }
+    } else if (body.channel === 'bark') {
+      if (!body.bark_key && !barkSaved) { toast('请先填写 Bark Device Key'); return; }
     } else {
       if (body.mode === 'dm' && (!hasApp || !body.receive_id)) { toast('私聊需要 App ID / Secret + 接收人，或改用微信提醒'); return; }
       if (body.mode === 'group' && !body.webhook) { toast('请先填群机器人 webhook，或改用微信提醒'); return; }
@@ -11470,8 +11553,13 @@ def usb_attach():
         return False, "正在调整容量或格式化 U 盘"
     if not usb_img_ready():
         return False, "镜像未就绪: 车机可能正在格式化 U 盘, 请稍后再试"
+    # 文件管理要尽快读到镜像: 先停掉正在跑的车机 U 盘只读同步, 避免和挂载抢 I/O
+    if not _stop_archive_sync_wait():
+        return False, "正在归档迁移，请稍后再连接车机U盘"
+    _ARCH_SYNC_PAUSE.update(on=True, why="文件管理正在查看车机U盘")
     with usb_lock:
         if storage_busy():
+            _ARCH_SYNC_PAUSE.update(on=False, why="")
             return False, "正在调整容量或格式化 U 盘"
         if usb_attached and os.path.ismount(MNT):
             return True, "already"
@@ -11482,11 +11570,13 @@ def usb_attach():
                 break
             time.sleep(0.4)
         else:
+            _ARCH_SYNC_PAUSE.update(on=False, why="")
             return False, "U盘正被其它任务占用 (归档/自愈/同步), 稍后再试"
         try:
             os.makedirs(MNT, exist_ok=True)
         except OSError as ex:
             _release_usb_flock()
+            _ARCH_SYNC_PAUSE.update(on=False, why="")
             return False, "创建挂载点失败: " + str(ex)
         _gadget_rebind(False)  # 停止导出
         time.sleep(1)
@@ -11503,6 +11593,7 @@ def usb_attach():
         if r.returncode != 0:
             _gadget_rebind(True)
             _release_usb_flock()
+            _ARCH_SYNC_PAUSE.update(on=False, why="")
             return False, "losetup 失败: " + r.stderr.strip()[-120:]
         off = _img_vol_offset()
 
@@ -11547,6 +11638,7 @@ def usb_attach():
                 msg += "（镜像分区暂时读不出来，可稍后重试；持续失败请用「格式化 U 盘」重建）"
             elif "Invalid argument" in msg:
                 msg += "（镜像不是有效的 exFAT 卷，车机可能正在格式化，请稍后再试）"
+            _ARCH_SYNC_PAUSE.update(on=False, why="")
             return False, "挂载失败: " + msg
         usb_attached = True
         # 无操作自动恢复
@@ -11581,6 +11673,7 @@ def usb_detach():
         subprocess.run([LOSETUP, "-d", LOOPDEV], capture_output=True)
         _gadget_rebind(True)
         usb_attached = False
+        _ARCH_SYNC_PAUSE.update(on=False, why="")   # 断开文件管理后恢复归档同步
         _release_usb_flock()   # 挂载周期结束才释放, 失败路径继续持锁
         return True, "detached"
 
@@ -14439,6 +14532,8 @@ _ARCH_SYNC_LOCK = threading.Lock()
 _ARCH_SYNC = {"state": "idle", "message": "", "total": 0, "done": 0, "pct": 0, "bps": 0,
               "sources": [], "conflicts": [], "copied": 0, "failed": [],
               "stop": False, "kind": ""}
+# 文件管理正在查看车机 U 盘时暂停归档同步, 断开后恢复 (否则同步和挂载抢 I/O, 文件列表很慢)
+_ARCH_SYNC_PAUSE = {"on": False, "why": ""}
 _ARCH_SCAN = {"t": 0.0, "items": []}
 
 
@@ -15749,6 +15844,8 @@ def archive_sync_start():
         raise ValueError(CARD_NOT_READY_MSG)
     if _ARCH_SYNC["state"] == "running":
         raise ValueError("归档区同步正在进行")
+    if _ARCH_SYNC_PAUSE["on"]:
+        raise ValueError("文件管理正在查看车机U盘，归档同步已暂停；断开文件管理后自动恢复")
     if storage_busy():
         raise ValueError("正在调整容量或格式化 U 盘，请稍后再试")
     if sync_write_paused():
@@ -17248,6 +17345,10 @@ _NC_DEFAULT = {
     "media": "thumb", "quality": "480p", "vdur": 30,
     "channel": "feishu", "wx_enabled": False, "wx_api": "iyuu", "wx_token": "",
     "wx_format": "",
+    # Bark (iOS) 推送: Device Key + 分组/铃声/图标/截图, 标题与正文支持变量模板
+    "bark_server": "https://api.day.app", "bark_key": "", "bark_group": "Tesla 哨兵",
+    "bark_sound": "", "bark_icon": "", "bark_img": True, "bark_title": "", "bark_body": "",
+    "bark_token": "",
 }
 _TOK = {"v": "", "exp": 0}
 CAM_NUM = {0: "前视", 3: "左B柱", 4: "右B柱", 5: "左翼子板", 6: "右翼子板", 7: "后视"}
@@ -17384,15 +17485,16 @@ def _trigger_frame(cat, name):
     return thumb_file(fp, off), meta
 
 
-def _post_json(url, payload, timeout=12, headers=None):
+def _post_json(url, payload, timeout=12, headers=None, tls12=True):
     """POST JSON 并解析返回。
     注意: 这里用 http.client 而不是 urllib — urllib 会给请求带上 Connection: close,
-    飞书网关对这种短连接 POST 会直接断链 (SSL BAD_RECORD_MAC), 实测 http.client 正常。"""
+    飞书网关对这种短连接 POST 会直接断链 (SSL BAD_RECORD_MAC), 实测 http.client 正常。
+    tls12=False 时用系统默认 TLS (Bark 等第三方服务不一定需要锁 1.2)。"""
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     h = {"Content-Type": "application/json; charset=utf-8"}
     if headers:
         h.update(headers)
-    return json.loads(_http_post(url, body, h, timeout).decode("utf-8", "replace"))
+    return json.loads(_http_post(url, body, h, timeout, tls12).decode("utf-8", "replace"))
 
 
 def _tls12():
@@ -17413,7 +17515,7 @@ def _tls12():
 _TLS_CTX = None
 
 
-def _http_post(url, body, headers=None, timeout=12):
+def _http_post(url, body, headers=None, timeout=12, tls12=True):
     """发一个 POST, 返回响应体 bytes; HTTP 4xx/5xx 也照常返回内容 (里面有飞书的错误码)
     TLS 抖动会自动重试 3 次 (每次新建连接)。"""
     u = urllib.parse.urlsplit(url)
@@ -17423,7 +17525,7 @@ def _http_post(url, body, headers=None, timeout=12):
         try:
             if u.scheme == "https":
                 conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=timeout,
-                                                   context=_tls12())
+                                                   context=_tls12() if tls12 else ssl.create_default_context())
             elif u.scheme == "http":
                 conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
             else:
@@ -18306,6 +18408,81 @@ def _wx_send(conf, text):
         return False, "%s 失败: %s" % (name, str(ex)[:120])
 
 
+def _bark_ready(conf):
+    return bool(str(conf.get("bark_key") or "").strip())
+
+
+def _bark_text(conf, cat, name, test=False):
+    """按 Bark 的标题/正文模板拼文字; 支持 {类型}{时间}{位置}{原因}{分类}{摄像头}。"""
+    d = os.path.join(ARCHIVE, cat, name)
+    meta = {}
+    try:
+        with open(os.path.join(d, "event.json"), encoding="utf-8", errors="ignore") as f:
+            meta = json.load(f) or {}
+    except Exception:
+        pass
+    cat_name, _color, detail = _reason_info(meta.get("reason"))
+    if cat == "SavedClips" and not str(meta.get("reason", "")).startswith("sentry_"):
+        cat_name = "手动保存"
+    cam = CAM_NUM.get(int(meta["camera"])) if str(meta.get("camera", "")).strip().isdigit() else ""
+    when = str(meta.get("timestamp") or name)[:19].replace("T", " ").replace("_", " ")
+    loc = _event_loc(meta)
+    kind = ("[测试] " if test else "") + "哨兵提醒 · " + cat_name + (" · " + cam if cam else "")
+    values = {"{类型}": kind, "{时间}": when, "{位置}": loc, "{原因}": detail,
+              "{分类}": cat_name, "{摄像头}": cam or "—"}
+    title = str(conf.get("bark_title") or "").strip() or "🚨 {类型}"
+    body = str(conf.get("bark_body") or "").strip() or "时间：{时间}\n位置：{位置}\n原因：{原因}"
+    for k, v in values.items():
+        title = title.replace(k, v)
+        body = body.replace(k, v)
+    return title.strip()[:120], body.strip()[:1500], meta
+
+
+def _bark_cover_url(conf, cat, name):
+    """Bark 的 image 只接受公网 URL; 没配「查看链接前缀」就拉不到截图。"""
+    base = str(conf.get("public_url") or "").rstrip("/")
+    token = str(conf.get("bark_token") or "").strip()
+    if not base or not token:
+        return ""
+    return "%s/api/notify/bark/cover?token=%s&cat=%s&name=%s" % (
+        base, urllib.parse.quote(token), urllib.parse.quote(cat), urllib.parse.quote(name))
+
+
+def _bark_send(conf, cat, name, test=False):
+    """推一条 Bark (iOS) 通知; 返回 (成功?, 提示)。"""
+    key = str(conf.get("bark_key") or "").strip()
+    if not key:
+        return False, "未配置 Bark Device Key"
+    server = str(conf.get("bark_server") or "https://api.day.app").strip().rstrip("/")
+    if not re.match(r"^https?://", server, re.I):
+        server = "https://" + server
+    title, body, _meta = _bark_text(conf, cat, name, test)
+    payload = {"device_key": key, "title": title, "body": body,
+               "group": str(conf.get("bark_group") or "Tesla 哨兵").strip() or "Tesla 哨兵"}
+    if str(conf.get("bark_sound") or "").strip():
+        payload["sound"] = str(conf["bark_sound"]).strip()
+    if str(conf.get("bark_icon") or "").strip():
+        payload["icon"] = str(conf["bark_icon"]).strip()
+    base = str(conf.get("public_url") or "").rstrip("/")
+    if base:
+        payload["url"] = "%s/?ev=%s/%s" % (base, urllib.parse.quote(cat), urllib.parse.quote(name))
+    warn = ""
+    if conf.get("bark_img", True):
+        img = _bark_cover_url(conf, cat, name)
+        if img:
+            payload["image"] = img          # Bark 会自己按这个 URL 拉触发截图
+        else:
+            warn = " (未配查看链接前缀, 截图无法附带)"
+    try:
+        j = _post_json(server + "/push", payload, timeout=20, tls12=False)
+    except Exception as ex:
+        return False, "Bark 推送失败: %s" % str(ex)[:140]
+    code = j.get("code", j.get("statusCode", -1))
+    if code not in (200, 0, None):
+        return False, "Bark 推送失败: %s (code=%s)" % (j.get("message") or j.get("msg") or j, code)
+    return True, "已推送到 Bark" + warn
+
+
 def _feishu_push(cat, name, test=False):
     """推一条到飞书; 返回 (成功?, 提示)"""
     conf = notify_conf()
@@ -18360,23 +18537,34 @@ def _feishu_push(cat, name, test=False):
 
 
 def _notify_channel(conf):
-    return "wechat" if str(conf.get("channel") or "feishu") == "wechat" else "feishu"
+    ch = str(conf.get("channel") or "feishu")
+    if ch in ("wechat", "bark"):
+        return ch
+    return "feishu"
 
 
 def _notify_ready(conf):
     """当前选择的推送方式是否已配置完整"""
-    if _notify_channel(conf) == "wechat":
+    ch = _notify_channel(conf)
+    if ch == "wechat":
         return _wx_ready(conf)
+    if ch == "bark":
+        return _bark_ready(conf)
     return _dm_ready(conf) or bool(str(conf.get("webhook") or "").strip())
 
 
 def notify_push(cat, name, test=False):
-    """按选择的推送方式推送: 飞书提醒 或 微信提醒"""
+    """按选择的推送方式推送: 飞书提醒 / 微信提醒 / Bark"""
     conf = notify_conf()
-    if _notify_channel(conf) == "wechat":
+    ch = _notify_channel(conf)
+    if ch == "wechat":
         if not _wx_ready(conf):
             return False, "未配置微信提醒: 请在「推送」里选择接口并填写 Token"
         return _wx_send(conf, _event_text(cat, name, test))
+    if ch == "bark":
+        if not _bark_ready(conf):
+            return False, "未配置 Bark: 请在「推送」里填写 Device Key"
+        return _bark_send(conf, cat, name, test)
     if not (_dm_ready(conf) or str(conf.get("webhook") or "").strip()):
         return False, "未配置飞书提醒: 需要 App ID/Secret + 接收人, 或群机器人 webhook"
     return _feishu_push(cat, name, test)
@@ -18494,6 +18682,17 @@ def notify_status():
         "wx_format": conf.get("wx_format") or "",
         "has_wx_token": bool(str(conf.get("wx_token") or "").strip()),
         "wx_ready": _wx_ready(conf),
+        "bark_server": conf.get("bark_server") or "https://api.day.app",
+        "bark_group": conf.get("bark_group") or "Tesla 哨兵",
+        "bark_sound": conf.get("bark_sound") or "",
+        "bark_icon": conf.get("bark_icon") or "",
+        "bark_img": bool(conf.get("bark_img", True)),
+        "bark_title": conf.get("bark_title") or "",
+        "bark_body": conf.get("bark_body") or "",
+        "has_bark_key": bool(str(conf.get("bark_key") or "").strip()),
+        "bark_ready": _bark_ready(conf),
+        "bark_cover_ready": bool(str(conf.get("bark_token") or "").strip()
+                                 and str(conf.get("public_url") or "").strip()),
         "last": st.get("last") or {},
         "sent_total": len(st.get("seen") or {}),
     }
@@ -21283,6 +21482,35 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path == "/api/notify/bark/cover":
+            # Bark 服务端按 URL 拉取通知图片, 因此这里必须免登录; 用随机 token 防止被随意遍历
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            conf = notify_conf()
+            token = str(conf.get("bark_token") or "")
+            if not token or not hmac.compare_digest(str(q.get("token", [""])[0]), token):
+                self._send(404, b"not found")
+                return
+            cat = q.get("cat", [""])[0]
+            name = q.get("name", [""])[0]
+            if cat not in ("SentryClips", "SavedClips") or not re.match(
+                    r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$", name or ""):
+                self._send(404, b"not found")
+                return
+            try:
+                jpg, _meta = _trigger_frame(cat, name)
+            except Exception:
+                jpg = None
+            if not jpg or not os.path.isfile(jpg):
+                self._send(404, b"not found")
+                return
+            try:
+                with open(jpg, "rb") as f:
+                    data = f.read(4 * 1024 * 1024)
+            except OSError:
+                self._send(404, b"not found")
+                return
+            self._send(200, data, "image/jpeg")
+            return
         if not self._gate():
             return
         if path == "/api/logs":
@@ -22083,9 +22311,15 @@ class Handler(BaseHTTPRequestHandler):
                 if k in body:
                     patch[k] = bool(body.get(k))
             for k in ("mode", "media", "quality", "webhook", "app_id", "receive_id",
-                      "receive_id_type", "public_url", "wx_api", "channel"):
+                      "receive_id_type", "public_url", "wx_api", "channel",
+                      "bark_server", "bark_group", "bark_sound", "bark_icon",
+                      "bark_title", "bark_body"):
                 if k in body:
                     patch[k] = str(body.get(k) or "").strip()
+            if "bark_img" in body:
+                patch["bark_img"] = bool(body.get("bark_img"))
+            if str(body.get("bark_key") or "").strip():
+                patch["bark_key"] = str(body["bark_key"]).strip()
             if str(body.get("wx_token") or "").strip():
                 patch["wx_token"] = str(body["wx_token"]).strip()
             if "wx_format" in body:
@@ -22106,17 +22340,28 @@ class Handler(BaseHTTPRequestHandler):
                 patch.pop("quality", None)
             if str(patch.get("media") or "") not in ("thumb", "video"):
                 patch.pop("media", None)
-            if str(patch.get("channel") or "") not in ("feishu", "wechat"):
+            if "bark_title" in patch:
+                patch["bark_title"] = patch["bark_title"][:160]
+            if "bark_body" in patch:
+                patch["bark_body"] = patch["bark_body"][:1200]
+            if str(patch.get("channel") or "") not in ("feishu", "wechat", "bark"):
                 patch.pop("channel", None)
             if str(patch.get("wx_api") or "") not in ("iyuu", "serverchan"):
                 patch.pop("wx_api", None)
             if patch.get("channel") == "wechat":
                 patch["wx_enabled"] = True
-            elif patch.get("channel") == "feishu":
+            elif patch.get("channel") in ("feishu", "bark"):
                 patch["wx_enabled"] = False
             conf = notify_save(patch)
+            # Bark 截图走公网 URL: 首次启用时生成一个随机访问令牌, 供 /api/notify/bark/cover 校验
+            if _bark_ready(conf) and not str(conf.get("bark_token") or "").strip():
+                conf = notify_save({"bark_token": os.urandom(8).hex()})
             if _notify_channel(conf) == "wechat":
                 warn = "" if _wx_ready(conf) else "微信提醒还没就绪: 请选择接口并填写 Token"
+            elif _notify_channel(conf) == "bark":
+                warn = "" if _bark_ready(conf) else "Bark 还没就绪: 请填写 Device Key"
+                if _bark_ready(conf) and not str(conf.get("public_url") or "").strip():
+                    warn = "Bark 已可用; 填「查看链接前缀」后通知里才会附带触发截图"
             elif _dm_ready(conf):
                 warn = "" if (conf.get("public_url") or "").strip() else "私聊已可用; 填「查看链接前缀」后卡片上会有查看按钮"
             elif str(conf.get("webhook") or "").strip():
