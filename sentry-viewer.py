@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.050"
+APP_VERSION = "2026.11.27.051"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -2140,6 +2140,9 @@ html[data-theme="light"] .tab.active { background:#17191c; color:#fff; }
 .storbar i { display:block; height:100%; width:0; background:var(--blue); border-radius:2px; transition:width .4s; }
 .storextra { display:none; }
 .storcard.open .storextra { display:block; }
+/* 首页容量条默认折叠: 只显示实时同步信息, 点右下角箭头展开后才显示容量条 */
+.storcard:not(.open) .storage-brief,
+.storcard:not(.open) .storextra { display:none; }
 /* 系统状态: 与三条占用行分层 —— 细分隔线 + 三等分指标格 (标签在上/数值在下),
    不再把三个值挤成一串灰字; 右侧同样留 24px 给折叠箭头, 与进度条右边缘对齐 */
 .storsys { margin-top:9px; padding-top:8px; border-top:1px solid var(--line2); }
@@ -2312,9 +2315,11 @@ body.watching { overscroll-behavior:none; }
 .th-place { display:inline-flex; align-items:center; gap:3px; min-width:0; max-width:140px; color:var(--muted); font-size:11px; }
 .th-place svg { width:18px; height:18px; flex:none; }
 #th-loc { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.th-fold { border:0; background:var(--panel2); color:var(--muted); height:30px; padding:0 12px;
+.th-fold { display:inline-flex; align-items:center; justify-content:center; gap:4px; border:0; background:var(--panel2); color:var(--muted); height:30px; padding:0 10px;
   border-radius:8px; font-size:12.5px; font-weight:600; cursor:pointer; white-space:nowrap; }
 .th-fold:hover { color:var(--text); }
+.th-fold-ic { width:16px; height:16px; flex:none; transition:transform .2s; }
+.th-fold[aria-expanded="true"] .th-fold-ic { transform:rotate(180deg); }
 .telmore { display:none; flex:0 0 auto; width:max-content; max-width:100%; margin-left:auto; padding:10px 12px; border:1px solid var(--line); border-radius:6px; background:var(--panel); }
 .telmore.open { display:block; }
 #th-rows { display:block; color:var(--text); font-size:12px; line-height:1.7; }
@@ -2337,9 +2342,16 @@ body.watching { overscroll-behavior:none; }
   .telhud .th-spdbox b { font-size:20px; }
   .telhud .th-spdbox i { font-size:9px; }
   .telhud .th-badge { height:27px; padding:0 9px 0 7px; font-size:11.5px; }
-  .telhud .th-acc { min-width:52px; height:14px; }
-  .telhud .th-acct { font-size:9px; min-width:20px; }
-  .th-place { max-width:150px; }
+  /* 移动端: 加速度条加宽加粗; 道路位置完整显示(可换行); 详情改为纯图标折叠按钮 */
+  .telhud .th-acc { min-width:120px; height:18px; flex:1 1 auto; }
+  .telhud .th-acc .th-bar { height:8px; border-radius:4px; }
+  .telhud .th-acct { font-size:11px; min-width:28px; font-weight:800; }
+  .th-fold { width:32px; min-width:32px; padding:0; }
+  .th-fold .th-fold-t { display:none; }
+  .telhud.wrap .th-line-main { flex-wrap:wrap; row-gap:6px; }
+  .th-place { max-width:none; flex:1 1 auto; align-items:flex-start; line-height:1.35; }
+  .th-place svg { margin-top:1px; }
+  #th-loc { white-space:normal; overflow:visible; text-overflow:clip; }
   .telhud.wrap .th-line { gap:6px; }
   .player .video-toolbar .cambar { order:1; flex:1 0 100%; }
   .telhud { order:2; }
@@ -3460,8 +3472,6 @@ body.settings-open { overflow:hidden; }
   .storcard { gap:12px; padding:12px 36px 12px 12px; }
   .storcard #live { flex-basis:100%; max-width:none; }
   .storage-brief { width:100%; }
-  /* 移动端容量条自动折叠: 默认只显示「车机 U 盘」一行, 点右下角箭头展开归档区/总占用 */
-  .storcard:not(.open) .storage-brief ~ .storage-brief { display:none; }
   .stortog { top:8px; }
   .library-toolbar h2 { font-size:20px; }
   .library-filters { gap:8px; flex-wrap:wrap; }
@@ -3685,7 +3695,7 @@ body.settings-open { overflow:hidden; }
 <div class="storrow"><span class="storlab">总占用</span><span class="storval" id="stortot"></span></div>
 <div class="storbar"><i id="stortotbar"></i></div>
 </div>
-<button class="stortog" id="stortog" onclick="toggleStor()" title="展开归档区与总占用" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+<button class="stortog" id="stortog" onclick="toggleStor()" title="展开容量信息" aria-expanded="false" aria-controls="storextra"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
 </nav>
 <div class="library-toolbar"><h2 id="library-title">录像</h2><span id="library-count"></span><button class="livebtn" id="live-btn" onclick="openLive()" hidden><svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg><span>实时预览</span></button><div class="library-filters">
@@ -3749,13 +3759,13 @@ body.settings-open { overflow:hidden; }
             <b class="th-ap-txt" id="th-ap">关</b>
           </span>
           <span class="th-sig" id="th-br" title="右转向灯"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="0.9" y="0.9" width="22.2" height="22.2" rx="6.2" fill="currentColor"/><path d="M7 12h8.8M11.8 7.3 16.5 12l-4.7 4.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-        </div>
-        <div class="th-line th-line-rest">
           <span class="th-badge th-brk" id="th-brk" title="刹车 (踩下变红, 未踩为灰)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="7.6"/><circle cx="12" cy="12" r="2.5"/><path d="M17.4 6.6l2.7-2.7"/></svg><b id="th-brk-t">刹车</b></span>
           <span class="th-badge th-thr" id="th-thr" title="油门踏板开启度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M9.4 3.6h5.2a1.7 1.7 0 0 1 1.68 1.93l-1.35 12.3a1.8 1.8 0 0 1-1.79 1.6h-2.28a1.8 1.8 0 0 1-1.79-1.6L7.72 5.53A1.7 1.7 0 0 1 9.4 3.6z"/><path d="M8.6 15.1h6.8"/></svg><b id="th-thr-n">0%</b></span>
+        </div>
+        <div class="th-line th-line-rest">
           <div class="th-acc" id="th-acc" title="前后加速度"><span class="th-bar"><i id="th-bar"></i></span><span class="th-acct" id="th-acct">定速</span></div>
           <span class="th-place" title="地址定位"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0z"/><circle cx="12" cy="10" r="2.5"/></svg><span id="th-loc">—</span></span>
-          <button class="th-fold" id="th-fold" type="button" onclick="toggleTelRows()" aria-expanded="false" aria-controls="telmore">详情 ⌄</button>
+          <button class="th-fold" id="th-fold" type="button" onclick="toggleTelRows()" aria-expanded="false" aria-controls="telmore" aria-label="展开详细数据" title="详细数据"><svg class="th-fold-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="th-fold-t">详情</span></button>
         </div>
       </div>
       <div class="telmore" id="telmore"><div id="th-rows"></div></div>
@@ -4469,7 +4479,7 @@ function toggleStor() {
   const c = document.getElementById('storcard'), b = document.getElementById('stortog');
   if (!c || !b) return;
   const open = c.classList.toggle('open');
-  b.title = open ? '收起归档区、总占用与系统状态' : '展开归档区、总占用与系统状态';
+  b.title = open ? '收起容量信息' : '展开容量信息';
   b.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -6518,8 +6528,13 @@ function loadTelemetry(url, meta) {
   p.classList.add('folded');
   document.getElementById('tp-fold').textContent = '展开详细数据 ⌄';
   document.getElementById('telmore').classList.remove('open');
-  document.getElementById('th-fold').textContent = '详细数据 ⌄';
-  document.getElementById('th-fold').setAttribute('aria-expanded', 'false');
+  const thFold = document.getElementById('th-fold');
+  if (thFold) {
+    thFold.setAttribute('aria-expanded', 'false');
+    thFold.setAttribute('aria-label', '展开详细数据');
+    const thFoldT = thFold.querySelector('.th-fold-t');
+    if (thFoldT) thFoldT.textContent = '详情';
+  }
   const locationText = singlePlace(TEL_META) ||
     (TEL_META.est_lat != null && TEL_META.est_lon != null ? TEL_META.est_lat + ', ' + TEL_META.est_lon : '—');
   document.getElementById('tp-loc').textContent = locationText === '—' ? '' : locationText;
@@ -6661,8 +6676,11 @@ function renderHud(f) {
 function toggleTelRows() {
   const panel = document.getElementById('telmore'), button = document.getElementById('th-fold');
   const open = panel.classList.toggle('open');
-  button.textContent = open ? '收起 ⌃' : '详情 ⌄';
   button.setAttribute('aria-expanded', String(open));
+  button.setAttribute('aria-label', open ? '收起详细数据' : '展开详细数据');
+  const label = button.querySelector('.th-fold-t');
+  if (label) label.textContent = open ? '收起' : '详情';
+  else button.textContent = open ? '收起详细数据 ⌃' : '详细数据 ⌄';
   layoutPlayer();
   if (open) requestAnimationFrame(syncTelWidth);
 }
