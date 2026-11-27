@@ -28,6 +28,14 @@ SCRIPTS = ('mkexfat.py', 'tesla-gadget.sh', 'tesla-usb-start.sh', 'tesla-img.sh'
 MARKER = 'installation.json'
 
 
+def collapse_dup_sentry(value):
+    """折叠重复的 /tesla-sentry 段, 避免出现 tesla-sentry/tesla-sentry。"""
+    text = str(value or '')
+    while '/tesla-sentry/tesla-sentry' in text:
+        text = text.replace('/tesla-sentry/tesla-sentry', '/tesla-sentry')
+    return text
+
+
 class InstallError(RuntimeError):
     pass
 
@@ -264,10 +272,20 @@ class Installer:
 
     @property
     def data_home(self):
-        return self.args.data_mount.rstrip('/') + '/tesla-sentry'
+        mount = self.args.data_mount.rstrip('/')
+        # 兼容误把「数据目录」当挂载点传入: 去掉尾部的 tesla-sentry, 保证只保留单层
+        while mount.endswith('/tesla-sentry'):
+            mount = mount[:-len('/tesla-sentry')]
+        return mount + '/tesla-sentry'
 
     def validate_options(self):
-        mount = self.args.data_mount
+        mount = self.args.data_mount.rstrip('/')
+        # --data-mount 应为卡片挂载点; 误传成 .../tesla-sentry 时自动纠正, 避免出现双层目录
+        while mount.endswith('/tesla-sentry'):
+            mount = mount[:-len('/tesla-sentry')]
+        if mount != self.args.data_mount:
+            print('提示：--data-mount 应为数据卡挂载点，已修正为 %s' % mount)
+            self.args.data_mount = mount
         if (not re.fullmatch(r'/[A-Za-z0-9_./-]+', mount) or
                 '..' in PurePosixPath(mount).parts or str(PurePosixPath(mount)) != mount or
                 mount in ('/', '/etc', '/opt', '/tmp', '/var', '/usr', '/root')):
@@ -422,6 +440,10 @@ class Installer:
                             'TSF_CARD_MNT', 'TSF_CARD_UUID'):
                     if old.get(key):
                         settings[key] = old[key]
+                for key in ('TSF_VIDEO_ROOT', 'TSF_IMG', 'TSF_ARCHIVE', 'TSF_TRANSCODE_DIR'):
+                    if settings.get(key):
+                        # 旧配置里可能已有重复的 tesla-sentry 段, 升级时一并修正
+                        settings[key] = collapse_dup_sentry(settings[key])
                 # FFmpeg 用本次探测/安装好的路径, 避免继续引用已失效的旧路径
                 for key, name in (('TSF_FFMPEG', 'ffmpeg'), ('TSF_FFPROBE', 'ffprobe')):
                     if self.device.get(name):
@@ -1021,13 +1043,13 @@ class Installer:
         staging = Path(tempfile.mkdtemp(prefix='.tsf-upgrade-', dir=app.parent))
         old_conf_text = conf_path.read_text(encoding='utf-8') if conf_path.is_file() else None
         old = self._parse_old_conf(old_conf_text)
-        video_root = old.get('TSF_VIDEO_ROOT') or ''
+        video_root = collapse_dup_sentry(old.get('TSF_VIDEO_ROOT') or '')
         if not video_root and old.get('TSF_ARCHIVE'):
-            video_root = str(Path(old['TSF_ARCHIVE']).parent)
+            video_root = collapse_dup_sentry(str(Path(old['TSF_ARCHIVE']).parent))
         if not video_root:
             video_root = self.data_home
-        image = old.get('TSF_IMG') or video_root + '/img/teslacam.img'
-        archive = old.get('TSF_ARCHIVE') or video_root + '/archive'
+        image = collapse_dup_sentry(old.get('TSF_IMG') or video_root + '/img/teslacam.img')
+        archive = collapse_dup_sentry(old.get('TSF_ARCHIVE') or video_root + '/archive')
         if not self.path(image).is_file():
             # 全新安装尚未在网页里创建镜像; 原地升级继续, 不阻止程序更新
             print('提示：当前还没有车机镜像，升级后可在网页「存储分配」里创建', flush=True)

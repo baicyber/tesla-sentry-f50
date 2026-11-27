@@ -341,6 +341,26 @@ def _sanitize_conf(path=None):
 _sanitize_conf()
 _load_conf()
 
+
+def _collapse_dup_sentry(value):
+    """折叠重复的 /tesla-sentry 段, 如 /mnt/sdcard/tesla-sentry/tesla-sentry。"""
+    text = str(value or "")
+    while "/tesla-sentry/tesla-sentry" in text:
+        text = text.replace("/tesla-sentry/tesla-sentry", "/tesla-sentry")
+    return text
+
+
+# 历史 bug 或误把数据目录当挂载点传入时, conf 里可能写成
+# /mnt/sdcard/tesla-sentry/tesla-sentry。启动时先折叠成单层, 再写回 conf
+# (OTA 升级后首次启动即自动修正机器上的配置)。
+_fixed_conf_paths = {}
+for _key in ("TSF_VIDEO_ROOT", "TSF_IMG", "TSF_ARCHIVE", "TSF_TRANSCODE_DIR"):
+    _old_value = os.environ.get(_key, "")
+    _new_value = _collapse_dup_sentry(_old_value)
+    if _new_value != _old_value:
+        os.environ[_key] = _new_value
+        _fixed_conf_paths[_key] = _new_value
+
 CONF_FILE = os.environ.get("TSF_CONF", "/etc/tesla-sentry.conf")
 
 # --- 2.8.48 起统一视频存储根目录 (VIDEO_ROOT) ---
@@ -430,6 +450,15 @@ def sync_conf(mapping):
                 pass
         return False
 
+# 启动时把折叠后的正确路径写回 conf, 让机器上的配置与默认布局一致。
+if _fixed_conf_paths:
+    try:
+        sync_conf(_fixed_conf_paths)
+        print("已修正配置中的重复路径: " +
+              ", ".join("%s=%s" % (k, v) for k, v in _fixed_conf_paths.items()), flush=True)
+    except (OSError, ValueError):
+        pass
+
 # 路径/端口优先取环境变量 (缺失时已由 _load_conf 从 conf 补齐)。
 ARCHIVE = os.environ.get("TSF_ARCHIVE", "/archive")
 SKIN_DIR = os.path.join(ARCHIVE, ".skins")
@@ -509,7 +538,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.051"
+APP_VERSION = "2026.11.27.052"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -14056,8 +14085,31 @@ def _heal_storage_paths():
     if not card_data_ready():
         return
     root = (VIDEO_ROOT or DEFAULT_VIDEO_ROOT).rstrip("/") or DEFAULT_VIDEO_ROOT
+    fixed = _collapse_dup_sentry(root)
+    if fixed != root:
+        root = fixed
+        _apply_storage_root(root)
     mount = _resolve_mount(root)
-    new_root = os.path.join(mount, "tesla-sentry") if mount and mount != "/" else ""
+    # 已经是 <卡>/tesla-sentry 时绝不能再追加一层 tesla-sentry (重复路径的根因)。
+    if os.path.basename(root) == "tesla-sentry":
+        new_root = root
+    else:
+        new_root = os.path.join(mount, "tesla-sentry") if mount and mount != "/" else ""
+    # 0) 历史重复路径把数据放进了 <root>/tesla-sentry: 把 img/archive 搬回上一级。
+    nested = os.path.join(root, "tesla-sentry")
+    if os.path.abspath(nested) != os.path.abspath(root) and os.path.isdir(nested):
+        for name in ("img", "archive"):
+            src = os.path.join(nested, name)
+            dst = os.path.join(root, name)
+            if os.path.isdir(src) and not os.path.exists(dst):
+                try:
+                    os.rename(src, dst)
+                except OSError:
+                    pass
+        try:
+            os.rmdir(nested)      # 已搬空时才删除, 还有数据则保留
+        except OSError:
+            pass
     # 1) 旧布局迁移: 卡根下的 img/archive 一律收进 <卡>/tesla-sentry,
     #    不管当前配置指向卡根还是已经是新布局 (遗留目录也一并处理)。
     if new_root and os.path.abspath(root) in (os.path.abspath(mount), os.path.abspath(new_root)):
