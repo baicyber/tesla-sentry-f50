@@ -509,7 +509,7 @@ SOCK_TIMEOUT = 30               # 单连接读写超时秒数, 防慢连接长�
 # 升级方式: 从 GitHub 仓库拉 version.json (清单) 比对版本号, 再下 sentry-viewer.py 覆盖本机文件并重启。
 # 国内直连 raw.githubusercontent 与 fastly/testingcf.jsdelivr 会被 RST 或 TLS 干扰 (实测 1 秒内断开),
 # 下面这几个是逐个实测能通的 (数字为实测耗时); 全部并发竞速, 任一可用即可, 抖动时互相补位。
-APP_VERSION = "2026.11.27.027"
+APP_VERSION = "2026.11.27.028"
 VIEWER_BUILD = APP_VERSION
 OTA_REPOS = ["baicyber/tesla-sentry-f50", "jiaoting/tesla-sentry-f50"]
 OTA_DEFAULT_REPO = OTA_REPOS[0]
@@ -8135,6 +8135,7 @@ function storageSyncArchiveLimit() {
 function storageRenderAllocation() {
   const budgetText = document.getElementById('storage-budget');
   budgetText.textContent = '';
+  budgetText.hidden = true;
   budgetText.dataset.error = 'false';
   if (!storageData) return;
   const values = {};
@@ -8170,8 +8171,10 @@ function storageRenderAllocation() {
     limitNote.textContent = unlimited ? '不设上限，仅受磁盘空闲保护' : '';
   }
   budgetText.textContent = message || (unlimited
-    ? '未分配 ' + values.free.toFixed(1) + ' G'
+    ? ''
     : '还可分配 ' + values.free.toFixed(1) + ' G');
+  // 归档区不设上限时不再显示「未分配」提示, 没有内容时整个提示行一并隐藏
+  budgetText.hidden = !budgetText.textContent;
 }
 function storageRenderUsage() {
   const {disk, values, usb_gib} = storageData;
