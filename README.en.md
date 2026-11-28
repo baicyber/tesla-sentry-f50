@@ -210,7 +210,7 @@ This is a personal hobby project, not affiliated with Tesla. Changing how your c
 <table>
   <tr>
     <td align="center"><img src="docs/sponsor/web_alipay.jpg" width="240" alt="Alipay QR code"><br><sub><b>Alipay</b></sub></td>
-    <td align="center"><img src="docs/sponsor/web_wechatpay.jpg" width="240" alt="WeChat Reward QR code"><br><sub><b>WeChat Reward</b></sub></td>
+    <td align="center"><img src="docs/sponsor/web_wechat_reward.jpg" width="240" alt="WeChat Reward QR code"><br><sub><b>WeChat Reward</b></sub></td>
   </tr>
 </table>
 
